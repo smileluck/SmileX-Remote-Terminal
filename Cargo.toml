@@ -1,0 +1,46 @@
+# SmileX-Remote-Terminal Rust Workspace 根配置
+# 管理 crates/ 下的所有领域核心 crate 与 desktop 应用
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/ssh-core",
+    "crates/remote-desktop-core",
+    "crates/ai-core",
+    "crates/desktop",
+]
+
+# workspace 级依赖版本统一管理（各 crate 引用时无需重复指定版本）
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/smilex/SmileX-Remote-Terminal"
+version = "0.1.0"
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+# 错误处理
+anyhow = "1"
+thiserror = "1"
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 异步 trait
+async-trait = "0.1"
+# 唯一 ID
+uuid = { version = "1", features = ["v4", "serde"] }
+# HTTP 客户端（AI 模块用）
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+# TLS
+rustls = "0.23"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

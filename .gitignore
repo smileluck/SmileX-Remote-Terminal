@@ -1,0 +1,28 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Node / pnpm
+node_modules
+app/dist
+app/dist-ssr
+*.local
+
+# Tauri
+crates/desktop/src-tauri/target
+crates/desktop/gen
+
+# 编辑器
+.vscode
+.idea
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 环境变量
+.env
+.env.local

@@ -1,0 +1,5 @@
+# pnpm workspace 配置
+# 管理前端 app 包
+
+packages:
+  - 'app'

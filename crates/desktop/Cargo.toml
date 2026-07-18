@@ -1,0 +1,50 @@
+[package]
+name = "smilex-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SmileX 桌面应用（Tauri）：整合 SSH + 远程桌面 + AI 助手"
+
+[lib]
+name = "smilex_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "smilex-remote-terminal"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# workspace 依赖
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+
+# 领域核心
+ssh-core = { path = "../ssh-core" }
+remote-desktop-core = { path = "../remote-desktop-core" }
+ai-core = { path = "../ai-core" }
+
+# Tauri
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-shell = "2"
+
+# 存储
+rusqlite = { version = "0.31", features = ["bundled"] }
+keyring = "3"
+
+# 日志
+log = "0.4"
+
+[features]
+# 默认包含自定义协议
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,20 @@
+[package]
+name = "remote-desktop-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SmileX 远程桌面领域核心：RDP(Win/Linux) + 自研 Host 协议(macOS)统一抽象"
+
+[dependencies]
+# workspace 依赖
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+
+# 图像处理
+image = "0.25"

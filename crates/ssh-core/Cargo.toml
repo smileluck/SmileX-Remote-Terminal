@@ -1,0 +1,26 @@
+[package]
+name = "ssh-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SmileX SSH 领域核心：连接管理、PTY 终端、SFTP、端口转发、密钥管理"
+
+[dependencies]
+# workspace 依赖
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+
+# SSH 协议库（纯 Rust，Tokio 异步）
+russh = "0.45"
+russh-keys = "0.45"
+russh-sftp = "2.0"
+
+# 密码学（密钥算法白名单用）
+ring = "0.17"
+base64 = "0.22"
