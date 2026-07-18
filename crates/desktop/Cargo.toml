@@ -42,6 +42,8 @@ tauri-plugin-shell = "2"
 # 存储
 rusqlite = { version = "0.31", features = ["bundled"] }
 keyring = "3"
+# 时间戳（SessionProfile.created_at / last_used_at）
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 # 日志
 log = "0.4"

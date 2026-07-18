@@ -1,23 +1,79 @@
 //! # SQLite 配置存储
 //!
-//! 阶段 2 实现：sessions/known_hosts/keys/tunnels/transfer_tasks 表。
-//! 当前为骨架占位。
+//! 持久化会话配置（SSH / 远程桌面）。**敏感字段（密码、私钥口令）不落库**，
+//! 单独存入 OS Keyring（见 [`crate::storage::keyring`]）。
+//!
+//! ## Schema 设计（`session_profiles` 表）
+//!
+//! | 字段 | 类型 | 说明 |
+//! |------|------|------|
+//! | `id` | TEXT PK | 客户端生成的 UUID |
+//! | `name` | TEXT NOT NULL | 显示名称（用户可读） |
+//! | `kind` | TEXT NOT NULL | 会话种类：`ssh` / `rdp` / `host` |
+//! | `host` | TEXT NOT NULL | 目标主机 |
+//! | `port` | INTEGER NOT NULL | 目标端口 |
+//! | `username` | TEXT NOT NULL | 登录用户名 |
+//! | `auth_type` | TEXT NOT NULL | 认证方式：`password` / `private_key` / `private_key_mem` |
+//! | `extra` | TEXT | 附加配置 JSON（如私钥路径、分辨率、color_depth、accept_first 等） |
+//! | `created_at` | INTEGER NOT NULL | 创建时间戳（unix 秒） |
+//! | `last_used_at` | INTEGER | 最近连接时间戳 |
+//!
+//! ## 索引
+//! - `idx_session_profiles_kind`：按会话种类查询（前端侧栏分组）
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rusqlite::Connection;
+use anyhow::{Context, Result};
+use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+/// 会话配置（前端可读可写，敏感字段已剥离）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionProfile {
+    /// 客户端生成的 UUID
+    pub id: String,
+    /// 显示名称（用户可读）
+    pub name: String,
+    /// 会话种类：`ssh` / `rdp` / `host`
+    pub kind: String,
+    /// 目标主机
+    pub host: String,
+    /// 目标端口
+    pub port: u16,
+    /// 登录用户名
+    pub username: String,
+    /// 认证方式：`password` / `private_key` / `private_key_mem`
+    pub auth_type: String,
+    /// 附加配置 JSON（私钥路径 / 分辨率 / color_depth / accept_first_host_key 等）
+    ///
+    /// 注：私钥 PEM 本身也是敏感数据，存 Keyring 而非此处。
+    /// `extra` 只存路径引用与非敏感参数。
+    #[serde(default)]
+    pub extra: String,
+    /// 创建时间戳（unix 秒）
+    pub created_at: i64,
+    /// 最近连接时间戳（unix 秒，0 表示从未连接过）
+    #[serde(default)]
+    pub last_used_at: i64,
+}
+
 /// SQLite 存储句柄
+///
+/// 内部用 `tokio::sync::Mutex` 包装 `Connection`，保证并发安全。
+/// 所有 CRUD 方法都是 `&self`，可从 `Arc<SqliteStorage>` 共享。
 pub struct SqliteStorage {
     conn: Arc<Mutex<Connection>>,
 }
 
 impl SqliteStorage {
-    /// 打开数据库（不存在则创建）
-    pub fn open(db_path: PathBuf) -> anyhow::Result<Self> {
-        let conn = Connection::open(db_path)?;
+    /// 打开数据库（不存在则创建），并执行 schema 初始化
+    ///
+    /// 幂等：多次执行 `CREATE TABLE IF NOT EXISTS` 安全。
+    pub fn open(db_path: PathBuf) -> Result<Self> {
+        let conn = Connection::open(db_path).context("打开 SQLite 数据库失败")?;
+        Self::init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -25,10 +81,271 @@ impl SqliteStorage {
 
     /// 打开内存数据库（测试用）
     #[cfg(test)]
-    pub fn open_in_memory() -> anyhow::Result<Self> {
+    pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        Self::init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    /// 执行 schema 初始化（幂等）
+    ///
+    /// 建表 + 索引，启用 WAL 模式以提升并发读。
+    ///
+    /// 包含两张表：
+    /// - `session_profiles`：会话配置（用户可读）
+    /// - `known_hosts`：已知主机指纹（首次信任后落盘，用于 MITM 校验）
+    fn init_schema(conn: &Connection) -> Result<()> {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_profiles (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                name          TEXT    NOT NULL,
+                kind          TEXT    NOT NULL,
+                host          TEXT    NOT NULL,
+                port          INTEGER NOT NULL,
+                username      TEXT    NOT NULL,
+                auth_type     TEXT    NOT NULL,
+                extra         TEXT    NOT NULL DEFAULT '{}',
+                created_at    INTEGER NOT NULL,
+                last_used_at  INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_session_profiles_kind
+                ON session_profiles(kind);
+
+            CREATE TABLE IF NOT EXISTS known_hosts (
+                host          TEXT    NOT NULL,
+                port          INTEGER NOT NULL,
+                key_type      TEXT    NOT NULL,
+                fingerprint   TEXT    NOT NULL,
+                -- 主键：(host, port)：同一主机端口只保留一条最新记录
+                PRIMARY KEY (host, port)
+            );
+            "#,
+        )?;
+        Ok(())
+    }
+
+    /// 保存或更新会话配置（以 `id` 为主键 UPSERT）
+    ///
+    /// 若 `last_used_at == 0` 且库中已存在同 id，保留原 last_used_at。
+    pub async fn save_profile(&self, profile: &SessionProfile) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            r#"
+            INSERT INTO session_profiles
+                (id, name, kind, host, port, username, auth_type, extra, created_at, last_used_at)
+            VALUES
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(id) DO UPDATE SET
+                name          = excluded.name,
+                kind          = excluded.kind,
+                host          = excluded.host,
+                port          = excluded.port,
+                username      = excluded.username,
+                auth_type     = excluded.auth_type,
+                extra         = excluded.extra,
+                last_used_at  = CASE WHEN excluded.last_used_at = 0
+                                     THEN session_profiles.last_used_at
+                                     ELSE excluded.last_used_at END
+            "#,
+            params![
+                profile.id,
+                profile.name,
+                profile.kind,
+                profile.host,
+                profile.port,
+                profile.username,
+                profile.auth_type,
+                profile.extra,
+                profile.created_at,
+                profile.last_used_at,
+            ],
+        ).context("执行 save_profile 失败")?;
+        Ok(())
+    }
+
+    /// 列出所有会话配置（按 `last_used_at DESC, name ASC` 排序，最近使用的在前）
+    pub async fn list_profiles(&self) -> Result<Vec<SessionProfile>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, name, kind, host, port, username, auth_type, extra, created_at, last_used_at
+            FROM session_profiles
+            ORDER BY last_used_at DESC, name ASC
+            "#,
+        )?;
+        let rows = stmt.query_map([], row_to_profile)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 按 id 获取单个会话配置
+    pub async fn get_profile(&self, id: &str) -> Result<Option<SessionProfile>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, name, kind, host, port, username, auth_type, extra, created_at, last_used_at
+            FROM session_profiles
+            WHERE id = ?1
+            "#,
+        )?;
+        let mut rows = stmt.query_map(params![id], row_to_profile)?;
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// 按 id 删除会话配置
+    ///
+    /// 返回是否实际删除了一行（false 表示 id 不存在）。
+    pub async fn delete_profile(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        let affected = conn.execute(
+            "DELETE FROM session_profiles WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// 标记最近使用时间（连接成功后调用，用于侧栏排序）
+    pub async fn touch_profile(&self, id: &str, ts: i64) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE session_profiles SET last_used_at = ?1 WHERE id = ?2",
+            params![ts, id],
+        )?;
+        Ok(())
+    }
+}
+
+/// 把 rusqlite `Row` 映射为 [`SessionProfile`]
+fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionProfile> {
+    Ok(SessionProfile {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        kind: row.get(2)?,
+        host: row.get(3)?,
+        port: row.get(4)?,
+        username: row.get(5)?,
+        auth_type: row.get(6)?,
+        extra: row.get(7)?,
+        created_at: row.get(8)?,
+        last_used_at: row.get(9)?,
+    })
+}
+
+/// 实现 ssh-core 的 [`KnownHostsStore`] trait
+///
+/// 通过 SQLite `known_hosts` 表持久化主机指纹。
+/// - `lookup`：按 `(host, port)` 查询单条
+/// - `save`：UPSERT（同主键覆盖，保留最新指纹）
+///
+/// 注：此 impl 让 desktop 反向实现 ssh-core 的抽象（依赖反转）。
+///     ssh-core 不依赖 desktop，由 desktop 注入具体存储实现。
+#[async_trait::async_trait]
+impl ssh_core::known_hosts::KnownHostsStore for SqliteStorage {
+    async fn lookup(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> ssh_core::Result<Option<ssh_core::known_hosts::KnownHost>> {
+        let conn = self.conn.lock().await;
+        // rusqlite::Error → anyhow::Error → ssh_core::Error::Other
+        let mut stmt = conn
+            .prepare(
+                r#"
+            SELECT host, port, key_type, fingerprint
+            FROM known_hosts
+            WHERE host = ?1 AND port = ?2
+            "#,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let mut rows = stmt
+            .query_map(params![host, port], |row| {
+                Ok(ssh_core::known_hosts::KnownHost {
+                    host: row.get(0)?,
+                    port: row.get(1)?,
+                    key_type: row.get(2)?,
+                    fingerprint: row.get(3)?,
+                })
+            })
+            .map_err(|e| anyhow::anyhow!(e))?;
+        if let Some(r) = rows.next() {
+            let entry = r.map_err(|e| anyhow::anyhow!(e))?;
+            Ok(Some(entry))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn save(&self, entry: ssh_core::known_hosts::KnownHost) -> ssh_core::Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            r#"
+            INSERT INTO known_hosts (host, port, key_type, fingerprint)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(host, port) DO UPDATE SET
+                key_type    = excluded.key_type,
+                fingerprint = excluded.fingerprint
+            "#,
+            params![entry.host, entry.port, entry.key_type, entry.fingerprint],
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_save_get_delete_profile() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let p = SessionProfile {
+            id: "uuid-1".into(),
+            name: "test-server".into(),
+            kind: "ssh".into(),
+            host: "192.168.1.1".into(),
+            port: 22,
+            username: "root".into(),
+            auth_type: "password".into(),
+            extra: "{}".into(),
+            created_at: 1000,
+            last_used_at: 0,
+        };
+
+        // 新增
+        storage.save_profile(&p).await.unwrap();
+        let got = storage.get_profile("uuid-1").await.unwrap().unwrap();
+        assert_eq!(got.name, "test-server");
+        assert_eq!(got.port, 22);
+
+        // 更新 name，保持 last_used_at=0 不覆盖
+        let mut p2 = p.clone();
+        p2.name = "renamed".into();
+        p2.last_used_at = 9999;
+        storage.save_profile(&p2).await.unwrap();
+        let got2 = storage.get_profile("uuid-1").await.unwrap().unwrap();
+        assert_eq!(got2.name, "renamed");
+        assert_eq!(got2.last_used_at, 9999);
+
+        // 列表
+        let list = storage.list_profiles().await.unwrap();
+        assert_eq!(list.len(), 1);
+
+        // 删除
+        assert!(storage.delete_profile("uuid-1").await.unwrap());
+        assert!(storage.get_profile("uuid-1").await.unwrap().is_none());
+        assert!(!storage.delete_profile("uuid-1").await.unwrap());
     }
 }

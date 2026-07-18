@@ -5,11 +5,11 @@
 //!
 //! ## 实现要点
 //! - 基于 russh 0.45 异步 SSH 协议库（纯 Rust + Tokio）
-//! - `HostKeyHandler` 实现 `client::Handler`，负责 host key 校验
+//! - `HostKeyHandler` 实现 `client::Handler`，通过 [`KnownHostsStore`] 校验 host key
 //! - 认证支持：密码 / 私钥文件 / 内存 PEM 私钥
 //! - PTY 打开：`channel_open_session` → `request_pty` → `request_shell`
 //! - 写入：通过 `Handle::data(channel_id, ...)` 路由到指定通道
-//! - 调整尺寸：通过 `Handle::window_change_request` 发送 window-change 请求
+//! - 调整尺寸：通过 [`crate::terminal::TerminalControl`] 投递到 select! 读循环
 
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
@@ -22,6 +22,9 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
+use crate::known_hosts::{
+    HostKeyPolicy, KnownHost, KnownHostsStore, verify_host_key,
+};
 
 /// SSH 认证方式
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -90,10 +93,20 @@ pub struct PtyHandle {
 /// host key 校验处理器
 ///
 /// 实现 `russh::client::Handler`，目前只覆盖 `check_server_key`。
-/// 生产环境应替换为：弹出 UI → 用户对比指纹 → 写入 known_hosts。
+///
+/// 校验流程：
+/// 1. 从 store 查询 `host:port` 的已知记录
+/// 2. 调用 [`verify_host_key`] 按策略判断
+/// 3. 若策略为 `AcceptNew` 且接受 → 保存到 store（后续按已知处理）
 struct HostKeyHandler {
-    /// 是否自动接受首次 host key
-    accept_first: bool,
+    /// 主机（用于 store 查询/保存）
+    host: String,
+    /// 端口（用于 store 查询/保存）
+    port: u16,
+    /// 校验策略
+    policy: HostKeyPolicy,
+    /// 已知主机存储（应用层注入）
+    store: Arc<dyn KnownHostsStore>,
 }
 
 #[async_trait]
@@ -103,8 +116,10 @@ impl client::Handler for HostKeyHandler {
 
     /// 校验服务端 host key
     ///
-    /// - `accept_first=true`：开发模式，无条件接受（避免阻断 CI/本地测试）
-    /// - `accept_first=false`：默认拒绝；后续阶段接入 known_hosts + UI 确认
+    /// 1. 提取 `key_type` + `fingerprint`
+    /// 2. 查询 store（出错按 None 处理，避免单次 IO 失败阻断）
+    /// 3. 按策略判断接受/拒绝
+    /// 4. `AcceptNew` 首次接受 → 落盘保存
     ///
     /// 注：返回类型必须用 `std::result::Result` 全路径，避免与 `crate::error::Result`
     /// （单泛型别名）冲突。
@@ -112,19 +127,64 @@ impl client::Handler for HostKeyHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> std::result::Result<bool, Self::Error> {
-        if self.accept_first {
-            tracing::warn!(
-                fingerprint = %server_public_key.fingerprint(),
-                "host key 校验：accept_first=true，自动接受（开发模式）"
+        let key_type = server_public_key.name().to_string();
+        let fingerprint = server_public_key.fingerprint().to_string();
+
+        // 查询 store（错误降级为 None + 警告日志）
+        let known = match self.store.lookup(&self.host, self.port).await {
+            Ok(Some(entry)) => Some(entry),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    host = %self.host,
+                    port = self.port,
+                    error = %e,
+                    "查询 known_hosts 失败，按未知主机处理"
+                );
+                None
+            }
+        };
+
+        let accepted = verify_host_key(&key_type, &fingerprint, known.as_ref(), self.policy);
+
+        if accepted {
+            // AcceptNew 策略下若为首次（known=None），写入 store
+            if matches!(self.policy, HostKeyPolicy::AcceptNew) && known.is_none() {
+                let entry = KnownHost {
+                    host: self.host.clone(),
+                    port: self.port,
+                    key_type: key_type.clone(),
+                    fingerprint: fingerprint.clone(),
+                };
+                if let Err(e) = self.store.save(entry).await {
+                    tracing::warn!(
+                        host = %self.host,
+                        port = self.port,
+                        error = %e,
+                        "保存 known_hosts 失败（本次仍接受，下次可能再次提示）"
+                    );
+                }
+            }
+            tracing::info!(
+                host = %self.host,
+                port = self.port,
+                key_type = %key_type,
+                fingerprint = %fingerprint,
+                policy = ?self.policy,
+                "host key 校验通过"
             );
-            return Ok(true);
+        } else {
+            tracing::warn!(
+                host = %self.host,
+                port = self.port,
+                key_type = %key_type,
+                fingerprint = %fingerprint,
+                policy = ?self.policy,
+                "host key 校验拒绝（指纹不匹配或策略要求已知主机）"
+            );
         }
-        tracing::warn!(
-            fingerprint = %server_public_key.fingerprint(),
-            "host key 校验：accept_first=false，默认拒绝；后续阶段接入 known_hosts + UI 确认"
-        );
-        // MVP：默认拒绝。阶段 3 在此回调到 Tauri 弹窗确认。
-        Ok(false)
+
+        Ok(accepted)
     }
 }
 
@@ -144,15 +204,22 @@ pub struct SshSession {
 }
 
 impl SshSession {
-    /// 建立 SSH 连接（TCP 握手 + 认证）
+    /// 建立 SSH 连接（TCP 握手 + 认证 + host key 校验）
     ///
     /// 流程：
     /// 1. 前置解析目标地址（早期失败）
-    /// 2. 构造 russh client::Config + HostKeyHandler
+    /// 2. 构造 russh client::Config + HostKeyHandler（注入 store + policy）
     /// 3. `client::connect` 建立 TCP+SSH 握手
     /// 4. 根据认证方式执行 `authenticate_*`
     /// 5. 校验认证结果
-    pub async fn connect(config: &ConnectionConfig) -> Result<Self> {
+    ///
+    /// # 参数
+    /// - `config`：连接配置（地址 / 认证 / `accept_first_host_key` 标志）
+    /// - `known_hosts`：已知主机存储（由应用层注入，如 SQLite）
+    pub async fn connect(
+        config: &ConnectionConfig,
+        known_hosts: Arc<dyn KnownHostsStore>,
+    ) -> Result<Self> {
         let session_id = Uuid::new_v4().to_string();
 
         // 1) 前置地址解析（早期失败提示）
@@ -163,10 +230,13 @@ impl SshSession {
             .next()
             .ok_or_else(|| Error::Connect(format!("无法解析地址: {addr_str}")))?;
 
-        // 2) russh client 配置（默认参数；后续阶段按需调 inactivity_timeout 等）
+        // 2) russh client 配置 + HostKeyHandler（注入 store）
         let ssh_config = Arc::new(client::Config::default());
         let handler = HostKeyHandler {
-            accept_first: config.accept_first_host_key,
+            host: config.host.clone(),
+            port: config.port,
+            policy: HostKeyPolicy::from_accept_first(config.accept_first_host_key),
+            store: known_hosts,
         };
 
         // 3) TCP + SSH 协议握手
@@ -300,25 +370,6 @@ impl SshSession {
             })?;
         Ok(())
     }
-    /// 调整终端窗口尺寸（发送 window-change 请求）
-    ///
-    /// **阶段 2 限制**：russh 0.45 的 `Handle` 不提供 window-change 路由方法，
-    /// `Channel::window_change(&self)` 又与 `Channel::wait(&mut self)` 互斥。
-    /// 阶段 3 计划：将 TerminalStream 改造为 `select!` 循环 + 独立控制 mpsc，
-    /// 在读循环内部调用 `channel.window_change()`，此处通过控制通道投递指令。
-    ///
-    /// 当前实现：直接返回 Ok，记录 TODO 日志。
-    pub async fn resize(&self, channel_id: russh::ChannelId, cols: u32, rows: u32) -> Result<()> {
-        tracing::warn!(
-            channel_id = %channel_id,
-            cols, rows,
-            "window_change 暂未实现（阶段 3 通过 select! + 控制通道接入）"
-        );
-        // TODO(阶段 3): 通过 TerminalStream 控制通道投递 WindowChange 指令
-        let _ = channel_id;
-        Ok(())
-    }
-
     /// 主动断开会话（幂等：多次调用安全）
     ///
     /// 发送 SSH `DISCONNECT` 消息（ByApplication），通知对端优雅关闭。
@@ -363,8 +414,16 @@ impl SessionManager {
     }
 
     /// 建立新会话并注册（失败时不污染注册表）
-    pub async fn connect(&self, config: &ConnectionConfig) -> Result<Arc<SshSession>> {
-        let session = Arc::new(SshSession::connect(config).await?);
+    ///
+    /// # 参数
+    /// - `config`：连接配置
+    /// - `known_hosts`：已知主机存储（传递给 `SshSession::connect`）
+    pub async fn connect(
+        &self,
+        config: &ConnectionConfig,
+        known_hosts: Arc<dyn KnownHostsStore>,
+    ) -> Result<Arc<SshSession>> {
+        let session = Arc::new(SshSession::connect(config, known_hosts).await?);
         self.sessions
             .lock()
             .await

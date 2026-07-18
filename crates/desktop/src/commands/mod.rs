@@ -6,3 +6,4 @@ pub mod ai;
 pub mod common;
 pub mod desktop;
 pub mod session;
+pub mod session_profile;
