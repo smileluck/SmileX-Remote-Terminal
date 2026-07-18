@@ -1,0 +1,7 @@
+# 项目本地 cargo 配置
+# 覆盖全局 ~/.cargo/config.toml 中损坏的 aliyun 镜像缓存，直接使用官方源
+# 作用：aliyun 镜像的 .crate 缓存文件丢失，但 index 仍引用，导致下载失败
+# 删除本文件即恢复全局配置
+
+[registries.crates-io]
+protocol = "sparse"

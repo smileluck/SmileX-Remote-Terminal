@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::events::DesktopFramePayload;
 use crate::AppState;
-use remote_desktop_core::session::{RemoteDesktopSession, SessionConfig};
+use remote_desktop_core::session::SessionConfig;
 use remote_desktop_core::InputEvent;
 
 /// 建立远程桌面会话

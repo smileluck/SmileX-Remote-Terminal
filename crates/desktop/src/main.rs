@@ -11,6 +11,8 @@
 )]
 
 use smilex_desktop::{commands, AppState};
+// 引入 Manager trait 以便调用 window.app_handle()
+use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 fn main() {

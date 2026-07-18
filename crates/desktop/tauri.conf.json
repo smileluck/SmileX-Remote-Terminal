@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.smilex.remote-terminal",
   "build": {
-    "frontendDist": "../../../app/dist",
+    "frontendDist": "../../app/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build"
@@ -29,7 +29,8 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/icon.ico"
     ]
   }
 }

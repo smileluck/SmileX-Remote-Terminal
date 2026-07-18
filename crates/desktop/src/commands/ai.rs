@@ -9,6 +9,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::events::{AiDonePayload, AiTokenPayload};
 use crate::AppState;
 use ai_core::provider::context::Context;
+// 引入 AgentProvider trait 才能调用 Arc<ChatProvider> 上的 send/abort/clear
+use ai_core::AgentProvider;
 use ai_core::LlmProviderConfig;
 
 /// 发送消息（流式响应通过 `ai_token` 事件推送，结束发 `ai_done`）

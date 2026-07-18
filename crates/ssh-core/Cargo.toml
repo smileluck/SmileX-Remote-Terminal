@@ -17,7 +17,7 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 
 # SSH 协议库（纯 Rust，Tokio 异步）
-russh = "0.45"
+russh = { workspace = true }
 russh-keys = "0.45"
 russh-sftp = "2.0"
 

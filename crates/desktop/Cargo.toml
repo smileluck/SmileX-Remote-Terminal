@@ -32,9 +32,11 @@ uuid = { workspace = true }
 ssh-core = { path = "../ssh-core" }
 remote-desktop-core = { path = "../remote-desktop-core" }
 ai-core = { path = "../ai-core" }
+# russh（desktop 需要 russh::ChannelId 类型用于 sessionId → channel_id 映射）
+russh = { workspace = true }
 
-# Tauri
-tauri = { version = "2", features = ["protocol-asset"] }
+# Tauri（默认 feature 集，避免与 tauri.conf.json 的 allowlist 冲突）
+tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 
 # 存储
