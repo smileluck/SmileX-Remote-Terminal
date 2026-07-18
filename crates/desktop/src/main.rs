@@ -55,12 +55,13 @@ fn main() {
             let state = AppState::new(storage);
             app.manage(state);
 
-            // 启动时从持久化加载 LLM 配置并应用到 ChatProvider
+            // 启动时从持久化加载激活的 LLM 配置并应用到 ChatProvider
             // 失败不中断启动（用户可在设置页重新配置）
+            // 阶段 6：切换为多档案模式（自动迁移旧版单 key 配置）
             let state_ref: tauri::State<AppState> = app.state();
             let rt = tokio::runtime::Handle::current();
             rt.block_on(async {
-                commands::ai::load_and_apply_llm_config(&state_ref).await;
+                commands::llm_profile::load_and_apply_active_profile(&state_ref).await;
             });
 
             tracing::info!("SmileX Remote Terminal 已启动");
@@ -91,6 +92,15 @@ fn main() {
             commands::ai::ai_config_get,
             commands::ai::ai_config_save,
             commands::ai::ai_secret_get,
+            // LLM 配置档案命令组（阶段 6：多档案管理）
+            commands::llm_profile::llm_profile_list,
+            commands::llm_profile::llm_profile_get,
+            commands::llm_profile::llm_profile_save,
+            commands::llm_profile::llm_profile_delete,
+            commands::llm_profile::llm_profile_get_api_key,
+            commands::llm_profile::llm_profile_set_active,
+            commands::llm_profile::llm_profile_get_active,
+            commands::llm_profile::llm_profile_test,
             // 通用
             commands::common::app_version,
         ])

@@ -5,5 +5,6 @@
 pub mod ai;
 pub mod common;
 pub mod desktop;
+pub mod llm_profile;
 pub mod session;
 pub mod session_profile;

@@ -59,6 +59,37 @@ pub struct SessionProfile {
     pub last_used_at: i64,
 }
 
+/// LLM 配置档案（多档案管理，阶段 6）
+///
+/// 字段 provider/model/base_url/stream 与 `ai_core::LlmProviderConfig` 同构，
+/// 额外有 id/name/is_active 用于档案管理。
+///
+/// **敏感字段（API Key）不落库**，单独存 Keyring（key: `llm_profile:{id}:api_key`）。
+///
+/// 序列化与前端 `types/settings.ts` 的 `LlmProfile` 对齐（camelCase）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmProfile {
+    /// 客户端生成的 UUID
+    pub id: String,
+    /// 显示名称（用户可读，如 "OpenAI 工作" / "DeepSeek 个人"）
+    pub name: String,
+    /// Provider 类型（小写：`openai` / `claude` / `ollama`）
+    pub provider: String,
+    /// 模型名（如 `gpt-4o`）
+    pub model: String,
+    /// Base URL（可选，留空用 Provider 默认）
+    pub base_url: Option<String>,
+    /// 是否流式输出（0/1）
+    pub stream: bool,
+    /// 是否为当前激活档案（同一时间仅一个）
+    pub is_active: bool,
+    /// 创建时间戳（unix 秒）
+    pub created_at: i64,
+    /// 更新时间戳（unix 秒）
+    pub updated_at: i64,
+}
+
 /// SQLite 存储句柄
 ///
 /// 内部用 `tokio::sync::Mutex` 包装 `Connection`，保证并发安全。
@@ -93,10 +124,11 @@ impl SqliteStorage {
     ///
     /// 建表 + 索引，启用 WAL 模式以提升并发读。
     ///
-    /// 包含三张表：
+    /// 包含四张表：
     /// - `session_profiles`：会话配置（用户可读）
     /// - `known_hosts`：已知主机指纹（首次信任后落盘，用于 MITM 校验）
-    /// - `app_config`：应用全局配置（键值对，非敏感；LLM 配置等）
+    /// - `app_config`：应用全局配置（键值对；LLM 配置等历史字段）
+    /// - `llm_profiles`：多 LLM 配置档案（阶段 6）
     fn init_schema(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
@@ -133,6 +165,25 @@ impl SqliteStorage {
                 value         TEXT    NOT NULL,
                 updated_at    INTEGER NOT NULL
             );
+
+            -- 多 LLM 配置档案（阶段 6）
+            -- 支持保存多个 Provider 配置并快速切换激活
+            -- API Key 单独存 Keyring（key: llm_profile:{id}:api_key）
+            CREATE TABLE IF NOT EXISTS llm_profiles (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                name          TEXT    NOT NULL,
+                provider      TEXT    NOT NULL,
+                model         TEXT    NOT NULL,
+                base_url      TEXT,
+                stream        INTEGER NOT NULL DEFAULT 1,
+                is_active     INTEGER NOT NULL DEFAULT 0,
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL
+            );
+
+            -- 同一时间仅允许一个 active profile（部分代码层保证）
+            CREATE INDEX IF NOT EXISTS idx_llm_profiles_active
+                ON llm_profiles(is_active);
             "#,
         )?;
         Ok(())
@@ -269,6 +320,147 @@ impl SqliteStorage {
         )?;
         Ok(())
     }
+
+    // ===== llm_profiles（多 LLM 配置档案）=====
+
+    /// 保存或更新 LLM 配置档案（UPSERT）
+    ///
+    /// - 新建：插入新记录
+    /// - 更新：保留 `is_active` 状态（避免编辑档案意外取消激活）
+    /// - 若传入 `is_active=true`，同时取消其他档案的激活（保证唯一）
+    pub async fn save_llm_profile(&self, profile: &LlmProfile) -> Result<()> {
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction()?;
+
+        // 若设置为 active，先清除其他 active 标记（唯一性约束）
+        if profile.is_active {
+            tx.execute("UPDATE llm_profiles SET is_active = 0", [])?;
+        }
+
+        // UPSERT：is_active 字段使用 CASE 保留原值（更新时）/ 使用新值（新建时）
+        tx.execute(
+            r#"
+            INSERT INTO llm_profiles
+                (id, name, provider, model, base_url, stream, is_active, created_at, updated_at)
+            VALUES
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(id) DO UPDATE SET
+                name       = excluded.name,
+                provider   = excluded.provider,
+                model      = excluded.model,
+                base_url   = excluded.base_url,
+                stream     = excluded.stream,
+                is_active  = CASE WHEN ?10 = 1 THEN 1 ELSE llm_profiles.is_active END,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                profile.id,
+                profile.name,
+                profile.provider,
+                profile.model,
+                profile.base_url,
+                profile.stream as i64,
+                profile.is_active as i64,
+                profile.created_at,
+                profile.updated_at,
+                profile.is_active as i64,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 列出所有 LLM 配置档案（按 created_at ASC 排序，稳定的展示顺序）
+    pub async fn list_llm_profiles(&self) -> Result<Vec<LlmProfile>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, name, provider, model, base_url, stream, is_active, created_at, updated_at
+            FROM llm_profiles
+            ORDER BY created_at ASC, name ASC
+            "#,
+        )?;
+        let rows = stmt.query_map([], row_to_llm_profile)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 按 id 获取单个 LLM 配置档案
+    pub async fn get_llm_profile(&self, id: &str) -> Result<Option<LlmProfile>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, name, provider, model, base_url, stream, is_active, created_at, updated_at
+            FROM llm_profiles
+            WHERE id = ?1
+            "#,
+        )?;
+        let mut rows = stmt.query_map(params![id], row_to_llm_profile)?;
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// 按 id 删除 LLM 配置档案
+    ///
+    /// 返回是否实际删除了一行。
+    pub async fn delete_llm_profile(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        let affected = conn.execute("DELETE FROM llm_profiles WHERE id = ?1", params![id])?;
+        Ok(affected > 0)
+    }
+
+    /// 设置激活的 LLM 配置档案（排他：清除其他 active）
+    ///
+    /// 若 `id` 不存在返回错误。
+    pub async fn set_active_llm_profile(&self, id: &str) -> Result<()> {
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction()?;
+        // 校验 id 存在
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM llm_profiles WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            anyhow::bail!("LLM 配置档案 {id} 不存在");
+        }
+        // 清除所有 active
+        tx.execute("UPDATE llm_profiles SET is_active = 0", [])?;
+        // 设置目标为 active
+        tx.execute(
+            "UPDATE llm_profiles SET is_active = 1, updated_at = ?2 WHERE id = ?1",
+            params![id, chrono::Utc::now().timestamp()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 获取当前激活的 LLM 配置档案（`is_active = 1`）
+    ///
+    /// 返回 `Ok(None)` 表示无激活档案（首次启动或全部被删除）。
+    pub async fn get_active_llm_profile(&self) -> Result<Option<LlmProfile>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, name, provider, model, base_url, stream, is_active, created_at, updated_at
+            FROM llm_profiles
+            WHERE is_active = 1
+            LIMIT 1
+            "#,
+        )?;
+        let mut rows = stmt.query_map([], row_to_llm_profile)?;
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 /// 把 rusqlite `Row` 映射为 [`SessionProfile`]
@@ -284,6 +476,24 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionProfile> {
         extra: row.get(7)?,
         created_at: row.get(8)?,
         last_used_at: row.get(9)?,
+    })
+}
+
+/// 把 rusqlite `Row` 映射为 [`LlmProfile`]
+///
+/// 字段顺序与 SELECT 列对齐：
+/// `id, name, provider, model, base_url, stream, is_active, created_at, updated_at`
+fn row_to_llm_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<LlmProfile> {
+    Ok(LlmProfile {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        provider: row.get(2)?,
+        model: row.get(3)?,
+        base_url: row.get(4)?,
+        stream: row.get::<_, i64>(5)? != 0,
+        is_active: row.get::<_, i64>(6)? != 0,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
