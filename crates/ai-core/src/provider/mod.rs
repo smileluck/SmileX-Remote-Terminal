@@ -49,7 +49,11 @@ pub trait AgentProvider: Send + Sync {
 /// LLM Provider 配置
 ///
 /// 由前端设置页传入，API Key 由应用层从 OS Keyring 取。
+///
+/// serde `rename_all = "camelCase"`：JSON 字段使用 camelCase（`baseUrl` / `apiKey`），
+/// 与 JavaScript/Vue 社区惯例一致。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LlmProviderConfig {
     /// Provider 类型
     pub provider: llm::LlmProvider,

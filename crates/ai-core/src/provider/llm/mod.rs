@@ -12,7 +12,11 @@ use crate::error::Result;
 use crate::provider::history::Message;
 
 /// LLM Provider 类型
+///
+/// 序列化为小写字符串（与前端 `types/ai.ts` 约定一致）：
+/// `OpenAi` → `"openai"` / `Claude` → `"claude"` / `Ollama` → `"ollama"`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LlmProvider {
     /// OpenAI 兼容（含 DeepSeek/智谱/通义等兼容协议）
     OpenAi,

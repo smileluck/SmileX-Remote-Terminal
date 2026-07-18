@@ -52,7 +52,16 @@ fn main() {
             let storage = smilex_desktop::storage::sqlite::SqliteStorage::open(db_path)?;
 
             // 注册全局状态
-            app.manage(AppState::new(storage));
+            let state = AppState::new(storage);
+            app.manage(state);
+
+            // 启动时从持久化加载 LLM 配置并应用到 ChatProvider
+            // 失败不中断启动（用户可在设置页重新配置）
+            let state_ref: tauri::State<AppState> = app.state();
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                commands::ai::load_and_apply_llm_config(&state_ref).await;
+            });
 
             tracing::info!("SmileX Remote Terminal 已启动");
             Ok(())
@@ -79,6 +88,9 @@ fn main() {
             commands::ai::ai_chat_abort,
             commands::ai::ai_chat_clear,
             commands::ai::ai_update_config,
+            commands::ai::ai_config_get,
+            commands::ai::ai_config_save,
+            commands::ai::ai_secret_get,
             // 通用
             commands::common::app_version,
         ])

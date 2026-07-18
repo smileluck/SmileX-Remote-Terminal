@@ -1,18 +1,12 @@
 /**
  * AI 模块类型定义
+ *
+ * LLM Provider 相关类型已迁移至 `@/types/settings`（统一设置/Chat 模块）。
+ * 此文件保留向后兼容的重新导出，并定义 Chat 专用类型。
  */
 
-/** LLM Provider 类型 */
-export type LlmProvider = 'openai' | 'claude' | 'ollama'
-
-/** LLM 配置 */
-export interface LlmProviderConfig {
-  provider: LlmProvider
-  model: string
-  baseUrl?: string
-  apiKey?: string
-  stream: boolean
-}
+// 重新导出 LLM 类型（单一真相源在 settings.ts）
+export type { LlmProvider, LlmProviderConfig } from '@/types/settings'
 
 /** AI 上下文 */
 export interface AiContext {

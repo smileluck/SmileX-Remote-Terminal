@@ -93,9 +93,10 @@ impl SqliteStorage {
     ///
     /// 建表 + 索引，启用 WAL 模式以提升并发读。
     ///
-    /// 包含两张表：
+    /// 包含三张表：
     /// - `session_profiles`：会话配置（用户可读）
     /// - `known_hosts`：已知主机指纹（首次信任后落盘，用于 MITM 校验）
+    /// - `app_config`：应用全局配置（键值对，非敏感；LLM 配置等）
     fn init_schema(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
@@ -123,6 +124,14 @@ impl SqliteStorage {
                 fingerprint   TEXT    NOT NULL,
                 -- 主键：(host, port)：同一主机端口只保留一条最新记录
                 PRIMARY KEY (host, port)
+            );
+
+            -- 应用配置（键值对）
+            -- 非敏感配置（LLM provider/model/base_url/stream 等），API Key 单独存 Keyring
+            CREATE TABLE IF NOT EXISTS app_config (
+                key           TEXT    PRIMARY KEY NOT NULL,
+                value         TEXT    NOT NULL,
+                updated_at    INTEGER NOT NULL
             );
             "#,
         )?;
@@ -222,6 +231,41 @@ impl SqliteStorage {
         conn.execute(
             "UPDATE session_profiles SET last_used_at = ?1 WHERE id = ?2",
             params![ts, id],
+        )?;
+        Ok(())
+    }
+
+    // ===== app_config（应用全局配置键值对）=====
+
+    /// 读取应用配置项（按 key）
+    ///
+    /// 返回 `Ok(Some(value))` / `Ok(None)`。
+    pub async fn get_config(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().await;
+        let mut stmt =
+            conn.prepare("SELECT value FROM app_config WHERE key = ?1")?;
+        let mut rows = stmt.query_map(params![key], |row| row.get::<_, String>(0))?;
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// 写入应用配置项（UPSERT）
+    ///
+    /// `ts` 为 unix 秒时间戳（由调用方提供，保证业务时钟一致）。
+    pub async fn set_config(&self, key: &str, value: &str, ts: i64) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            r#"
+            INSERT INTO app_config (key, value, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(key) DO UPDATE SET
+                value      = excluded.value,
+                updated_at = excluded.updated_at
+            "#,
+            params![key, value, ts],
         )?;
         Ok(())
     }

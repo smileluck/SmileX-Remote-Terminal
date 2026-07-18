@@ -34,7 +34,7 @@ const errorMsg = ref('')
 
 /** kind 标签文案（兼容 SessionKind / ProfileKind） */
 function kindLabel(kind: SessionKind | string): string {
-  const map: Record<string, string> = { ssh: 'SSH', rdp: '桌面', host: 'Mac', chat: 'AI' }
+  const map: Record<string, string> = { ssh: 'SSH', rdp: '桌面', host: 'Mac', chat: 'AI', settings: '设置' }
   return map[kind] || kind.toUpperCase()
 }
 
@@ -324,6 +324,7 @@ onMounted(() => {
 .kind-tag[data-kind='rdp'] { background: #1a2742; color: #6ba9ff; }
 .kind-tag[data-kind='host'] { background: #421a20; color: #ff8a92; }
 .kind-tag[data-kind='chat'] { background: #3d2f15; color: #ffcf6b; }
+.kind-tag[data-kind='settings'] { background: #2a2a2a; color: #bbb; }
 .close-btn {
   background: none;
   border: none;
