@@ -59,8 +59,10 @@ fn main() {
             // 失败不中断启动（用户可在设置页重新配置）
             // 阶段 6：切换为多档案模式（自动迁移旧版单 key 配置）
             let state_ref: tauri::State<AppState> = app.state();
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
+            // 注意：Tauri 2 的 setup 闭包不在 Tokio runtime 上下文中，
+            // 直接调用 `tokio::runtime::Handle::current()` 会 panic
+            // ("there is no reactor running")。必须走 Tauri 自带的 async runtime。
+            tauri::async_runtime::block_on(async {
                 commands::llm_profile::load_and_apply_active_profile(&state_ref).await;
             });
 
@@ -108,8 +110,8 @@ fn main() {
             // 应用退出时清理所有会话
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let state: tauri::State<AppState> = window.app_handle().state();
-                let rt = tokio::runtime::Handle::current();
-                rt.block_on(async {
+                // 同 setup：用 Tauri async runtime，避免 Handle::current() panic
+                tauri::async_runtime::block_on(async {
                     state.cleanup().await;
                 });
             }
