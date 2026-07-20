@@ -2,28 +2,29 @@
 /**
  * ContextToggle - "附带当前会话上下文"开关
  *
- * 勾选后 AI 会结合当前 SSH 终端输出作答
+ * 开启后 AI 会结合当前 SSH 终端输出作答。
  */
+import { NSwitch } from 'naive-ui'
+
 const model = defineModel<boolean>({ default: false })
 </script>
 
 <template>
-  <label class="ctx-toggle">
-    <input type="checkbox" v-model="model" />
-    <span>附带上下文</span>
-  </label>
+  <div class="ctx-toggle">
+    <NSwitch v-model:value="model" size="small" />
+    <span class="ctx-label">附带上下文</span>
+  </div>
 </template>
 
 <style scoped>
 .ctx-toggle {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: #666;
-  cursor: pointer;
+  gap: 6px;
 }
-.ctx-toggle input {
-  margin: 0;
+.ctx-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 </style>

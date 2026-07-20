@@ -1,42 +1,46 @@
 <script setup lang="ts">
 /**
- * SideBar - 侧边栏
+ * SideBar - 侧边栏（会话面板）
  *
- * 双区域布局：
- * - 上方：已保存的会话配置列表（点击发起连接；右侧按钮支持编辑/删除）
- * - 下方：已打开的 Tab 列表（切换/关闭）
+ * Termius 风卡片化会话列表：
+ * - 顶部 header（「会话」标题 + 新建按钮）
+ * - 卡片：kind 图标 + 名称 + user@host:port + 相对时间 + 悬浮 编辑/删除
+ * - 点击卡片发起连接；编辑/新建 inline 展开 ConnectForm
+ *
+ * 已打开的 Tab 不再在此展示（移至顶部 TabBar）。
  *
  * 数据来源：
  * - profiles store（持久化的 SessionProfile 列表）
- * - tabs store（运行时打开的 TabItem）
+ * - tabs store（连接成功后 addTab）
  */
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, type Component } from 'vue'
+import { NButton, NIcon, NPopconfirm, NEmpty, useMessage } from 'naive-ui'
+import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
 import * as sessionService from '@/services/session'
 import * as profileService from '@/services/profile'
 import { decodeExtra } from '@/types/profile'
 import type { SessionProfile } from '@/types/profile'
-import type { SessionKind, TabItem } from '@/types/session'
 import ConnectForm from '@/components/common/ConnectForm.vue'
 
 const profilesStore = useProfilesStore()
 const tabsStore = useTabsStore()
+const message = useMessage()
+
+/** kind → 图标组件（host = macOS，用 BrandApple） */
+const kindIcon: Record<string, Component> = {
+  ssh: Terminal2,
+  rdp: DeviceDesktop,
+  host: BrandApple,
+}
 
 /** 是否正在显示编辑表单（profileId 非 null 表示进入编辑/新建） */
 const editingProfileId = ref<string | null>(null)
-/** 是否处于"新建"模式 */
+/** 是否处于「新建」模式 */
 const creating = ref(false)
 /** 正在连接的 profile id（禁用按钮防抖） */
 const connectingId = ref<string | null>(null)
-/** 错误信息 */
-const errorMsg = ref('')
-
-/** kind 标签文案（兼容 SessionKind / ProfileKind） */
-function kindLabel(kind: SessionKind | string): string {
-  const map: Record<string, string> = { ssh: 'SSH', rdp: '桌面', host: 'Mac', chat: 'AI', settings: '设置' }
-  return map[kind] || kind.toUpperCase()
-}
 
 /** 进入新建模式 */
 function startCreate() {
@@ -56,19 +60,28 @@ function closeForm() {
   editingProfileId.value = null
 }
 
-/** 删除会话配置（二次确认） */
+/** 相对时间格式化（last_used_at → 「刚刚 / x 分钟前 / …」） */
+function formatRelativeTime(ts: number): string {
+  if (!ts) return '从未连接'
+  const diff = Math.floor(Date.now() / 1000) - ts
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
+  return `${Math.floor(diff / 86400)} 天前`
+}
+
+/** 删除会话配置（由 NPopconfirm 确认后触发） */
 async function onDelete(profile: SessionProfile) {
-  if (!confirm(`确定删除会话「${profile.name}」吗？`)) return
   try {
     await profilesStore.remove(profile.id)
+    message.success(`已删除「${profile.name}」`)
   } catch (e) {
-    errorMsg.value = String(e)
+    message.error(String(e))
   }
 }
 
-/** 点击会话配置发起连接 */
+/** 点击会话卡片发起连接 */
 async function onConnect(profile: SessionProfile) {
-  errorMsg.value = ''
   connectingId.value = profile.id
   try {
     // 从 Keyring 取敏感字段
@@ -98,14 +111,14 @@ async function onConnect(profile: SessionProfile) {
       24,
     )
 
-    tabsStore.addTab('ssh', profile.name, sessionId)
+    tabsStore.addTab(profile.kind, profile.name, sessionId)
     // 更新最近使用时间
     await profileService.touch(profile.id).catch(() => {
       /* 非关键失败：忽略 */
     })
     await profilesStore.loadAll()
   } catch (e) {
-    errorMsg.value = String(e)
+    message.error(`连接失败：${e}`)
   } finally {
     connectingId.value = null
   }
@@ -117,235 +130,202 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="side-bar">
-    <!-- 已保存的会话列表 -->
-    <section class="section">
-      <header class="section-header">
-        <span>会话</span>
-        <button class="add-btn" title="新建 SSH 会话" @click="startCreate">+</button>
-      </header>
+  <aside class="side-bar">
+    <header class="section-header">
+      <span class="section-title">会话</span>
+      <NButton quaternary size="tiny" circle title="新建会话" @click="startCreate">
+        <NIcon :component="Plus" />
+      </NButton>
+    </header>
 
-      <!-- 新建表单（不传 profileId，表示新建） -->
-      <ConnectForm v-if="creating" @close="closeForm" />
+    <div class="list-scroll">
+      <!-- 新建表单 -->
+      <div v-if="creating" class="form-slot">
+        <ConnectForm @close="closeForm" />
+      </div>
 
-      <ul v-else class="profile-list">
-        <li
-          v-for="p in profilesStore.profiles"
-          :key="p.id"
-          class="profile-item"
-          :class="{ editing: editingProfileId === p.id }"
-        >
-          <!-- 列表行（默认显示） -->
+      <!-- 空状态 -->
+      <div v-else-if="profilesStore.profiles.length === 0" class="empty">
+        <NEmpty size="small" description="暂无会话">
+          <template #extra>
+            <span class="empty-hint">点击上方 + 新建</span>
+          </template>
+        </NEmpty>
+      </div>
+
+      <!-- 卡片列表 -->
+      <div v-else class="card-list">
+        <div v-for="p in profilesStore.profiles" :key="p.id" class="card-slot">
+          <!-- 卡片（默认） -->
           <div
             v-if="editingProfileId !== p.id"
-            class="profile-row"
+            class="profile-card"
             :title="`${p.username}@${p.host}:${p.port}`"
             @click="onConnect(p)"
           >
-            <span class="kind-tag" :data-kind="p.kind">{{ kindLabel(p.kind) }}</span>
-            <span class="title">{{ p.name }}</span>
-            <span
-              class="connecting"
-              v-if="connectingId === p.id"
-            >…</span>
-            <button
-              class="row-btn"
-              title="编辑"
-              @click.stop="startEdit(p.id)"
-            >✎</button>
-            <button
-              class="row-btn danger"
-              title="删除"
-              @click.stop="onDelete(p)"
-            >✕</button>
+            <NIcon
+              :component="kindIcon[p.kind] || Terminal2"
+              class="card-icon"
+              :data-kind="p.kind"
+            />
+            <div class="card-main">
+              <div class="card-title">{{ p.name }}</div>
+              <div class="card-meta">{{ p.username }}@{{ p.host }}:{{ p.port }}</div>
+              <div class="card-sub">
+                <span v-if="connectingId === p.id" class="connecting">● 连接中…</span>
+                <span v-else class="time">{{ formatRelativeTime(p.last_used_at) }}</span>
+              </div>
+            </div>
+            <div class="card-actions">
+              <NButton text size="tiny" title="编辑" @click.stop="startEdit(p.id)">
+                <NIcon :component="Pencil" />
+              </NButton>
+              <NPopconfirm @positive-click="onDelete(p)">
+                <template #trigger>
+                  <NButton
+                    text
+                    size="tiny"
+                    class="danger"
+                    title="删除"
+                    @click.stop
+                  >
+                    <NIcon :component="Trash" />
+                  </NButton>
+                </template>
+                确定删除会话「{{ p.name }}」吗？
+              </NPopconfirm>
+            </div>
           </div>
 
           <!-- 编辑表单（inline） -->
-          <ConnectForm
-            v-else
-            :profile-id="p.id"
-            @close="closeForm"
-          />
-        </li>
-        <li v-if="profilesStore.profiles.length === 0" class="empty">
-          暂无保存的会话<br />点击「+」新建
-        </li>
-      </ul>
-    </section>
-
-    <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
-
-    <!-- 已打开的 Tab -->
-    <section class="section section-tabs">
-      <header class="section-header">
-        <span>已打开</span>
-      </header>
-      <ul class="tab-list">
-        <li
-          v-for="tab in tabsStore.tabs"
-          :key="tab.id"
-          class="tab-item"
-          :class="{ active: tab.id === tabsStore.activeId }"
-          @click="tabsStore.setActive(tab.id)"
-        >
-          <span class="kind-tag" :data-kind="tab.kind">{{ kindLabel(tab.kind) }}</span>
-          <span class="title">{{ tab.title }}</span>
-          <button class="close-btn" @click.stop="tabsStore.closeTab(tab.id)">×</button>
-        </li>
-        <li v-if="tabsStore.tabs.length === 0" class="empty">暂无打开的会话</li>
-      </ul>
-    </section>
-  </div>
+          <div v-else class="form-slot">
+            <ConnectForm :profile-id="p.id" @close="closeForm" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
 </template>
 
 <style scoped>
 .side-bar {
-  width: 240px;
-  background: var(--tab-active-bg, #252526);
-  border-right: 1px solid var(--border-color, #3a3a3a);
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  color: var(--text-primary, #ddd);
   overflow: hidden;
-}
-.section {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.section:not(:last-child) {
-  flex: 1;
-  border-bottom: 1px solid var(--border-color, #3a3a3a);
-}
-.section-tabs {
-  max-height: 40%;
 }
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.section-title {
   font-size: 12px;
-  color: var(--text-secondary, #888);
+  font-weight: 600;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
-.add-btn {
-  background: none;
-  border: 1px solid var(--border-color, #4a4a4a);
-  color: var(--text-primary, #ddd);
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-}
-.add-btn:hover {
-  background: var(--bg-hover, #3a3a3a);
-}
-.profile-list,
-.tab-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.list-scroll {
+  flex: 1;
   overflow-y: auto;
-  flex: 1;
+  padding: 8px;
 }
-.profile-item {
-  border-bottom: 1px dashed var(--border-color, #333);
-}
-.profile-item.editing {
-  padding: 0;
-}
-.profile-row {
+.empty {
+  padding: 32px 12px;
   display: flex;
-  align-items: center;
+  justify-content: center;
+}
+.empty-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.card-list,
+.card-slot {
+  display: flex;
+  flex-direction: column;
   gap: 4px;
-  padding: 6px 8px;
+}
+.profile-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 13px;
+  position: relative;
+  border: 1px solid transparent;
+  transition: background 0.12s, border-color 0.12s;
 }
-.profile-row:hover {
-  background: var(--tab-hover-bg, #2a2d2e);
+.profile-card:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-color);
 }
-.title {
+.card-icon {
+  font-size: 18px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.card-icon[data-kind='ssh'] { color: var(--kind-ssh-fg); }
+.card-icon[data-kind='rdp'] { color: var(--kind-rdp-fg); }
+.card-icon[data-kind='host'] { color: var(--kind-host-fg); }
+.card-main {
   flex: 1;
+  min-width: 0;
+}
+.card-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.row-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-secondary, #888);
-  padding: 2px 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
+.card-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
 }
-.profile-row:hover .row-btn {
-  opacity: 1;
+.card-sub {
+  font-size: 11px;
+  margin-top: 2px;
 }
-.row-btn:hover {
-  color: var(--text-primary, #ddd);
-}
-.row-btn.danger:hover {
-  color: #ff6b6b;
+.card-sub .time {
+  color: var(--text-tertiary);
 }
 .connecting {
-  color: var(--primary-color, #2e70c8);
-  font-size: 11px;
+  color: var(--warning);
 }
-.tab-item {
+.card-actions {
   display: flex;
-  align-items: center;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 13px;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
 }
-.tab-item:hover {
-  background: var(--tab-hover-bg, #2a2d2e);
+.profile-card:hover .card-actions {
+  opacity: 1;
 }
-.tab-item.active {
-  background: var(--primary-bg, #37373d);
-  border-left: 3px solid var(--primary-color, #2e70c8);
-}
-.kind-tag {
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 11px;
-  margin-right: 4px;
-  background: #3a3a3a;
-  color: #ccc;
-}
-.kind-tag[data-kind='ssh'] { background: #1b3a1f; color: #7fdc9b; }
-.kind-tag[data-kind='rdp'] { background: #1a2742; color: #6ba9ff; }
-.kind-tag[data-kind='host'] { background: #421a20; color: #ff8a92; }
-.kind-tag[data-kind='chat'] { background: #3d2f15; color: #ffcf6b; }
-.kind-tag[data-kind='settings'] { background: #2a2a2a; color: #bbb; }
-.close-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
+.card-actions :deep(.n-button) {
+  --n-text-color: var(--text-tertiary);
   font-size: 14px;
-  color: var(--text-secondary, #999);
 }
-.close-btn:hover {
-  color: #ff6b6b;
+.card-actions :deep(.n-button:hover) {
+  --n-text-color: var(--text-primary);
 }
-.empty {
-  padding: 16px;
-  color: var(--text-secondary, #888);
-  font-size: 12px;
-  text-align: center;
-  line-height: 1.6;
+.card-actions .danger:hover {
+  --n-text-color: var(--danger) !important;
 }
-.error {
-  padding: 8px 12px;
-  color: #ff6b6b;
-  font-size: 12px;
-  background: #3a1a1a;
+.form-slot {
+  padding: 4px 0;
 }
 </style>

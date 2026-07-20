@@ -2,9 +2,12 @@
 /**
  * ChatPanel - AI 助手面板
  *
- * 消息列表 + 输入框 + 上下文开关
+ * 消息列表 + 输入框 + 上下文开关。
+ * 深色主题，背景与全局对齐。
  */
 import { ref } from 'vue'
+import { NButton, NInput, NPopconfirm, NIcon } from 'naive-ui'
+import { Send, PlayerStop, Trash } from '@vicons/tabler'
 import { useChat } from '@/composables/useChat'
 import MessageBubble from './MessageBubble.vue'
 import ContextToggle from './ContextToggle.vue'
@@ -29,34 +32,46 @@ function handleKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="chat-panel">
-    <div class="chat-header">
-      <span>AI 助手</span>
+    <header class="chat-header">
+      <span class="chat-title">AI 助手</span>
       <ContextToggle v-model="includeContext" />
-      <button class="clear-btn" @click="clear">清空</button>
-    </div>
+      <NPopconfirm @positive-click="clear">
+        <template #trigger>
+          <NButton quaternary size="small" title="清空对话">
+            <template #icon><NIcon :component="Trash" /></template>
+            清空
+          </NButton>
+        </template>
+        确定清空所有对话？
+      </NPopconfirm>
+    </header>
 
     <div class="message-list">
       <div v-if="messages.length === 0" class="empty">
-        <p>向 AI 提问运维问题</p>
-        <p class="hint">可勾选"附带上下文"结合当前 SSH 终端输出</p>
+        <p class="empty-title">向 AI 提问运维问题</p>
+        <p class="empty-hint">可开启「附带上下文」结合当前 SSH 终端输出作答</p>
       </div>
-      <MessageBubble
-        v-for="msg in messages"
-        :key="msg.id"
-        :message="msg"
-      />
+      <MessageBubble v-for="msg in messages" :key="msg.id" :message="msg" />
       <div v-if="error" class="error">{{ error }}</div>
     </div>
 
     <div class="input-area">
-      <textarea
-        v-model="input"
+      <NInput
+        v-model:value="input"
+        type="textarea"
+        :autosize="{ minRows: 1, maxRows: 6 }"
         :disabled="loading"
         placeholder="输入问题（Enter 发送，Shift+Enter 换行）"
         @keydown="handleKeydown"
       />
-      <button v-if="!loading" @click="handleSend">发送</button>
-      <button v-else class="abort" @click="abort">停止</button>
+      <NButton v-if="!loading" type="primary" @click="handleSend">
+        <template #icon><NIcon :component="Send" /></template>
+        发送
+      </NButton>
+      <NButton v-else type="error" @click="abort">
+        <template #icon><NIcon :component="PlayerStop" /></template>
+        停止
+      </NButton>
     </div>
   </div>
 </template>
@@ -67,7 +82,7 @@ function handleKeydown(e: KeyboardEvent) {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: #fff;
+  background: var(--bg-app);
 }
 .chat-header {
   display: flex;
@@ -75,18 +90,13 @@ function handleKeydown(e: KeyboardEvent) {
   padding: 8px 16px;
   border-bottom: 1px solid var(--border-color);
   gap: 12px;
+  flex-shrink: 0;
 }
-.chat-header span {
+.chat-title {
   font-weight: 600;
   flex: 1;
-}
-.clear-btn {
-  background: none;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 2px 8px;
-  cursor: pointer;
-  font-size: 12px;
+  color: var(--text-primary);
+  font-size: 14px;
 }
 .message-list {
   flex: 1;
@@ -95,42 +105,34 @@ function handleKeydown(e: KeyboardEvent) {
 }
 .empty {
   text-align: center;
-  color: #999;
-  margin-top: 40px;
+  margin-top: 48px;
 }
-.empty .hint {
+.empty-title {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.empty-hint {
   font-size: 12px;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+}
+.error {
+  color: var(--danger);
+  font-size: 12px;
+  padding: 8px;
+  background: rgba(248, 113, 113, 0.08);
+  border-radius: var(--radius-sm);
   margin-top: 8px;
 }
 .input-area {
   display: flex;
+  align-items: flex-end;
   padding: 12px;
   border-top: 1px solid var(--border-color);
   gap: 8px;
+  flex-shrink: 0;
 }
-textarea {
+.input-area :deep(.n-input) {
   flex: 1;
-  height: 60px;
-  padding: 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  resize: none;
-  font-family: inherit;
-}
-button {
-  padding: 8px 16px;
-  background: var(--primary-color);
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-button.abort {
-  background: #d33;
-}
-.error {
-  color: #d33;
-  font-size: 12px;
-  padding: 8px;
 }
 </style>

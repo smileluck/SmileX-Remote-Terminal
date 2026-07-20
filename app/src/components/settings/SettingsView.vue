@@ -3,8 +3,10 @@
  * SettingsView - 设置页（多 LLM 配置档案管理）
  *
  * 双栏布局：
- * - 左侧：档案列表（含「+ 新建」/「设为默认」/「删除」/「编辑」）
+ * - 左侧：档案列表（含「+ 新建」「设为默认」「删除」「编辑」）
  * - 右侧：编辑区（名称 / Provider / Model / BaseURL / API Key / 流式）
+ *
+ * UI：naive-ui 控件 + useMessage/useDialog 反馈。
  *
  * 数据流：
  * - 加载：listProfiles()（含 isActive 标记）
@@ -16,6 +18,19 @@
  * 安全：API Key 在前端不回填明文，仅在用户主动输入时携带。
  */
 import { computed, onMounted, ref } from 'vue'
+import {
+  NButton,
+  NIcon,
+  NInput,
+  NSelect,
+  NSwitch,
+  NTag,
+  NPopconfirm,
+  NEmpty,
+  NSpin,
+  useMessage,
+} from 'naive-ui'
+import { Plus } from '@vicons/tabler'
 import {
   PROVIDER_OPTIONS,
   createDefaultProfileFields,
@@ -33,6 +48,8 @@ function genId(): string {
   return 'p-' + Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
+const message = useMessage()
+
 /** 所有档案（左侧列表展示） */
 const profiles = ref<LlmProfile[]>([])
 /** 当前编辑的档案 id（null 表示未选中） */
@@ -49,16 +66,30 @@ const hasExistingApiKey = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
-/** 提示信息 */
-const errorMsg = ref('')
-const successMsg = ref('')
 
-/**
- * 编辑区 Provider 选项（用于级联下拉）
- */
+/** 当前编辑区 Provider 选项 */
 const editingProviderOption = computed(() => {
   if (!editing.value) return PROVIDER_OPTIONS[0]
   return findProviderOption(editing.value.provider)
+})
+
+/** NSelect 的 Provider 选项 */
+const providerOptions = computed(() =>
+  PROVIDER_OPTIONS.map((o) => ({ label: o.label, value: o.value })),
+)
+
+/** NSelect 的 Model 选项（含自定义兼容） */
+const modelOptions = computed(() => {
+  if (!editing.value) return []
+  const presets = editingProviderOption.value.models.map((m) => ({ label: m, value: m }))
+  // 当前值不在预设列表时追加（兼容旧数据 / 用户自定义）
+  if (
+    editing.value.model &&
+    !editingProviderOption.value.models.includes(editing.value.model)
+  ) {
+    presets.push({ label: `${editing.value.model}（自定义）`, value: editing.value.model })
+  }
+  return presets
 })
 
 /**
@@ -68,7 +99,6 @@ const editingProviderOption = computed(() => {
  */
 async function loadProfiles() {
   loading.value = true
-  errorMsg.value = ''
   try {
     profiles.value = await settingsService.listProfiles()
     if (profiles.value.length > 0 && !selectedId.value) {
@@ -79,7 +109,7 @@ async function loadProfiles() {
       editing.value = null
     }
   } catch (e) {
-    errorMsg.value = String(e)
+    message.error(String(e))
   } finally {
     loading.value = false
   }
@@ -98,8 +128,6 @@ async function selectProfile(id: string) {
   editing.value = JSON.parse(JSON.stringify(p))
   apiKeyInput.value = ''
   hasExistingApiKey.value = false
-  errorMsg.value = ''
-  successMsg.value = ''
 
   // 查询 API Key 是否存在（仅标记，不回填）
   try {
@@ -128,40 +156,31 @@ function newProfile() {
   selectedId.value = id
   apiKeyInput.value = ''
   hasExistingApiKey.value = false
-  errorMsg.value = ''
-  successMsg.value = ''
 }
 
 /**
  * 保存当前编辑的档案
  *
- * - 新建：插入到列表 + 持久化
- * - 更新：替换列表项 + 持久化
- *
  * API Key 三态：
  * - 输入框非空：写入新值
- * - 输入框为空 + 已有旧值：保持现状（传 undefined）
- * - 输入框为空 + 无旧值：保持现状（传 undefined）
+ * - 输入框为空 + 已有/无旧值：保持现状（传 undefined）
  */
 async function save() {
   if (!editing.value) return
   if (!editing.value.name.trim()) {
-    errorMsg.value = '请填写配置名称'
+    message.warning('请填写配置名称')
     return
   }
   if (!editing.value.model.trim()) {
-    errorMsg.value = '请选择模型'
+    message.warning('请选择模型')
     return
   }
 
   saving.value = true
-  errorMsg.value = ''
-  successMsg.value = ''
   try {
     const profile = editing.value
     // API Key 三态处理
-    const apiKeyPayload =
-      apiKeyInput.value.length > 0 ? apiKeyInput.value : undefined
+    const apiKeyPayload = apiKeyInput.value.length > 0 ? apiKeyInput.value : undefined
 
     const saved = await settingsService.saveProfile(profile, apiKeyPayload)
 
@@ -190,28 +209,20 @@ async function save() {
     }
     editing.value = JSON.parse(JSON.stringify(saved))
 
-    successMsg.value = '保存成功'
-    setTimeout(() => {
-      successMsg.value = ''
-    }, 2000)
+    message.success('保存成功')
   } catch (e) {
-    errorMsg.value = String(e)
+    message.error(String(e))
   } finally {
     saving.value = false
   }
 }
 
 /**
- * 删除当前选中的档案
- *
- * 确认后调用 deleteProfile，成功后从列表移除。
+ * 删除当前选中的档案（由 NPopconfirm 确认后触发）
  */
 async function remove() {
   if (!editing.value) return
   const id = editing.value.id
-  if (!confirm(`确认删除配置「${editing.value.name}」？`)) return
-
-  errorMsg.value = ''
   try {
     const ok = await settingsService.deleteProfile(id)
     if (ok) {
@@ -223,9 +234,10 @@ async function remove() {
         selectedId.value = null
         editing.value = null
       }
+      message.success('已删除')
     }
   } catch (e) {
-    errorMsg.value = String(e)
+    message.error(String(e))
   }
 }
 
@@ -238,11 +250,10 @@ async function setActive() {
   if (!editing.value) return
   // 必须先保存才能激活
   if (!profiles.value.find((p) => p.id === editing.value!.id)) {
-    errorMsg.value = '请先保存配置'
+    message.warning('请先保存配置')
     return
   }
 
-  errorMsg.value = ''
   try {
     await settingsService.setActiveProfile(editing.value.id)
     // 更新本地列表的 active 标记
@@ -250,12 +261,9 @@ async function setActive() {
       p.isActive = p.id === editing.value!.id
     })
     if (editing.value) editing.value.isActive = true
-    successMsg.value = '已设为默认'
-    setTimeout(() => {
-      successMsg.value = ''
-    }, 2000)
+    message.success('已设为默认')
   } catch (e) {
-    errorMsg.value = String(e)
+    message.error(String(e))
   }
 }
 
@@ -269,21 +277,18 @@ async function testConnection() {
   if (!editing.value) return
   // 必须先保存才能测试（testProfile 按 id 查）
   if (!profiles.value.find((p) => p.id === editing.value!.id)) {
-    errorMsg.value = '请先保存配置再测试'
+    message.warning('请先保存配置再测试')
     return
   }
 
   testing.value = true
-  errorMsg.value = ''
-  successMsg.value = ''
   try {
     const firstToken = await settingsService.testProfile(editing.value.id)
-    successMsg.value = `连通正常（首令牌: "${firstToken.slice(0, 20)}"）`
-    setTimeout(() => {
-      successMsg.value = ''
-    }, 4000)
+    message.success(`连通正常（首令牌: "${firstToken.slice(0, 20)}"）`, {
+      duration: 4000,
+    })
   } catch (e) {
-    errorMsg.value = `测试失败：${String(e)}`
+    message.error(`测试失败：${String(e)}`)
   } finally {
     testing.value = false
   }
@@ -318,14 +323,16 @@ onMounted(() => {
       </p>
     </header>
 
-    <div v-if="loading && profiles.length === 0" class="loading">加载中…</div>
+    <NSpin v-if="loading && profiles.length === 0" class="loading" />
 
     <div v-else class="layout">
       <!-- 左侧：档案列表 -->
       <aside class="sidebar">
         <div class="sidebar-header">
           <span class="sidebar-title">配置档案</span>
-          <button class="btn-mini" title="新建" @click="newProfile">+</button>
+          <NButton quaternary size="tiny" circle title="新建" @click="newProfile">
+            <template #icon><NIcon :component="Plus" /></template>
+          </NButton>
         </div>
         <ul class="profile-list">
           <li
@@ -336,17 +343,21 @@ onMounted(() => {
             @click="selectProfile(p.id)"
           >
             <div class="profile-name">
-              {{ p.name }}
-              <span v-if="p.isActive" class="active-badge">默认</span>
+              <span class="name-text">{{ p.name }}</span>
+              <NTag v-if="p.isActive" size="tiny" type="success" :bordered="false">默认</NTag>
             </div>
             <div class="profile-meta">
-              <span class="profile-provider">{{ p.provider }}</span>
+              <span>{{ p.provider }}</span>
               <span class="separator">·</span>
-              <span class="profile-model">{{ p.model }}</span>
+              <span>{{ p.model }}</span>
             </div>
           </li>
           <li v-if="profiles.length === 0" class="empty-hint">
-            暂无配置，点击 + 新建
+            <NEmpty size="small" description="暂无配置">
+              <template #extra>
+                <span class="empty-tip">点击上方 + 新建</span>
+              </template>
+            </NEmpty>
           </li>
         </ul>
       </aside>
@@ -354,16 +365,15 @@ onMounted(() => {
       <!-- 右侧：编辑区 -->
       <section class="editor">
         <div v-if="!editing" class="editor-empty">
-          <p>请在左侧选择或新建配置档案</p>
+          <NEmpty description="请在左侧选择或新建配置档案" />
         </div>
 
         <form v-else class="form" @submit.prevent="save">
           <!-- 名称 -->
           <div class="field">
             <label class="label">配置名称</label>
-            <input
-              v-model="editing.name"
-              class="control"
+            <NInput
+              v-model:value="editing.name"
               placeholder="如：OpenAI 工作 / DeepSeek 个人 / Ollama 本地"
             />
           </div>
@@ -371,42 +381,32 @@ onMounted(() => {
           <!-- Provider -->
           <div class="field">
             <label class="label">Provider</label>
-            <select
+            <NSelect
               :value="editing.provider"
-              class="control"
-              @change="onProviderChange(($event.target as HTMLSelectElement).value as LlmProvider)"
-            >
-              <option v-for="opt in PROVIDER_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ opt.label }}
-              </option>
-            </select>
+              :options="providerOptions"
+              @update:value="onProviderChange"
+            />
             <p class="field-hint">{{ editingProviderOption.hint }}</p>
           </div>
 
-          <!-- Model（级联下拉） -->
+          <!-- Model（级联 + 可自定义输入） -->
           <div class="field">
             <label class="label">模型</label>
-            <select v-model="editing.model" class="control">
-              <option value="" disabled>请选择模型</option>
-              <option v-for="m in editingProviderOption.models" :key="m" :value="m">
-                {{ m }}
-              </option>
-              <!-- 当前值不在预设列表时也显示（兼容旧数据） -->
-              <option
-                v-if="editing.model && !editingProviderOption.models.includes(editing.model)"
-                :value="editing.model"
-              >
-                {{ editing.model }}（自定义）
-              </option>
-            </select>
+            <NSelect
+              v-model:value="editing.model"
+              :options="modelOptions"
+              filterable
+              tag
+              :consistent-menu-width="false"
+              placeholder="选择或输入模型名"
+            />
           </div>
 
           <!-- Base URL -->
           <div class="field">
             <label class="label">Base URL（可选）</label>
-            <input
-              v-model="editing.baseUrl"
-              class="control"
+            <NInput
+              v-model:value="editing.baseUrl"
               placeholder="留空使用官方默认；或填入代理 / 兼容服务地址"
             />
           </div>
@@ -418,13 +418,12 @@ onMounted(() => {
               <span v-if="editingProviderOption.needsApiKey" class="required">*</span>
               <span v-else class="optional">（此 Provider 不需要）</span>
             </label>
-            <input
-              v-model="apiKeyInput"
+            <NInput
+              v-model:value="apiKeyInput"
               type="password"
-              class="control"
+              show-password-on="click"
               :placeholder="hasExistingApiKey ? '已配置（留空保持不变）' : '请输入 API Key'"
               :disabled="!editingProviderOption.needsApiKey"
-              autocomplete="off"
             />
             <p v-if="hasExistingApiKey" class="field-hint success">
               ✓ 已配置 API Key（留空保存将保持不变）
@@ -434,36 +433,31 @@ onMounted(() => {
           <!-- 流式 -->
           <div class="field field-inline">
             <label class="label">流式输出</label>
-            <input v-model="editing.stream" type="checkbox" class="checkbox" />
+            <NSwitch v-model:value="editing.stream" />
             <span class="inline-hint">逐 token 推送响应（推荐，体验更佳）</span>
           </div>
 
-          <!-- 错误/成功提示 -->
-          <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
-          <p v-if="successMsg" class="success">{{ successMsg }}</p>
-
           <!-- 动作区 -->
           <div class="actions">
-            <button type="submit" class="btn primary" :disabled="saving">
-              {{ saving ? '保存中…' : '保存' }}
-            </button>
-            <button
-              type="button"
-              class="btn"
-              :disabled="testing"
-              @click="testConnection"
-            >
-              {{ testing ? '测试中…' : '测试连接' }}
-            </button>
-            <button
-              type="button"
-              class="btn"
-              :disabled="!editing.id || !profiles.find((p) => p.id === editing!.id) || editing.isActive"
+            <NButton type="primary" :loading="saving" @click="save">保存</NButton>
+            <NButton :loading="testing" @click="testConnection">测试连接</NButton>
+            <NButton
+              tertiary
+              :disabled="
+                !editing.id ||
+                !profiles.find((p) => p.id === editing!.id) ||
+                editing.isActive
+              "
               @click="setActive"
             >
               设为默认
-            </button>
-            <button type="button" class="btn danger" @click="remove">删除</button>
+            </NButton>
+            <NPopconfirm @positive-click="remove">
+              <template #trigger>
+                <NButton tertiary type="error">删除</NButton>
+              </template>
+              确认删除配置「{{ editing.name }}」？
+            </NPopconfirm>
           </div>
         </form>
       </section>
@@ -477,28 +471,28 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-primary, #1e1e1e);
-  color: var(--text-primary, #ddd);
+  background: var(--bg-app);
 }
 .header {
   padding: 16px 24px 12px;
-  border-bottom: 1px solid var(--border-color, #3a3a3a);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 .header h2 {
   margin: 0 0 4px 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
-  color: var(--text-primary, #ddd);
+  color: var(--text-primary);
 }
 .hint {
   margin: 0;
   font-size: 12px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 .loading {
-  padding: 32px;
-  text-align: center;
-  color: var(--text-secondary, #888);
+  align-self: center;
+  margin-top: 64px;
 }
 
 /* 双栏布局 */
@@ -509,43 +503,25 @@ onMounted(() => {
 }
 .sidebar {
   width: 240px;
-  border-right: 1px solid var(--border-color, #3a3a3a);
+  border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary, #252526);
+  background: var(--bg-sidebar);
+  flex-shrink: 0;
 }
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color, #3a3a3a);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
 }
 .sidebar-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-primary, #ccc);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.btn-mini {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border-color, #4a4a4a);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-primary, #ccc);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.btn-mini:hover {
-  background: var(--primary-color, #2e70c8);
-  border-color: var(--primary-color, #2e70c8);
-  color: #fff;
+  letter-spacing: 1px;
 }
 .profile-list {
   list-style: none;
@@ -556,22 +532,21 @@ onMounted(() => {
 }
 .profile-item {
   padding: 10px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.12s;
   margin-bottom: 4px;
+  border: 1px solid transparent;
 }
 .profile-item:hover {
-  background: var(--bg-hover, #2a2a2a);
+  background: var(--bg-elevated);
 }
 .profile-item.active {
-  background: var(--primary-color, #2e70c8);
-  color: #fff;
+  background: var(--primary-bg);
+  border-color: rgba(58, 122, 254, 0.3);
 }
-.profile-item.active .profile-meta,
-.profile-item.active .profile-provider,
-.profile-item.active .profile-model {
-  color: rgba(255, 255, 255, 0.85);
+.profile-item.active .name-text {
+  color: var(--primary);
 }
 .profile-name {
   font-size: 13px;
@@ -579,33 +554,25 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-.active-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: #7fdc9b;
-  color: #1e3a1e;
-  font-weight: 600;
-}
-.profile-item.active .active-badge {
-  background: #fff;
-  color: var(--primary-color, #2e70c8);
+  color: var(--text-primary);
 }
 .profile-meta {
   font-size: 11px;
-  color: var(--text-secondary, #888);
+  color: var(--text-tertiary);
   margin-top: 4px;
 }
 .separator {
   margin: 0 4px;
-  opacity: 0.5;
+  opacity: 0.6;
 }
 .empty-hint {
-  padding: 16px;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  padding: 24px 8px;
+}
+.empty-tip {
   font-size: 12px;
-  color: var(--text-secondary, #666);
+  color: var(--text-tertiary);
 }
 
 /* 编辑区 */
@@ -619,8 +586,6 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--text-secondary, #666);
-  font-size: 14px;
 }
 .form {
   max-width: 560px;
@@ -641,104 +606,33 @@ onMounted(() => {
 .label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary, #ccc);
+  color: var(--text-primary);
 }
 .required {
-  color: #ff6b6b;
+  color: var(--danger);
   margin-left: 2px;
 }
 .optional {
-  color: var(--text-secondary, #888);
+  color: var(--text-tertiary);
   font-weight: normal;
   font-size: 12px;
 }
-.control {
-  padding: 8px 12px;
-  border: 1px solid var(--border-color, #3a3a3a);
-  border-radius: 4px;
-  background: var(--bg-secondary, #252526);
-  color: var(--text-primary, #ddd);
-  font-size: 14px;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.control:focus {
-  border-color: var(--primary-color, #2e70c8);
-}
-.control:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.checkbox {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-}
 .inline-hint {
   font-size: 12px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
 }
 .field-hint {
   margin: 0;
   font-size: 12px;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
 }
 .field-hint.success {
-  color: #7fdc9b;
-}
-.error {
-  margin: 0;
-  padding: 8px 12px;
-  color: #ff6b6b;
-  background: #3a1a1a;
-  border-radius: 4px;
-  font-size: 13px;
-}
-.success {
-  margin: 0;
-  padding: 8px 12px;
-  color: #7fdc9b;
-  background: #1a3a1f;
-  border-radius: 4px;
-  font-size: 13px;
+  color: var(--success);
 }
 .actions {
   display: flex;
   gap: 10px;
   margin-top: 8px;
   flex-wrap: wrap;
-}
-.btn {
-  padding: 8px 16px;
-  border: 1px solid var(--border-color, #4a4a4a);
-  border-radius: 4px;
-  background: var(--bg-secondary, #2d2d2d);
-  color: var(--text-primary, #ddd);
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.btn:hover:not(:disabled) {
-  background: var(--bg-hover, #3a3a3a);
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn.primary {
-  background: var(--primary-color, #2e70c8);
-  border-color: var(--primary-color, #2e70c8);
-  color: #fff;
-}
-.btn.primary:hover:not(:disabled) {
-  background: var(--primary-hover, #1e5fa8);
-}
-.btn.danger {
-  border-color: #6b2a2a;
-  color: #ff8a8a;
-}
-.btn.danger:hover:not(:disabled) {
-  background: #3a1a1a;
 }
 </style>

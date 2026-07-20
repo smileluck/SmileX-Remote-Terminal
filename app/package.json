@@ -12,6 +12,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "@vicons/tabler": "^0.13.0",
+    "@vueuse/core": "^14.3.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "highlight.js": "^11.10.0",

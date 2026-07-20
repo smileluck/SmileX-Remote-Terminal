@@ -2,19 +2,26 @@
 /**
  * TerminalView - SSH 终端视图
  *
- * 承载 xterm.js 实例 + 连接配置表单（首次）
+ * 承载 xterm.js 实例。
+ * - tab 已带 sessionId（从 SideBar 会话卡片连接进入）：直接展示终端
+ * - tab 未带 sessionId（从 ActivityRail 新建）：显示快速连接表单
  */
-import { ref, watch, onMounted, nextTick, computed } from 'vue'
+import { ref, watch, nextTick } from 'vue'
+import { useResizeObserver } from '@vueuse/core'
+import { NButton, NInput, NInputNumber, NIcon, NForm, NFormItem, useMessage } from 'naive-ui'
+import { Terminal2 } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
 import { useTabsStore } from '@/stores/tabs'
 import type { TabItem, SshConfig } from '@/types/session'
 
 const props = defineProps<{ tab: TabItem }>()
 const tabs = useTabsStore()
+const message = useMessage()
 const { term, error, init, connect, fit } = useTerminal()
 
 const containerRef = ref<HTMLDivElement | null>(null)
-const showForm = ref(true)
+/** tab 已带 sessionId 则不显示快速表单 */
+const showForm = ref(!props.tab.sessionId)
 const config = ref<SshConfig>({
   host: '127.0.0.1',
   port: 22,
@@ -22,21 +29,7 @@ const config = ref<SshConfig>({
   auth: { type: 'password', value: '' },
 })
 
-/** 密码双向绑定（联合类型缩窄） */
-const password = computed({
-  get: () =>
-    config.value.auth.type === 'password' ? config.value.auth.value : '',
-  set: (v: string) => {
-    config.value.auth = { type: 'password', value: v }
-  },
-})
-
-onMounted(async () => {
-  if (containerRef.value) {
-    init(containerRef.value)
-  }
-})
-
+/** 容器首次挂载时初始化 xterm */
 watch(
   () => containerRef.value,
   async (el) => {
@@ -47,6 +40,11 @@ watch(
     }
   },
 )
+
+/** 容器尺寸变化（窗口 resize / tab 切换）时自动 fit */
+useResizeObserver(containerRef, () => {
+  if (term.value) fit()
+})
 
 async function handleConnect() {
   if (!term.value) return
@@ -60,6 +58,7 @@ async function handleConnect() {
     })
   } catch (e) {
     tabs.updateTab(props.tab.id, { error: String(e), connecting: false })
+    message.error(String(e))
   }
 }
 </script>
@@ -67,30 +66,34 @@ async function handleConnect() {
 <template>
   <div class="terminal-view">
     <div v-if="showForm" class="connect-form">
-      <h3>SSH 连接</h3>
-      <div class="form-row">
-        <label>主机</label>
-        <input v-model="config.host" />
-      </div>
-      <div class="form-row">
-        <label>端口</label>
-        <input v-model.number="config.port" type="number" />
-      </div>
-      <div class="form-row">
-        <label>用户名</label>
-        <input v-model="config.username" />
-      </div>
-      <div class="form-row">
-        <label>密码</label>
-        <input
-          v-model="password"
-          type="password"
-        />
-      </div>
-      <div v-if="error" class="error">{{ error }}</div>
-      <button @click="handleConnect">连接</button>
+      <h3 class="form-title">
+        <NIcon :component="Terminal2" />
+        SSH 连接
+      </h3>
+      <NForm label-placement="top" size="small" class="quick-form">
+        <NFormItem label="主机">
+          <NInput v-model:value="config.host" placeholder="192.168.1.10" />
+        </NFormItem>
+        <NFormItem label="端口">
+          <NInputNumber v-model:value="config.port" :min="1" :max="65535" style="width: 100%" />
+        </NFormItem>
+        <NFormItem label="用户名">
+          <NInput v-model:value="config.username" placeholder="root" />
+        </NFormItem>
+        <NFormItem label="密码">
+          <NInput
+            :value="config.auth.type === 'password' ? config.auth.value : ''"
+            type="password"
+            show-password-on="click"
+            placeholder="输入密码"
+            @update:value="(v: string) => (config.auth = { type: 'password', value: v })"
+          />
+        </NFormItem>
+        <div v-if="error" class="error">{{ error }}</div>
+        <NButton type="primary" @click="handleConnect">连接</NButton>
+      </NForm>
     </div>
-    <div ref="containerRef" class="xterm-container"></div>
+    <div v-else ref="containerRef" class="xterm-container"></div>
   </div>
 </template>
 
@@ -100,39 +103,35 @@ async function handleConnect() {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  background: var(--bg-app);
 }
 .xterm-container {
   flex: 1;
-  background: #1e1e1e;
+  background: #0f1419;
   padding: 4px;
 }
 .connect-form {
-  padding: 16px;
-  background: #fff;
+  padding: 20px 24px;
+  background: var(--bg-panel);
+  max-width: 420px;
 }
-.form-row {
-  margin-bottom: 8px;
+.form-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
-.form-row label {
-  display: inline-block;
-  width: 60px;
-}
-.form-row input {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
+.quick-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .error {
-  color: #d33;
+  color: var(--danger);
   font-size: 12px;
-  margin: 8px 0;
-}
-button {
-  padding: 6px 16px;
-  background: var(--primary-color);
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
+  margin: 4px 0;
 }
 </style>
