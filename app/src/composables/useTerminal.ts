@@ -9,21 +9,13 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
 import * as sessionService from '@/services/session'
-import { listen } from '@/services/invoke'
 import type { SshConfig } from '@/types/session'
-
-/** 终端输出事件 payload */
-interface TerminalOutputPayload {
-  sessionId: string
-  data: number[]
-}
 
 export function useTerminal() {
   const term = ref<Terminal | null>(null)
   const fitAddon = ref<FitAddon | null>(null)
   const sessionId = ref<string | null>(null)
   const error = ref<string | null>(null)
-  let unlisten: (() => void) | null = null
 
   /** 初始化 xterm 实例 */
   function init(container: HTMLElement) {
@@ -71,24 +63,8 @@ export function useTerminal() {
     if (!term.value || sessionId.value === id) return
     const t = term.value
 
-    unlisten = await listen<TerminalOutputPayload>('terminal_output', (payload) => {
-      if (payload.sessionId === sessionId.value) {
-        t.write(new Uint8Array(payload.data))
-      }
-    })
-    t.onData((data) => {
-      if (sessionId.value) {
-        const encoder = new TextEncoder()
-        sessionService.input(sessionId.value, encoder.encode(data)).catch((e) => {
-          error.value = String(e)
-        })
-      }
-    })
-    t.onResize(({ cols, rows }) => {
-      if (sessionId.value) {
-        sessionService.resize(sessionId.value, cols, rows).catch(() => {})
-      }
-    })
+    attachOutput(id, t)
+    attachInput(t)
     sessionId.value = id
   }
 
@@ -100,13 +76,29 @@ export function useTerminal() {
     const cols = t.cols
     const rows = t.rows
 
-    // 监听输出
-    unlisten = await listen<TerminalOutputPayload>('terminal_output', (payload) => {
-      if (payload.sessionId === sessionId.value) {
+    attachInput(t)
+
+    // 建立连接（输出经 ipc::Channel 由 service 层分发）
+    try {
+      sessionId.value = await sessionService.connect(config, cols, rows)
+      attachOutput(sessionId.value, t)
+    } catch (e) {
+      error.value = String(e)
+      throw e
+    }
+  }
+
+  /** 注册输出分发（Channel 回调 → xterm.write） */
+  function attachOutput(id: string, t: Terminal) {
+    sessionService.bindOutput(id, (payload) => {
+      if (payload.sessionId === id) {
         t.write(new Uint8Array(payload.data))
       }
     })
+  }
 
+  /** 注册输入/resize 转发（幂等：xterm 事件可重复注册但建议仅一次） */
+  function attachInput(t: Terminal) {
     // 用户输入 → 后端
     t.onData((data) => {
       if (sessionId.value) {
@@ -123,14 +115,6 @@ export function useTerminal() {
         sessionService.resize(sessionId.value, cols, rows).catch(() => {})
       }
     })
-
-    // 建立连接
-    try {
-      sessionId.value = await sessionService.connect(config, cols, rows)
-    } catch (e) {
-      error.value = String(e)
-      throw e
-    }
   }
 
   /** 调整终端尺寸（容器变化时调用） */
@@ -144,12 +128,10 @@ export function useTerminal() {
       await sessionService.disconnect(sessionId.value).catch(() => {})
       sessionId.value = null
     }
-    unlisten?.()
-    unlisten = null
   }
 
   onUnmounted(() => {
-    disconnect()
+    if (sessionId.value) sessionService.unbindOutput(sessionId.value)
     term.value?.dispose()
   })
 

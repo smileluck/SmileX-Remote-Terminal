@@ -41,6 +41,7 @@ pub async fn session_connect(
     config: ConnectionConfig,
     cols: Option<u32>,
     rows: Option<u32>,
+    on_output: tauri::ipc::Channel<TerminalOutputPayload>,
 ) -> Result<String, String> {
     let cols = cols.unwrap_or(80);
     let rows = rows.unwrap_or(24);
@@ -128,9 +129,9 @@ pub async fn session_connect(
         .await
         .insert(session_id.clone(), stats.clone());
 
-    // 5) 拉起推送 task：从 mpsc 消费数据 → emit 事件
+    // 5) 拉起推送 task：从 mpsc 消费数据 → 经 ipc::Channel 点对点推送
+    //    （相比全局 emit，避免高频终端输出的跨窗口广播与重复序列化）
     //    channel_ids / terminal_controls 清理由 session_disconnect 统一负责
-    let app_clone = app.clone();
     let session_id_clone = session_id.clone();
     tokio::spawn(async move {
         while let Some(chunk) = stream.rx.recv().await {
@@ -139,7 +140,7 @@ pub async fn session_connect(
                 session_id: session_id_clone.clone(),
                 data: chunk.data,
             };
-            if app_clone.emit("terminal_output", payload).is_err() {
+            if on_output.send(payload).is_err() {
                 break;
             }
         }
@@ -147,7 +148,7 @@ pub async fn session_connect(
         stream.stop().await;
         drop(stream);
         // 通知前端会话已断开（tab 标记 + 通知 + 提供重连入口）
-        let _ = app_clone.emit(
+        let _ = app.emit(
             "session_closed",
             serde_json::json!({ "session_id": session_id_clone }),
         );

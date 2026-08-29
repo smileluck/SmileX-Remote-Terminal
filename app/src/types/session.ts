@@ -43,6 +43,12 @@ export interface SshConfig {
 /** 远程桌面协议类型 */
 export type DesktopKind = 'rdp' | 'host'
 
+/** terminal_output 推送 payload（经 ipc::Channel 点对点传输） */
+export interface TerminalOutputPayload {
+  sessionId: string
+  data: number[]
+}
+
 /** 远程桌面配置 */
 export interface DesktopConfig {
   kind: DesktopKind
