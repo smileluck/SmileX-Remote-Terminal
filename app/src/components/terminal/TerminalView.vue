@@ -1,14 +1,13 @@
 <script setup lang="ts">
 /**
- * TerminalView - SSH 终端视图
+ * TerminalView - SSH 终端视图（支持分屏）
  *
- * 承载 xterm.js 实例。
- * - tab 已带 sessionId（从 SideBar 会话卡片连接进入）：初始化 xterm 后 bind 到会话
  * - tab 未带 sessionId（从 ActivityRail 新建）：显示快速连接表单
+ * - tab 已带 sessionId：分屏容器渲染 PaneTerminal（≤4 窗格，水平/垂直分割）
  * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮
+ * - 右上角工具按钮：SFTP 文件面板 / 向右分屏 / 向下分屏
  */
-import { ref, watch, nextTick, computed } from 'vue'
-import { useResizeObserver } from '@vueuse/core'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import {
   NButton,
   NInput,
@@ -19,13 +18,20 @@ import {
   NTooltip,
   useMessage,
 } from 'naive-ui'
-import { Terminal2, Refresh, Folder } from '@vicons/tabler'
-import { useTerminal } from '@/composables/useTerminal'
+import {
+  Terminal2,
+  Refresh,
+  Folder,
+  ArrowsSplit2,
+  LayoutRows,
+} from '@vicons/tabler'
+import * as sessionService from '@/services/session'
 import { connectProfile } from '@/composables/useSshConnect'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
 import FilePanel from '@/components/sftp/FilePanel.vue'
+import PaneTerminal from './PaneTerminal.vue'
 import type { TabItem, SshConfig } from '@/types/session'
 
 const props = defineProps<{ tab: TabItem }>()
@@ -33,13 +39,10 @@ const tabs = useTabsStore()
 const profiles = useProfilesStore()
 const monitor = useMonitorStore()
 const message = useMessage()
-const { term, sessionId, error, init, bind, connect, fit } = useTerminal()
 
-const containerRef = ref<HTMLDivElement | null>(null)
+const showForm = ref(!props.tab.sessionId)
 /** SFTP 文件面板开关 */
 const showFiles = ref(false)
-/** tab 已带 sessionId 则不显示快速表单 */
-const showForm = ref(!props.tab.sessionId)
 /** 重连中 */
 const reconnecting = ref(false)
 const config = ref<SshConfig>({
@@ -54,46 +57,92 @@ const profile = computed(() =>
   props.tab.profileId ? profiles.profiles.find((p) => p.id === props.tab.profileId) : null,
 )
 
-/** 容器首次挂载时初始化 xterm，并绑定已存在的会话 */
-watch(
-  () => containerRef.value,
-  async (el) => {
-    if (el && !term.value) {
-      init(el)
-      await nextTick()
-      fit()
-      // SideBar 连接的 tab：xterm 后挂载，需主动绑定
-      const sid = props.tab.sessionId
-      if (sid && sid !== 'connected' && !props.tab.disconnected) {
-        bind(sid)
-      }
-    }
-  },
-)
+/* ---------------- 分屏状态 ---------------- */
+interface Pane {
+  id: string
+  sessionId: string | null
+}
+const panes = ref<Pane[]>([{ id: 'p0', sessionId: props.tab.sessionId ?? null }])
+/** 各 pane 的 flex-grow 比例 */
+const ratios = ref<number[]>([1])
+/** 分割方向：row（水平并排）/ column（垂直堆叠） */
+const splitDir = ref<'row' | 'column'>('row')
 
-/** tab 的 sessionId 变化（重连成功）时重新绑定 */
 watch(
   () => props.tab.sessionId,
   (sid) => {
-    if (sid && sid !== 'connected' && term.value && !props.tab.disconnected) {
-      bind(sid)
-    }
+    // 重连成功：第一个 pane 绑定新会话
+    if (sid && panes.value[0]) panes.value[0].sessionId = sid
   },
 )
 
-/** 容器尺寸变化（窗口 resize / tab 切换）时自动 fit */
-useResizeObserver(containerRef, () => {
-  if (term.value) fit()
+function addPane(dir: 'row' | 'column') {
+  if (panes.value.length >= 4) return
+  splitDir.value = dir
+  panes.value.push({ id: `p-${Date.now()}`, sessionId: null })
+  ratios.value.push(1)
+}
+
+function closePane(index: number) {
+  const pane = panes.value[index]
+  // pane 独立建立的会话（非 tab 主会话）需要断开
+  if (pane.sessionId && pane.sessionId !== props.tab.sessionId) {
+    monitor.stopSampling(pane.sessionId)
+    sessionService.disconnect(pane.sessionId).catch(() => {})
+  }
+  panes.value.splice(index, 1)
+  ratios.value.splice(index, 1)
+}
+
+function bindPane(index: number, sid: string) {
+  panes.value[index].sessionId = sid
+}
+
+/** 分割条拖拽：调整相邻 pane 比例 */
+function onDividerDown(e: MouseEvent, index: number) {
+  const parent = (e.currentTarget as HTMLElement).parentElement
+  if (!parent) return
+  const total = splitDir.value === 'row' ? parent.clientWidth : parent.clientHeight
+  const startX = splitDir.value === 'row' ? e.clientX : e.clientY
+  const a = ratios.value[index]
+  const b = ratios.value[index + 1]
+  const onMove = (ev: MouseEvent) => {
+    const delta = ((splitDir.value === 'row' ? ev.clientX - startX : ev.clientY - startX) / total) * (a + b)
+    ratios.value[index] = Math.max(0.1, a + delta)
+    ratios.value[index + 1] = Math.max(0.1, b - delta)
+  }
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+  e.preventDefault()
+}
+
+/** tab 卸载：清理 pane 独立建立的会话（tab 主会话由 closeTab 负责） */
+onUnmounted(() => {
+  for (const pane of panes.value) {
+    if (pane.sessionId && pane.sessionId !== props.tab.sessionId) {
+      monitor.stopSampling(pane.sessionId)
+      sessionService.disconnect(pane.sessionId).catch(() => {})
+    }
+  }
 })
 
+/* ---------------- 快速连接（无 sessionId 时） ---------------- */
 async function handleConnect() {
-  if (!term.value) return
   showForm.value = false
   try {
-    await connect(config.value)
+    // 直接在主 pane 中快速连接
+    const cols = 80
+    const rows = 24
+    const sid = await sessionService.connect(config.value, cols, rows)
+    panes.value[0].sessionId = sid
+    monitor.startSampling(sid)
     tabs.updateTab(props.tab.id, {
       title: `${config.value.host}`,
-      sessionId: sessionId.value ?? undefined,
+      sessionId: sid,
       connecting: false,
       disconnected: false,
     })
@@ -150,35 +199,68 @@ async function handleReconnect() {
             @update:value="(v: string) => (config.auth = { type: 'password', value: v })"
           />
         </NFormItem>
-        <div v-if="error" class="error">{{ error }}</div>
         <NButton type="primary" @click="handleConnect">连接</NButton>
       </NForm>
     </div>
 
     <template v-else>
       <div class="terminal-main">
-        <div ref="containerRef" class="xterm-container"></div>
+        <div class="split-area" :class="splitDir">
+          <template v-for="(pane, i) in panes" :key="pane.id">
+            <PaneTerminal
+              class="split-pane"
+              :style="{ flexGrow: ratios[i], flexBasis: 0 }"
+              :session-id="pane.sessionId"
+              :closable="panes.length > 1"
+              @bind="(sid: string) => bindPane(i, sid)"
+              @close="closePane(i)"
+            />
+            <div
+              v-if="i < panes.length - 1"
+              class="split-divider"
+              :class="splitDir"
+              @mousedown="onDividerDown($event, i)"
+            />
+          </template>
+        </div>
         <!-- SFTP 文件面板 -->
         <FilePanel
           v-if="showFiles && tab.sessionId && !tab.disconnected"
           :session-id="tab.sessionId"
         />
-        <!-- 文件面板开关 -->
-        <NTooltip v-if="tab.sessionId" placement="left">
-          <template #trigger>
-            <NButton
-              quaternary
-              circle
-              size="small"
-              class="files-toggle"
-              :type="showFiles ? 'primary' : 'default'"
-              @click="showFiles = !showFiles"
-            >
-              <NIcon :component="Folder" />
-            </NButton>
-          </template>
-          文件管理（SFTP）
-        </NTooltip>
+        <!-- 工具按钮 -->
+        <div class="view-tools">
+          <NTooltip v-if="tab.sessionId" placement="left">
+            <template #trigger>
+              <NButton
+                quaternary
+                circle
+                size="small"
+                :type="showFiles ? 'primary' : 'default'"
+                @click="showFiles = !showFiles"
+              >
+                <NIcon :component="Folder" />
+              </NButton>
+            </template>
+            文件管理（SFTP）
+          </NTooltip>
+          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+            <template #trigger>
+              <NButton quaternary circle size="small" @click="addPane('row')">
+                <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
+              </NButton>
+            </template>
+            向右分屏
+          </NTooltip>
+          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+            <template #trigger>
+              <NButton quaternary circle size="small" @click="addPane('column')">
+                <NIcon :component="LayoutRows" />
+              </NButton>
+            </template>
+            向下分屏
+          </NTooltip>
+        </div>
       </div>
       <!-- 断开遮罩 -->
       <div v-if="tab.disconnected" class="disconnect-overlay">
@@ -208,23 +290,54 @@ async function handleReconnect() {
   height: 100%;
   background: var(--bg-app);
 }
-.xterm-container {
-  flex: 1;
-  background: var(--bg-app);
-  padding: 4px;
-  min-width: 0;
-}
 .terminal-main {
   position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
 }
-.files-toggle {
+.split-area {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.split-area.row {
+  flex-direction: row;
+}
+.split-area.column {
+  flex-direction: column;
+}
+.split-pane {
+  min-width: 0;
+  min-height: 0;
+}
+.split-divider {
+  flex-shrink: 0;
+  background: var(--border-color);
+  z-index: 4;
+}
+.split-divider.row {
+  width: 4px;
+  cursor: col-resize;
+  margin: 0 1px;
+}
+.split-divider.column {
+  height: 4px;
+  cursor: row-resize;
+  margin: 1px 0;
+}
+.split-divider:hover {
+  background: var(--primary);
+}
+.view-tools {
   position: absolute;
   right: 10px;
   top: 8px;
   z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .disconnect-overlay {
   position: absolute;
@@ -233,6 +346,7 @@ async function handleReconnect() {
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 10;
 }
 .disconnect-card {
   display: flex;
@@ -267,10 +381,5 @@ async function handleReconnect() {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-.error {
-  color: var(--danger);
-  font-size: 12px;
-  margin: 4px 0;
 }
 </style>
