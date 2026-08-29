@@ -10,3 +10,4 @@ pub mod monitor;
 pub mod session;
 pub mod session_profile;
 pub mod sftp;
+pub mod snippet;

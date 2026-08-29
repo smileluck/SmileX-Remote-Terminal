@@ -88,6 +88,13 @@ fn main() {
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_rename,
+            // 命令片段 & 历史
+            commands::snippet::snippet_list,
+            commands::snippet::snippet_save,
+            commands::snippet::snippet_delete,
+            commands::snippet::history_add,
+            commands::snippet::history_list,
+            commands::snippet::history_clear,
             // 会话配置命令组
             commands::session_profile::session_profile_save,
             commands::session_profile::session_profile_list,

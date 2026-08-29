@@ -90,6 +90,28 @@ pub struct LlmProfile {
     pub updated_at: i64,
 }
 
+/// 命令片段（用户收藏的常用命令）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandSnippet {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub tags: String,
+    pub created_at: i64,
+}
+
+/// 命令历史条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandHistory {
+    pub id: i64,
+    pub session_id: String,
+    pub command: String,
+    pub created_at: i64,
+}
+
 /// SQLite 存储句柄
 ///
 /// 内部用 `tokio::sync::Mutex` 包装 `Connection`，保证并发安全。
@@ -184,6 +206,26 @@ impl SqliteStorage {
             -- 同一时间仅允许一个 active profile（部分代码层保证）
             CREATE INDEX IF NOT EXISTS idx_llm_profiles_active
                 ON llm_profiles(is_active);
+
+            -- 命令片段（用户收藏的常用命令）
+            CREATE TABLE IF NOT EXISTS command_snippets (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                name          TEXT    NOT NULL,
+                command       TEXT    NOT NULL,
+                tags          TEXT    NOT NULL DEFAULT '',
+                created_at    INTEGER NOT NULL
+            );
+
+            -- 命令历史（终端回车行自动记录，按时间倒序查询）
+            CREATE TABLE IF NOT EXISTS command_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id    TEXT    NOT NULL DEFAULT '',
+                command       TEXT    NOT NULL,
+                created_at    INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_command_history_time
+                ON command_history(created_at DESC);
             "#,
         )?;
         Ok(())
@@ -460,6 +502,74 @@ impl SqliteStorage {
         } else {
             Ok(None)
         }
+    }
+
+    /// 保存/更新命令片段（id UPSERT）
+    pub async fn save_snippet(&self, snippet: &CommandSnippet) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![snippet.id, snippet.name, snippet.command, snippet.tags, snippet.created_at],
+        )?;
+        Ok(())
+    }
+
+    /// 全部命令片段（新→旧）
+    pub async fn list_snippets(&self) -> Result<Vec<CommandSnippet>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, command, tags, created_at FROM command_snippets ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CommandSnippet {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                command: row.get(2)?,
+                tags: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 删除命令片段（返回是否存在）
+    pub async fn delete_snippet(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        Ok(conn.execute("DELETE FROM command_snippets WHERE id = ?1", params![id])? > 0)
+    }
+
+    /// 追加一条命令历史
+    pub async fn add_history(&self, session_id: &str, command: &str, ts: i64) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO command_history (session_id, command, created_at) VALUES (?1, ?2, ?3)",
+            params![session_id, command, ts],
+        )?;
+        Ok(())
+    }
+
+    /// 最近命令历史（去重相邻重复，新→旧）
+    pub async fn list_history(&self, limit: u32) -> Result<Vec<CommandHistory>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, command, created_at FROM command_history ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(CommandHistory {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                command: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 清空命令历史
+    pub async fn clear_history(&self) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute("DELETE FROM command_history", [])?;
+        Ok(())
     }
 }
 

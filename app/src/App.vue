@@ -10,7 +10,7 @@
  * - 中：TabBar + MainContent（终端 / 远程桌面 / AI / 设置）
  * - 右：MonitorPanel（监控看版，可折叠/调宽）
  */
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   NConfigProvider,
   NMessageProvider,
@@ -29,10 +29,13 @@ import ActivityRail from '@/components/layout/ActivityRail.vue'
 import TabBar from '@/components/layout/TabBar.vue'
 import MonitorPanel from '@/components/layout/MonitorPanel.vue'
 import SessionEvents from '@/components/layout/SessionEvents.vue'
+import CommandPalette from '@/components/common/CommandPalette.vue'
 
 const tabsStore = useTabsStore()
 const layoutStore = useLayoutStore()
 const activeTab = computed(() => tabsStore.activeTab)
+/** ⌘K 命令面板 */
+const showPalette = ref(false)
 
 /** 全局快捷键 */
 function onKeydown(e: KeyboardEvent) {
@@ -45,6 +48,9 @@ function onKeydown(e: KeyboardEvent) {
   } else if (key === 'm') {
     e.preventDefault()
     layoutStore.toggleMonitor()
+  } else if (key === 'k') {
+    e.preventDefault()
+    showPalette.value = !showPalette.value
   } else if (key === 't') {
     e.preventDefault()
     tabsStore.addTab('ssh', '新 SSH 会话')
@@ -106,6 +112,7 @@ const themeOverrides: GlobalThemeOverrides = {
           <NNotificationProvider>
             <div class="app-container">
               <SessionEvents />
+              <CommandPalette v-if="showPalette" @close="showPalette = false" />
               <TopBar />
               <div class="app-body">
                 <ActivityRail />

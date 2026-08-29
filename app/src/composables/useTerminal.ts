@@ -9,6 +9,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
 import * as sessionService from '@/services/session'
+import * as snippetsService from '@/services/snippets'
 import type { SshConfig } from '@/types/session'
 
 export function useTerminal() {
@@ -106,6 +107,7 @@ export function useTerminal() {
         sessionService.input(sessionId.value, encoder.encode(data)).catch((e) => {
           error.value = String(e)
         })
+        recordHistory(sessionId.value, data)
       }
     })
 
@@ -115,6 +117,31 @@ export function useTerminal() {
         sessionService.resize(sessionId.value, cols, rows).catch(() => {})
       }
     })
+  }
+
+  /** 命令历史采集：缓冲当前输入行，回车时落库（不记录纯控制序列） */
+  let inputLine = ''
+  function recordHistory(sid: string, data: string) {
+    if (data === '\r') {
+      const cmd = inputLine.trim()
+      inputLine = ''
+      if (cmd && !cmd.startsWith(' ') && cmd.length <= 500) {
+        snippetsService.historyAdd(sid, cmd).catch(() => {})
+      }
+      return
+    }
+    if (data === '\u007f') {
+      // 退格
+      inputLine = inputLine.slice(0, -1)
+      return
+    }
+    if (data === '\u0003' || data === '\u0015') {
+      // Ctrl+C / Ctrl+U：清空当前行
+      inputLine = ''
+      return
+    }
+    // 仅累积可打印字符（忽略方向键/Tab 等）
+    if (data.length === 1 && data >= ' ') inputLine += data
   }
 
   /** 调整终端尺寸（容器变化时调用） */
