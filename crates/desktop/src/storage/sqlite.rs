@@ -129,6 +129,18 @@ pub struct AlertRule {
     pub created_at: i64,
 }
 
+/// SSH 密钥元数据（私钥在 OS Keyring，不落库）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKeyMeta {
+    pub id: String,
+    pub name: String,
+    pub key_type: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub created_at: i64,
+}
+
 /// SQLite 存储句柄
 ///
 /// 内部用 `tokio::sync::Mutex` 包装 `Connection`，保证并发安全。
@@ -253,6 +265,16 @@ impl SqliteStorage {
                 threshold     REAL    NOT NULL,
                 enabled       INTEGER NOT NULL DEFAULT 1,
                 cooldown_sec  INTEGER NOT NULL DEFAULT 300,
+                created_at    INTEGER NOT NULL
+            );
+
+            -- SSH 密钥元数据（私钥在 OS Keyring，不落库）
+            CREATE TABLE IF NOT EXISTS ssh_keys (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                name          TEXT    NOT NULL,
+                key_type      TEXT    NOT NULL,
+                public_key    TEXT    NOT NULL,
+                fingerprint   TEXT    NOT NULL,
                 created_at    INTEGER NOT NULL
             );
             "#,
@@ -631,6 +653,41 @@ impl SqliteStorage {
     pub async fn delete_alert_rule(&self, id: &str) -> Result<bool> {
         let conn = self.conn.lock().await;
         Ok(conn.execute("DELETE FROM alert_rules WHERE id = ?1", params![id])? > 0)
+    }
+
+    /// 保存 SSH 密钥元数据（id UPSERT）
+    pub async fn save_ssh_key(&self, key: &SshKeyMeta) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO ssh_keys (id, name, key_type, public_key, fingerprint, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![key.id, key.name, key.key_type, key.public_key, key.fingerprint, key.created_at],
+        )?;
+        Ok(())
+    }
+
+    /// 全部 SSH 密钥元数据（新→旧）
+    pub async fn list_ssh_keys(&self) -> Result<Vec<SshKeyMeta>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, key_type, public_key, fingerprint, created_at FROM ssh_keys ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SshKeyMeta {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                key_type: row.get(2)?,
+                public_key: row.get(3)?,
+                fingerprint: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 删除 SSH 密钥元数据
+    pub async fn delete_ssh_key(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        Ok(conn.execute("DELETE FROM ssh_keys WHERE id = ?1", params![id])? > 0)
     }
 }
 

@@ -29,7 +29,7 @@ export interface TabItem {
 export type AuthMethod =
   | { type: 'password'; value: string }
   | { type: 'private_key'; value: { path: string; passphrase?: string } }
-  | { type: 'private_key_mem'; value: { keyData: string; passphrase?: string } }
+  | { type: 'private_key_mem'; value: { key_data: string; passphrase?: string } }
 
 /** SSH 连接配置 */
 export interface SshConfig {

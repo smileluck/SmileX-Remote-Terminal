@@ -12,3 +12,4 @@ pub mod session;
 pub mod session_profile;
 pub mod sftp;
 pub mod snippet;
+pub mod ssh_key;

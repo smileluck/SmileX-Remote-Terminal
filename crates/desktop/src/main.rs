@@ -99,6 +99,12 @@ fn main() {
             commands::alert::alert_rule_list,
             commands::alert::alert_rule_save,
             commands::alert::alert_rule_delete,
+            // SSH 密钥管理
+            commands::ssh_key::ssh_key_list,
+            commands::ssh_key::ssh_key_generate,
+            commands::ssh_key::ssh_key_import,
+            commands::ssh_key::ssh_key_delete,
+            commands::ssh_key::ssh_key_get_private,
             // 会话配置命令组
             commands::session_profile::session_profile_save,
             commands::session_profile::session_profile_list,

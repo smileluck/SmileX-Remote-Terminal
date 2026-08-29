@@ -26,6 +26,7 @@ import {
   NRadio,
   NCheckbox,
   NButton,
+  NSelect,
   useMessage,
   type FormInst,
   type FormRules,
@@ -33,8 +34,10 @@ import {
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
 import * as sessionService from '@/services/session'
+import * as sshKeys from '@/services/sshKeys'
 import { decodeExtra, encodeExtra } from '@/types/profile'
 import type { SessionProfile, AuthType } from '@/types/profile'
+import { buildConfig } from '@/composables/useSshConnect'
 
 const props = defineProps<{
   /** 编辑模式：传入 profile id；新建模式：不传 */
@@ -60,8 +63,21 @@ const form = reactive({
   password: '',
   privateKeyPath: '',
   privateKeyPassphrase: '',
+  sshKeyId: '',
   acceptFirstHostKey: false,
 })
+
+/** 密钥管理器中的可选密钥 */
+const keyOptions = ref<{ label: string; value: string }[]>([])
+
+async function loadKeys() {
+  try {
+    const keys = await sshKeys.listKeys()
+    keyOptions.value = keys.map((k) => ({ label: `${k.name}（${k.keyType}）`, value: k.id }))
+  } catch {
+    /* 浏览器 dev 静默 */
+  }
+}
 
 /** 是否正在保存/连接 */
 const busy = ref(false)
@@ -92,6 +108,15 @@ const rules: FormRules = {
       return true
     },
   },
+  sshKeyId: {
+    trigger: ['blur', 'change'],
+    validator: (_rule, value) => {
+      if (form.authType === 'private_key_mem' && !value) {
+        return new Error('请选择已保存的密钥（可在设置 → SSH 密钥中生成/导入）')
+      }
+      return true
+    },
+  },
 }
 
 /** 把表单组装成 SessionProfile */
@@ -107,6 +132,7 @@ function buildProfile(id?: string): SessionProfile {
     auth_type: form.authType,
     extra: encodeExtra({
       private_key_path: form.authType === 'private_key' ? form.privateKeyPath.trim() : undefined,
+      ssh_key_id: form.authType === 'private_key_mem' ? form.sshKeyId : undefined,
       accept_first_host_key: form.acceptFirstHostKey,
     }),
     created_at: now,
@@ -119,35 +145,15 @@ function buildSecret(): string | null {
   if (form.authType === 'password') {
     return form.password || null
   }
-  // private_key
+  // private_key / private_key_mem：均为私钥口令
   return form.privateKeyPassphrase || null
 }
 
-/** 拉取并建立连接（共用逻辑） */
+/** 拉取并建立连接（共用逻辑，认证细节统一走 buildConfig） */
 async function doConnect(profile: SessionProfile, secret: string | null) {
-  // 拼接 ConnectionConfig（后端 ssh-core 结构）
-  const authPayload =
-    profile.auth_type === 'password'
-      ? { type: 'password', value: secret || '' }
-      : {
-          type: 'private_key',
-          value: {
-            path: decodeExtra(profile.extra).private_key_path || '',
-            passphrase: secret || undefined,
-          },
-        }
+  const config = await buildConfig(profile, secret)
 
-  const sessionId = await sessionService.connect(
-    {
-      host: profile.host,
-      port: profile.port,
-      username: profile.username,
-      auth: authPayload as never,
-      acceptFirstHostKey: decodeExtra(profile.extra).accept_first_host_key ?? false,
-    },
-    80,
-    24,
-  )
+  const sessionId = await sessionService.connect(config, 80, 24)
 
   // 打开终端 Tab
   tabsStore.addTab('ssh', profile.name, sessionId)
@@ -208,10 +214,14 @@ async function loadForEdit() {
   form.authType = p.auth_type
   const extra = decodeExtra(p.extra)
   form.privateKeyPath = extra.private_key_path || ''
+  form.sshKeyId = extra.ssh_key_id || ''
   form.acceptFirstHostKey = extra.accept_first_host_key ?? false
 }
 
-onMounted(loadForEdit)
+onMounted(() => {
+  loadForEdit()
+  loadKeys()
+})
 </script>
 
 <template>
@@ -247,6 +257,7 @@ onMounted(loadForEdit)
         <NRadioGroup v-model:value="form.authType">
           <NRadio value="password">密码</NRadio>
           <NRadio value="private_key">私钥</NRadio>
+          <NRadio value="private_key_mem">已存密钥</NRadio>
         </NRadioGroup>
       </NFormItem>
 
@@ -276,6 +287,25 @@ onMounted(loadForEdit)
             type="password"
             show-password-on="click"
             :placeholder="isEdit ? '留空不更新' : '若私钥已加密'"
+          />
+        </NFormItem>
+      </template>
+
+      <!-- 已存密钥认证 -->
+      <template v-if="form.authType === 'private_key_mem'">
+        <NFormItem label="选择密钥" path="sshKeyId" class="col-span-2">
+          <NSelect
+            v-model:value="form.sshKeyId"
+            :options="keyOptions"
+            placeholder="选择密钥管理器中的密钥"
+          />
+        </NFormItem>
+        <NFormItem label="私钥口令（可选）" path="privateKeyPassphrase" class="col-span-2">
+          <NInput
+            v-model:value="form.privateKeyPassphrase"
+            type="password"
+            show-password-on="click"
+            placeholder="若生成/导入时已加密"
           />
         </NFormItem>
       </template>

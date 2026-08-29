@@ -6,29 +6,41 @@
  */
 import * as profileService from '@/services/profile'
 import * as sessionService from '@/services/session'
+import { getPrivateKey } from '@/services/sshKeys'
 import { decodeExtra } from '@/types/profile'
 import type { SessionProfile } from '@/types/profile'
 import type { SshConfig } from '@/types/session'
 
-/** 由档案构造连接配置（含 Keyring 敏感字段） */
-export async function buildConfig(profile: SessionProfile): Promise<SshConfig> {
-  const secret = await profileService.getSecret(profile.id)
-  const authPayload =
-    profile.auth_type === 'password'
-      ? { type: 'password', value: secret || '' }
-      : {
-          type: 'private_key',
-          value: {
-            path: decodeExtra(profile.extra).private_key_path || '',
-            passphrase: secret || undefined,
-          },
-        }
+/** 由档案构造连接配置（含 Keyring 敏感字段；secretOverride 用于未保存档案的临时连接） */
+export async function buildConfig(
+  profile: SessionProfile,
+  secretOverride?: string | null,
+): Promise<SshConfig> {
+  const secret = secretOverride !== undefined ? secretOverride : await profileService.getSecret(profile.id)
+  const extra = decodeExtra(profile.extra)
+  let authPayload
+  if (profile.auth_type === 'password') {
+    authPayload = { type: 'password', value: secret || '' }
+  } else if (profile.auth_type === 'private_key_mem' && extra.ssh_key_id) {
+    // 密钥管理器中的密钥：从 OS Keyring 读取私钥，内存传递
+    const keyData = await getPrivateKey(extra.ssh_key_id)
+    if (!keyData) throw new Error('密钥不存在或已删除，请重新编辑会话认证方式')
+    authPayload = { type: 'private_key_mem', value: { key_data: keyData, passphrase: secret || undefined } }
+  } else {
+    authPayload = {
+      type: 'private_key',
+      value: {
+        path: extra.private_key_path || '',
+        passphrase: secret || undefined,
+      },
+    }
+  }
   return {
     host: profile.host,
     port: profile.port,
     username: profile.username,
     auth: authPayload as never,
-    acceptFirstHostKey: decodeExtra(profile.extra).accept_first_host_key ?? false,
+    acceptFirstHostKey: extra.accept_first_host_key ?? false,
   }
 }
 

@@ -34,6 +34,7 @@ import {
 } from 'naive-ui'
 import { Plus } from '@vicons/tabler'
 import { useThemeStore } from '@/stores/theme'
+import KeyManager from '@/components/settings/KeyManager.vue'
 import {
   PROVIDER_OPTIONS,
   createDefaultProfileFields,
@@ -53,6 +54,9 @@ function genId(): string {
 
 const message = useMessage()
 const themeStore = useThemeStore()
+
+/** 设置分区：llm 配置 / ssh 密钥 */
+const section = ref<'llm' | 'keys'>('llm')
 
 /** 所有档案（左侧列表展示） */
 const profiles = ref<LlmProfile[]>([])
@@ -341,6 +345,20 @@ onMounted(() => {
       </NRadioGroup>
     </section>
 
+    <!-- 分区切换 -->
+    <section class="appearance">
+      <NRadioGroup v-model:value="section" size="small">
+        <NRadioButton value="llm">LLM 配置</NRadioButton>
+        <NRadioButton value="keys">SSH 密钥</NRadioButton>
+      </NRadioGroup>
+    </section>
+
+    <!-- SSH 密钥管理 -->
+    <div v-if="section === 'keys'" class="section-body">
+      <KeyManager />
+    </div>
+
+    <template v-else>
     <NSpin v-if="loading && profiles.length === 0" class="loading" />
 
     <div v-else class="layout">
@@ -480,6 +498,7 @@ onMounted(() => {
         </form>
       </section>
     </div>
+    </template>
   </div>
 </template>
 
@@ -507,6 +526,11 @@ onMounted(() => {
 .appearance-label {
   font-size: 13px;
   color: var(--text-secondary);
+}
+.section-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
 }
 .header h2 {
   margin: 0 0 4px 0;

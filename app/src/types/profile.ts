@@ -15,6 +15,10 @@ export type AuthType = 'password' | 'private_key' | 'private_key_mem'
 export interface ProfileExtra {
   /** 私钥文件路径（仅 auth_type=private_key 时有意义） */
   private_key_path?: string
+  /** 引用密钥管理器中的 SSH 密钥 id（auth_type=private_key_mem 时使用） */
+  ssh_key_id?: string
+  /** 会话分组名（SideBar 分组展示） */
+  group?: string
   /** 是否自动接受 host key（仅 SSH） */
   accept_first_host_key?: boolean
   /** 远程桌面分辨率宽（仅 rdp/host） */
