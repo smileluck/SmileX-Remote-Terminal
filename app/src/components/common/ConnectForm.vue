@@ -64,6 +64,7 @@ const form = reactive({
   privateKeyPath: '',
   privateKeyPassphrase: '',
   sshKeyId: '',
+  group: '',
   acceptFirstHostKey: false,
 })
 
@@ -133,6 +134,7 @@ function buildProfile(id?: string): SessionProfile {
     extra: encodeExtra({
       private_key_path: form.authType === 'private_key' ? form.privateKeyPath.trim() : undefined,
       ssh_key_id: form.authType === 'private_key_mem' ? form.sshKeyId : undefined,
+      group: form.group.trim() || undefined,
       accept_first_host_key: form.acceptFirstHostKey,
     }),
     created_at: now,
@@ -215,6 +217,7 @@ async function loadForEdit() {
   const extra = decodeExtra(p.extra)
   form.privateKeyPath = extra.private_key_path || ''
   form.sshKeyId = extra.ssh_key_id || ''
+  form.group = extra.group || ''
   form.acceptFirstHostKey = extra.accept_first_host_key ?? false
 }
 
@@ -251,6 +254,10 @@ onMounted(() => {
 
       <NFormItem label="用户名" path="username">
         <NInput v-model:value="form.username" placeholder="root" />
+      </NFormItem>
+
+      <NFormItem label="分组（可选）" path="group">
+        <NInput v-model:value="form.group" placeholder="如：生产环境" />
       </NFormItem>
 
       <NFormItem label="认证方式" path="authType" class="col-span-2">

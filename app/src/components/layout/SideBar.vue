@@ -13,9 +13,9 @@
  * - profiles store（持久化的 SessionProfile 列表）
  * - tabs store（连接成功后 addTab）
  */
-import { onMounted, ref, type Component } from 'vue'
-import { NButton, NIcon, NPopconfirm, NEmpty, useMessage } from 'naive-ui'
-import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash } from '@vicons/tabler'
+import { computed, onMounted, ref, type Component } from 'vue'
+import { NButton, NIcon, NPopconfirm, NEmpty, NInput, useMessage } from 'naive-ui'
+import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
 import { useMonitorStore } from '@/stores/monitor'
@@ -50,6 +50,47 @@ const editingProfileId = ref<string | null>(null)
 const creating = ref(false)
 /** 正在连接的 profile id（禁用按钮防抖） */
 const connectingId = ref<string | null>(null)
+
+/** 搜索关键字（名称 / host / 用户名 / 分组 子串过滤） */
+const search = ref('')
+/** 已折叠的分组名集合 */
+const collapsedGroups = ref(new Set<string>())
+
+/** 过滤后的 profiles */
+const filteredProfiles = computed(() => {
+  const kw = search.value.trim().toLowerCase()
+  if (!kw) return profilesStore.profiles
+  return profilesStore.profiles.filter(
+    (p) =>
+      p.name.toLowerCase().includes(kw) ||
+      p.host.toLowerCase().includes(kw) ||
+      p.username.toLowerCase().includes(kw) ||
+      (decodeExtra(p.extra).group || '').toLowerCase().includes(kw),
+  )
+})
+
+/** 按 group 聚类（有名分组按名排序，「未分组」最后） */
+const groupedProfiles = computed(() => {
+  const map = new Map<string, SessionProfile[]>()
+  for (const p of filteredProfiles.value) {
+    const g = decodeExtra(p.extra).group || ''
+    if (!map.has(g)) map.set(g, [])
+    map.get(g)!.push(p)
+  }
+  const names = [...map.keys()].filter((n) => n).sort((a, b) => a.localeCompare(b, 'zh'))
+  if (map.has('')) names.push('')
+  return names.map((n) => ({ name: n, profiles: map.get(n)! }))
+})
+
+/** 搜索时自动展开所有分组 */
+const isGroupCollapsed = (name: string) => !search.value.trim() && collapsedGroups.value.has(name)
+
+function toggleGroup(name: string) {
+  const s = new Set(collapsedGroups.value)
+  if (s.has(name)) s.delete(name)
+  else s.add(name)
+  collapsedGroups.value = s
+}
 
 /** 进入新建模式 */
 function startCreate() {
@@ -124,6 +165,12 @@ onMounted(() => {
       </NButton>
     </header>
 
+    <div class="search-slot">
+      <NInput v-model:value="search" size="small" placeholder="搜索会话 / 主机 / 分组" clearable>
+        <template #prefix><NIcon :component="Search" /></template>
+      </NInput>
+    </div>
+
     <div class="list-scroll">
       <!-- 新建表单 -->
       <div v-if="creating" class="form-slot">
@@ -139,9 +186,27 @@ onMounted(() => {
         </NEmpty>
       </div>
 
-      <!-- 卡片列表 -->
+      <!-- 搜索无结果 -->
+      <div v-else-if="filteredProfiles.length === 0" class="empty">
+        <NEmpty size="small" description="无匹配会话" />
+      </div>
+
+      <!-- 分组卡片列表 -->
       <div v-else class="card-list">
-        <div v-for="p in profilesStore.profiles" :key="p.id" class="card-slot">
+        <div v-for="g in groupedProfiles" :key="g.name || '__none__'" class="group">
+          <!-- 分组头（仅多组或已命名时显示） -->
+          <div
+            v-if="groupedProfiles.length > 1 || g.name"
+            class="group-header"
+            @click="toggleGroup(g.name)"
+          >
+            <NIcon :component="ChevronRight" class="chevron" :class="{ open: !isGroupCollapsed(g.name) }" />
+            <span class="group-name">{{ g.name || '未分组' }}</span>
+            <span class="group-count">{{ g.profiles.length }}</span>
+          </div>
+
+          <div v-show="!isGroupCollapsed(g.name)" class="group-body">
+            <div v-for="p in g.profiles" :key="p.id" class="card-slot">
           <!-- 卡片（默认） -->
           <div
             v-if="editingProfileId !== p.id"
@@ -194,6 +259,8 @@ onMounted(() => {
             <ConnectForm :profile-id="p.id" @close="closeForm" />
           </div>
         </div>
+          </div>
+        </div>
       </div>
     </div>
   </aside>
@@ -228,6 +295,55 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+}
+.search-slot {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.group {
+  display: flex;
+  flex-direction: column;
+}
+.group + .group {
+  margin-top: 8px;
+}
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text-secondary);
+}
+.group-header:hover {
+  background: var(--bg-elevated);
+}
+.chevron {
+  font-size: 13px;
+  transition: transform 0.12s;
+}
+.chevron.open {
+  transform: rotate(90deg);
+}
+.group-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.group-count {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-left: 2px;
+}
+.group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 6px;
 }
 .empty {
   padding: 32px 12px;
