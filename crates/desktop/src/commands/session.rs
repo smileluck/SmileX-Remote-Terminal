@@ -132,10 +132,32 @@ pub async fn session_connect(
     // 5) 拉起推送 task：从 mpsc 消费数据 → 经 ipc::Channel 点对点推送
     //    （相比全局 emit，避免高频终端输出的跨窗口广播与重复序列化）
     //    channel_ids / terminal_controls 清理由 session_disconnect 统一负责
+    //    同时累积终端回滚缓冲（AI 上下文注入用，容量上限 ~16KB）
+    let scrollback = Arc::new(tokio::sync::Mutex::new(String::new()));
+    state
+        .terminal_scrollback
+        .lock()
+        .await
+        .insert(session_id.clone(), scrollback.clone());
+    const SCROLLBACK_CAP: usize = 16 * 1024;
     let session_id_clone = session_id.clone();
     tokio::spawn(async move {
         while let Some(chunk) = stream.rx.recv().await {
             stats.rx_bytes.fetch_add(chunk.data.len() as u64, Ordering::Relaxed);
+            // 追加回滚缓冲（超限时丢弃最旧内容）
+            {
+                let mut sb = scrollback.lock().await;
+                sb.push_str(&String::from_utf8_lossy(&chunk.data));
+                if sb.len() > SCROLLBACK_CAP {
+                    let cut = sb.len() - SCROLLBACK_CAP;
+                    let start = sb
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .find(|&i| i >= cut)
+                        .unwrap_or(sb.len());
+                    *sb = sb[start..].to_string();
+                }
+            }
             let payload = TerminalOutputPayload {
                 session_id: session_id_clone.clone(),
                 data: chunk.data,
@@ -266,6 +288,8 @@ pub async fn session_disconnect(
     state.terminal_stats.lock().await.remove(&session_id);
     // 清理 SFTP 客户端缓存
     state.sftp_clients.lock().await.remove(&session_id);
+    // 清理终端回滚缓冲
+    state.terminal_scrollback.lock().await.remove(&session_id);
 
     // 断开并移除会话
     state

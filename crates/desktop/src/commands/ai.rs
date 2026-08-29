@@ -25,6 +25,19 @@ const CONFIG_KEY: &str = "llm_config";
 /// Keyring 中 API Key 的键
 const SECRET_KEY: &str = "ai:api_key";
 
+/// 运行时长格式化（如 "3天4小时"）
+fn format_uptime(s: u64) -> String {
+    let days = s / 86400;
+    let hours = (s % 86400) / 3600;
+    if days > 0 {
+        format!("{days}天{hours}小时")
+    } else if hours > 0 {
+        format!("{hours}小时{}分", (s % 3600) / 60)
+    } else {
+        format!("{}分", s / 60)
+    }
+}
+
 /// 发送消息（流式响应通过 `ai_token` 事件推送，结束发 `ai_done`）
 #[tauri::command]
 pub async fn ai_chat_send(
@@ -35,6 +48,48 @@ pub async fn ai_chat_send(
     ctx: Context,
 ) -> Result<(), crate::error::AppError> {
     let provider = state.chat_provider.clone();
+
+    // 上下文注入：前端只传 sessionId + include_context 标志，
+    // 终端输出与监控摘要由后端在此填充（单一可信来源）
+    let mut ctx = ctx;
+    if ctx.include_context {
+        if let Some(sid) = ctx.session_id.clone() {
+            // 终端回滚缓冲（约最近 200 行）
+            let scrollback = state
+                .terminal_scrollback
+                .lock()
+                .await
+                .get(&sid)
+                .cloned();
+            if let Some(sb) = scrollback {
+                let text = sb.lock().await.clone();
+                if !text.trim().is_empty() {
+                    ctx.terminal_output = Some(text);
+                }
+            }
+            // 最近监控采样摘要
+            if let Some(m) = state.monitor_sampler.last_metrics(&sid).await {
+                let disk = m
+                    .disks
+                    .first()
+                    .map(|d| format!(" / 磁盘{} {:.1}%", d.mount, d.used_percent))
+                    .unwrap_or_default();
+                ctx.metrics_summary = Some(format!(
+                    "CPU {:.1}% / 内存 {:.1}% ({:.1}G/{:.1}G) / 负载1m {:.2}{} / 网络 ↓{:.0}KB/s ↑{:.0}KB/s / 延迟 {}ms / 运行 {}",
+                    m.cpu_percent.unwrap_or(0.0),
+                    m.mem_percent,
+                    m.mem_used_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
+                    m.mem_total_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
+                    m.load1,
+                    disk,
+                    m.net_rx_bps / 1024.0,
+                    m.net_tx_bps / 1024.0,
+                    m.latency_ms.unwrap_or(0),
+                    format_uptime(m.uptime_s),
+                ));
+            }
+        }
+    }
 
     // token 回调：emit `ai_token` 事件
     let app_clone = app.clone();

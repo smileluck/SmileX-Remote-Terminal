@@ -77,6 +77,8 @@ pub struct AppState {
     pub host_key_awaits: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
     /// sessionId → SFTP 客户端（懒初始化，断开会话时移除）
     pub sftp_clients: Mutex<HashMap<String, ssh_core::sftp::SftpClient>>,
+    /// sessionId → 终端回滚缓冲（AI 上下文注入用，约最近 200 行）
+    pub terminal_scrollback: Mutex<HashMap<String, Arc<Mutex<String>>>>,
 }
 
 impl AppState {
@@ -93,6 +95,7 @@ impl AppState {
             terminal_stats: Mutex::new(HashMap::new()),
             host_key_awaits: Arc::new(Mutex::new(HashMap::new())),
             sftp_clients: Mutex::new(HashMap::new()),
+            terminal_scrollback: Mutex::new(HashMap::new()),
         }
     }
 
@@ -112,6 +115,7 @@ impl AppState {
         self.monitor_sampler.stop_all().await;
         self.terminal_stats.lock().await.clear();
         self.sftp_clients.lock().await.clear();
+        self.terminal_scrollback.lock().await.clear();
         tracing::info!("会话清理完成");
     }
 }

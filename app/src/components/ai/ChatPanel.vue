@@ -5,16 +5,32 @@
  * 消息列表 + 输入框 + 上下文开关。
  * 深色主题，背景与全局对齐。
  */
-import { ref } from 'vue'
-import { NButton, NInput, NPopconfirm, NIcon } from 'naive-ui'
+import { ref, computed } from 'vue'
+import { NButton, NInput, NPopconfirm, NIcon, NSelect } from 'naive-ui'
 import { Send, PlayerStop, Trash } from '@vicons/tabler'
 import { useChat } from '@/composables/useChat'
+import { useTabsStore } from '@/stores/tabs'
 import MessageBubble from './MessageBubble.vue'
 import ContextToggle from './ContextToggle.vue'
 
-const { messages, loading, error, includeContext, send, abort, clear } = useChat()
+const { messages, loading, error, includeContext, sshSessionId, send, abort, clear } = useChat()
 
+const tabs = useTabsStore()
 const input = ref('')
+
+/** 可选作上下文的活跃 SSH 会话 */
+const sshOptions = computed(() =>
+  tabs.tabs
+    .filter((t) => t.kind === 'ssh' && t.sessionId && !t.disconnected)
+    .map((t) => ({ label: t.title, value: t.sessionId! })),
+)
+
+/** 默认跟随激活的 SSH tab */
+const activeSsh = computed(() => {
+  const t = tabs.activeTab
+  return t?.kind === 'ssh' && t.sessionId && !t.disconnected ? t.sessionId : null
+})
+if (!sshSessionId.value) sshSessionId.value = activeSsh.value
 
 function handleSend() {
   if (!input.value.trim()) return
@@ -34,6 +50,14 @@ function handleKeydown(e: KeyboardEvent) {
   <div class="chat-panel">
     <header class="chat-header">
       <span class="chat-title">AI 助手</span>
+      <NSelect
+        v-if="includeContext && sshOptions.length"
+        v-model:value="sshSessionId"
+        size="tiny"
+        :options="sshOptions"
+        placeholder="选择会话"
+        class="ctx-select"
+      />
       <ContextToggle v-model="includeContext" />
       <NPopconfirm @positive-click="clear">
         <template #trigger>
@@ -97,6 +121,10 @@ function handleKeydown(e: KeyboardEvent) {
   flex: 1;
   color: var(--text-primary);
   font-size: 14px;
+}
+.ctx-select {
+  width: 140px;
+  flex-shrink: 0;
 }
 .message-list {
   flex: 1;

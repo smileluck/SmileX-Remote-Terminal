@@ -87,11 +87,18 @@ fn evaluate_rules(
 pub struct MonitorSampler {
     /// sessionId → 取消令牌
     tasks: Mutex<HashMap<String, CancellationToken>>,
+    /// sessionId → 最近一次采样 payload（AI 上下文注入用）
+    last_metrics: Arc<Mutex<HashMap<String, MonitorMetricsPayload>>>,
 }
 
 impl MonitorSampler {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 读取某会话最近一次采样（AI 上下文注入用）
+    pub async fn last_metrics(&self, session_id: &str) -> Option<MonitorMetricsPayload> {
+        self.last_metrics.lock().await.get(session_id).cloned()
     }
 
     /// 启动某会话的采样（已在采样中则先停止旧 task 再重启，用于调整间隔）
@@ -111,6 +118,7 @@ impl MonitorSampler {
             .await
             .insert(session_id.clone(), token.clone());
 
+        let last_metrics = self.last_metrics.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(
                 interval_ms.clamp(1000, 60_000),
@@ -202,6 +210,10 @@ impl MonitorSampler {
                 if app.emit("monitor_metrics", &payload).is_err() {
                     break;
                 }
+                last_metrics
+                    .lock()
+                    .await
+                    .insert(session_id.clone(), payload.clone());
 
                 // 告警规则评估（每轮重新加载，规则变更即时生效）
                 if let Ok(rules) = storage.list_alert_rules(true).await {
@@ -227,6 +239,7 @@ impl MonitorSampler {
         if let Some(token) = self.tasks.lock().await.remove(session_id) {
             token.cancel();
         }
+        self.last_metrics.lock().await.remove(session_id);
     }
 
     /// 当前采样中的 sessionId 列表

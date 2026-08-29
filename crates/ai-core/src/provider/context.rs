@@ -10,6 +10,9 @@ pub struct Context {
     pub session_id: Option<String>,
     /// 终端最近 N 行输出（应用层采集后传入）
     pub terminal_output: Option<String>,
+    /// 监控指标摘要（应用层采集后传入，如 "CPU 82.5% / MEM 71.2% / load1 3.4"）
+    #[serde(default)]
+    pub metrics_summary: Option<String>,
     /// 用户是否勾选附带上下文
     pub include_context: bool,
 }
@@ -20,6 +23,7 @@ impl Context {
         Self {
             session_id: None,
             terminal_output: None,
+            metrics_summary: None,
             include_context: false,
         }
     }
@@ -29,6 +33,7 @@ impl Context {
         Self {
             session_id: Some(session_id),
             terminal_output: Some(terminal_output),
+            metrics_summary: None,
             include_context: true,
         }
     }
@@ -38,11 +43,22 @@ impl Context {
         if !self.include_context {
             return None;
         }
-        self.terminal_output.as_ref().map(|output| {
-            format!(
-                "你是一位资深运维工程师助手。以下是用户当前 SSH 终端的最近输出，请结合该上下文回答用户问题：\n\n```\n{}\n```",
-                output
-            )
-        })
+        let mut prompt = String::from(
+            "你是一位资深运维工程师助手。请结合以下用户当前环境上下文回答问题。",
+        );
+        let mut has_any = false;
+        if let Some(m) = self.metrics_summary.as_ref() {
+            prompt.push_str(&format!("\n\n## 监控指标\n{}", m));
+            has_any = true;
+        }
+        if let Some(output) = self.terminal_output.as_ref() {
+            prompt.push_str(&format!("\n\n## 终端最近输出\n```\n{}\n```", output));
+            has_any = true;
+        }
+        if has_any {
+            Some(prompt)
+        } else {
+            None
+        }
     }
 }
