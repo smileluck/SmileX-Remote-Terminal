@@ -74,3 +74,8 @@ export async function disconnect(sessionId: string): Promise<void> {
   unbindOutput(sessionId)
   return invoke<void>('session_disconnect', { sessionId })
 }
+
+/** 在独立通道执行一次性命令（非交互，用于命令补全等） */
+export async function exec(sessionId: string, command: string): Promise<string> {
+  return invoke<string>('session_exec', { sessionId, command })
+}

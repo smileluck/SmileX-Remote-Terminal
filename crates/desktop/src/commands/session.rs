@@ -24,6 +24,26 @@ use crate::{AppState, TerminalStats};
 use ssh_core::connection::ConnectionConfig;
 use ssh_core::known_hosts::KnownHostsStore;
 
+/// 在指定会话的独立通道上执行一次性命令，返回 stdout
+///
+/// 用于命令补全（compgen）等非交互场景，不影响 PTY 数据流。
+#[tauri::command]
+pub async fn session_exec(
+    state: State<'_, AppState>,
+    session_id: String,
+    command: String,
+) -> Result<String, crate::error::AppError> {
+    let session = state
+        .ssh_manager
+        .get(&session_id)
+        .await
+        .ok_or_else(|| crate::error::AppError::session(format!("会话 {session_id} 不存在或已断开")))?;
+    session
+        .exec(&command)
+        .await
+        .map_err(|e| crate::error::AppError::session(format!("{e}")))
+}
+
 /// 建立 SSH 会话
 ///
 /// 成功返回 sessionId，前端据此建立 tab 并监听 `terminal_output` 事件。

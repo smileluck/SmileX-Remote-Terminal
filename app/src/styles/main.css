@@ -136,3 +136,32 @@ body,
 .theme-light ::-webkit-scrollbar-thumb:hover {
   background: rgba(91, 101, 117, 0.5);
 }
+
+/* 终端命令补全浮层（useAutocomplete 注入） */
+.autocomplete-overlay {
+  position: absolute;
+  z-index: 30;
+  min-width: 140px;
+  max-width: 320px;
+  padding: 4px;
+  background: var(--bg-elevated, #1c2129);
+  border: 1px solid var(--border-color, rgba(122, 137, 160, 0.25));
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 22px;
+  pointer-events: none;
+}
+.autocomplete-item {
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--text-primary, #e6e9ef);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.autocomplete-item.active {
+  background: var(--primary, #4f8cff);
+  color: #fff;
+}

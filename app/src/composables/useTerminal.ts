@@ -10,6 +10,7 @@ import '@xterm/xterm/css/xterm.css'
 
 import * as sessionService from '@/services/session'
 import * as snippetsService from '@/services/snippets'
+import { Suggester } from '@/composables/useAutocomplete'
 import { useThemeStore, xtermThemeDark, xtermThemeLight } from '@/stores/theme'
 import type { SshConfig } from '@/types/session'
 
@@ -19,6 +20,8 @@ export function useTerminal() {
   const fitAddon = ref<FitAddon | null>(null)
   const sessionId = ref<string | null>(null)
   const error = ref<string | null>(null)
+  /** 命令补全（一个终端实例一个） */
+  let suggester: Suggester | null = null
 
   /** 初始化 xterm 实例 */
   function init(container: HTMLElement) {
@@ -34,6 +37,7 @@ export function useTerminal() {
     fit.fit()
     term.value = t
     fitAddon.value = fit
+    suggester = new Suggester(t, container)
   }
 
   /** 主题切换时更新已创建终端的配色 */
@@ -55,6 +59,8 @@ export function useTerminal() {
     attachOutput(id, t)
     attachInput(t)
     sessionId.value = id
+    // 异步拉取远端命令表（不阻塞终端）
+    suggester?.bindSession(id)
   }
 
   /** 建立 SSH 连接并绑定数据双向转发 */
@@ -71,6 +77,7 @@ export function useTerminal() {
     try {
       sessionId.value = await sessionService.connect(config, cols, rows)
       attachOutput(sessionId.value, t)
+      suggester?.bindSession(sessionId.value)
     } catch (e) {
       error.value = String(e)
       throw e
@@ -88,9 +95,14 @@ export function useTerminal() {
 
   /** 注册输入/resize 转发（幂等：xterm 事件可重复注册但建议仅一次） */
   function attachInput(t: Terminal) {
-    // 用户输入 → 后端
+    // 用户输入 → 后端（先经补全器：拦截补全按键 / 维护行缓冲）
     t.onData((data) => {
       if (sessionId.value) {
+        if (suggester) {
+          suggester.currentSessionId = sessionId.value
+          if (suggester.handleKey(data)) return
+          suggester.feed(data)
+        }
         const encoder = new TextEncoder()
         sessionService.input(sessionId.value, encoder.encode(data)).catch((e) => {
           error.value = String(e)
@@ -147,6 +159,7 @@ export function useTerminal() {
 
   onUnmounted(() => {
     if (sessionId.value) sessionService.unbindOutput(sessionId.value)
+    suggester?.destroy()
     term.value?.dispose()
   })
 
