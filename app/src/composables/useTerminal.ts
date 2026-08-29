@@ -26,7 +26,7 @@ export function useTerminal() {
       theme: {
         background: '#0f1419',
         foreground: '#e6e9ef',
-        cursor: '#3a7afe',
+        cursor: '#4c8dff',
         cursorAccent: '#0f1419',
         selectionBackground: 'rgba(58, 122, 254, 0.3)',
         black: '#0f1419',

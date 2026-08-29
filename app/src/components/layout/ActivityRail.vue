@@ -65,7 +65,7 @@ function openSettings() {
 
 <style scoped>
 .rail {
-  width: 56px;
+  width: 52px;
   flex-shrink: 0;
   background: var(--bg-rail);
   border-right: 1px solid var(--border-color);
@@ -78,13 +78,14 @@ function openSettings() {
 .rail-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .rail-btn {
-  font-size: 20px;
+  font-size: 19px;
   color: var(--text-secondary);
+  transition: color 0.15s ease, background-color 0.15s ease;
 }
 .rail-btn:hover {
-  color: var(--primary);
+  color: var(--text-primary);
 }
 </style>

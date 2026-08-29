@@ -115,7 +115,7 @@ const cpuColor = computed(() => {
         :value="`${latest.mem_percent.toFixed(1)}%`"
         :sub="`${fmtBytes(latest.mem_used_bytes)} / ${fmtBytes(latest.mem_total_bytes)}`"
         :data="memData"
-        color="#3a7afe"
+        color="#4c8dff"
         percent
       />
       <MetricCard

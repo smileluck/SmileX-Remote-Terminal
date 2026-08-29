@@ -9,10 +9,11 @@
  * - settings：设置页
  * 无 active tab 时显示欢迎空状态（引导用户新建会话）。
  */
-import { NButton, NIcon, NEmpty, NSpace } from 'naive-ui'
+import { NButton, NIcon } from 'naive-ui'
 import { Terminal2, DeviceDesktop, Robot } from '@vicons/tabler'
 import type { TabItem } from '@/types/session'
 import { useTabsStore } from '@/stores/tabs'
+import BrandMark from '@/components/common/BrandMark.vue'
 import TerminalView from '@/components/terminal/TerminalView.vue'
 import DesktopView from '@/components/desktop/DesktopView.vue'
 import ChatPanel from '@/components/ai/ChatPanel.vue'
@@ -32,29 +33,25 @@ const tabs = useTabsStore()
     </template>
 
     <div v-else class="empty-wrap">
-      <NEmpty size="large">
-        <template #icon>
-          <span class="empty-logo">▣</span>
-        </template>
-        <div class="empty-body">
-          <h2>欢迎使用 SmileX Remote Terminal</h2>
-          <p class="empty-hint">SSH 终端 · 远程桌面 · AI 运维助手</p>
-          <NSpace>
-            <NButton type="primary" @click="tabs.addTab('ssh', '新 SSH 会话')">
-              <template #icon><NIcon :component="Terminal2" /></template>
-              新建 SSH
-            </NButton>
-            <NButton @click="tabs.addTab('rdp', '新远程桌面')">
-              <template #icon><NIcon :component="DeviceDesktop" /></template>
-              远程桌面
-            </NButton>
-            <NButton @click="tabs.addTab('chat', 'AI 助手')">
-              <template #icon><NIcon :component="Robot" /></template>
-              AI 助手
-            </NButton>
-          </NSpace>
+      <div class="empty-body">
+        <BrandMark :size="64" class="empty-logo" />
+        <h2>开始你的第一个连接</h2>
+        <p class="empty-hint">SSH 终端 · 远程桌面 · AI 运维助手</p>
+        <div class="empty-actions">
+          <NButton type="primary" size="large" @click="tabs.addTab('ssh', '新 SSH 会话')">
+            <template #icon><NIcon :component="Terminal2" /></template>
+            新建 SSH
+          </NButton>
+          <NButton size="large" @click="tabs.addTab('rdp', '新远程桌面')">
+            <template #icon><NIcon :component="DeviceDesktop" /></template>
+            远程桌面
+          </NButton>
+          <NButton size="large" @click="tabs.addTab('chat', 'AI 助手')">
+            <template #icon><NIcon :component="Robot" /></template>
+            AI 助手
+          </NButton>
         </div>
-      </NEmpty>
+      </div>
     </div>
   </div>
 </template>
@@ -71,26 +68,37 @@ const tabs = useTabsStore()
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.empty-logo {
-  font-size: 56px;
-  color: var(--primary);
-  opacity: 0.45;
-  line-height: 1;
+  /* 微弱的径向光晕，给空状态一点空间感 */
+  background: radial-gradient(
+      ellipse 60% 50% at 50% 40%,
+      rgba(76, 141, 255, 0.06),
+      transparent 70%
+    );
 }
 .empty-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  margin-top: 12px;
+}
+.empty-logo {
+  margin-bottom: 24px;
+  filter: drop-shadow(0 8px 24px rgba(76, 141, 255, 0.35));
 }
 .empty-body h2 {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 6px;
+  letter-spacing: 0.2px;
+  margin-bottom: 8px;
 }
 .empty-hint {
   font-size: 13px;
   color: var(--text-secondary);
-  margin-bottom: 20px;
+  margin-bottom: 32px;
+}
+.empty-actions {
+  display: flex;
+  gap: 12px;
 }
 </style>

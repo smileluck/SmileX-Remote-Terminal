@@ -31,25 +31,27 @@ body,
 
   /* 文字层级 */
   --text-primary: #e6e9ef;
-  --text-secondary: #a8b0bd;
-  --text-tertiary: #6b7280;
+  --text-secondary: #aab3c0;
+  --text-tertiary: #7d8798;
 
   /* 边框 / 分割 */
   --border-color: #1f2731;
   --border-strong: #2a3340;
   --divider: #1f2731;
 
-  /* 主色 */
-  --primary: #3a7afe;
-  --primary-hover: #5a8fff;
-  --primary-active: #2a62d8;
-  --primary-bg: rgba(58, 122, 254, 0.12);
+  /* 主色（柔和 azure） */
+  --primary: #4c8dff;
+  --primary-hover: #6fa5ff;
+  --primary-active: #3a6fd0;
+  --primary-bg: rgba(76, 141, 255, 0.12);
+  /* 品牌渐变（Logo / 签名元素） */
+  --brand-gradient: linear-gradient(135deg, #4c8dff 0%, #8b7cf6 100%);
 
   /* 语义色 */
   --success: #34d399;
   --warning: #fbbf24;
   --danger: #f87171;
-  --info: #3a7afe;
+  --info: #4c8dff;
 
   /* kind 成对色（ssh 绿 / rdp 蓝 / host 红粉 / chat 紫 / settings 灰） */
   --kind-ssh-bg: rgba(52, 211, 153, 0.15);
@@ -71,18 +73,18 @@ body,
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
-/* 深色滚动条 */
+/* 深色滚动条（细 + 半透明） */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a3340;
-  border-radius: 4px;
+  background: rgba(122, 137, 160, 0.25);
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a4453;
+  background: rgba(122, 137, 160, 0.45);
 }

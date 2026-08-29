@@ -7,6 +7,7 @@
 import { NButton, NIcon, NTooltip } from 'naive-ui'
 import { LayoutSidebarLeftCollapse, ChartAreaLine } from '@vicons/tabler'
 import { useLayoutStore } from '@/stores/layout'
+import BrandMark from '@/components/common/BrandMark.vue'
 
 const layout = useLayoutStore()
 </script>
@@ -14,7 +15,7 @@ const layout = useLayoutStore()
 <template>
   <header class="top-bar">
     <div class="brand">
-      <span class="brand-mark">▣</span>
+      <BrandMark :size="22" />
       <span class="brand-name">SmileX <span class="brand-sub">Remote Terminal</span></span>
     </div>
 
@@ -47,7 +48,7 @@ const layout = useLayoutStore()
 
 <style scoped>
 .top-bar {
-  height: 44px;
+  height: 48px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -59,12 +60,7 @@ const layout = useLayoutStore()
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-}
-.brand-mark {
-  color: var(--primary);
-  font-size: 18px;
-  line-height: 1;
+  gap: 10px;
 }
 .brand-name {
   font-size: 14px;
