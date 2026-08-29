@@ -63,6 +63,35 @@ export function useTerminal() {
     fitAddon.value = fit
   }
 
+  /** 绑定到已建立的会话（SideBar 连接的 tab：xterm 后挂载场景）
+   *
+   * 幂等：重复调用同一 sessionId 直接返回。
+   */
+  async function bind(id: string) {
+    if (!term.value || sessionId.value === id) return
+    const t = term.value
+
+    unlisten = await listen<TerminalOutputPayload>('terminal_output', (payload) => {
+      if (payload.sessionId === sessionId.value) {
+        t.write(new Uint8Array(payload.data))
+      }
+    })
+    t.onData((data) => {
+      if (sessionId.value) {
+        const encoder = new TextEncoder()
+        sessionService.input(sessionId.value, encoder.encode(data)).catch((e) => {
+          error.value = String(e)
+        })
+      }
+    })
+    t.onResize(({ cols, rows }) => {
+      if (sessionId.value) {
+        sessionService.resize(sessionId.value, cols, rows).catch(() => {})
+      }
+    })
+    sessionId.value = id
+  }
+
   /** 建立 SSH 连接并绑定数据双向转发 */
   async function connect(config: SshConfig) {
     if (!term.value) throw new Error('终端未初始化')
@@ -129,6 +158,7 @@ export function useTerminal() {
     sessionId,
     error,
     init,
+    bind,
     connect,
     fit,
     disconnect,

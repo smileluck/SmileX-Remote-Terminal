@@ -49,3 +49,51 @@ pub struct AiDonePayload {
     /// 错误信息（失败时）
     pub error: Option<String>,
 }
+
+/// 单挂载点磁盘信息（`monitor_metrics` 内嵌）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorDisk {
+    /// 挂载点（如 `/`）
+    pub mount: String,
+    /// 总量（KB）
+    pub total_kb: u64,
+    /// 已用（KB）
+    pub used_kb: u64,
+    /// 使用率（0–100）
+    pub used_percent: f64,
+}
+
+/// `monitor_metrics` 事件 payload（一次采样结果）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorMetricsPayload {
+    /// 会话 ID
+    pub session_id: String,
+    /// 采样时间戳（毫秒）
+    pub timestamp_ms: u64,
+    /// exec 往返延迟（毫秒；采集失败时为 None）
+    pub latency_ms: Option<u64>,
+    /// CPU 使用率（0–100；首轮差值不可用时为 None）
+    pub cpu_percent: Option<f64>,
+    /// 内存总量（字节）
+    pub mem_total_bytes: u64,
+    /// 内存已用（字节）
+    pub mem_used_bytes: u64,
+    /// 内存使用率（0–100）
+    pub mem_percent: f64,
+    /// Swap 总量（字节）
+    pub swap_total_bytes: u64,
+    /// Swap 已用（字节）
+    pub swap_used_bytes: u64,
+    /// 1 分钟负载
+    pub load1: f64,
+    /// 主机运行时长（秒）
+    pub uptime_s: u64,
+    /// 下行速率（bytes/s）
+    pub net_rx_bps: f64,
+    /// 上行速率（bytes/s）
+    pub net_tx_bps: f64,
+    /// 磁盘列表
+    pub disks: Vec<MonitorDisk>,
+    /// 采集错误（预留：用于推送采样失败通知）
+    pub error: Option<String>,
+}

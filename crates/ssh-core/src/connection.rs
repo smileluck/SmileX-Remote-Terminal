@@ -370,6 +370,52 @@ impl SshSession {
             })?;
         Ok(())
     }
+    /// 在独立通道上执行一次性命令并收集输出（非交互 exec，用于监控采集等）
+    ///
+    /// 流程：`channel_open_session` → `channel.exec` → 循环 `wait()` 收集
+    /// stdout/stderr 直到 EOF/Close。超时由调用方（tokio::time::timeout）控制。
+    pub async fn exec(&self, command: &str) -> Result<String> {
+        let mut channel = {
+            let handle = self.handle.lock().await;
+            handle
+                .channel_open_session()
+                .await
+                .map_err(|e| Error::Terminal(format!("打开 exec channel 失败: {e}")))?
+        };
+
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| Error::Terminal(format!("exec 请求失败: {e}")))?;
+
+        let mut out: Vec<u8> = Vec::new();
+        loop {
+            match channel.wait().await {
+                Some(russh::ChannelMsg::Data { ref data }) => {
+                    out.extend_from_slice(data)
+                }
+                Some(russh::ChannelMsg::ExtendedData { ref data, .. }) => {
+                    out.extend_from_slice(data)
+                }
+                Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                    if exit_status != 0 {
+                        tracing::warn!(
+                            session_id = %self.id,
+                            exit_status,
+                            "exec 命令返回非零退出码"
+                        );
+                    }
+                }
+                // EOF / Close / None：通道结束
+                Some(russh::ChannelMsg::Eof)
+                | Some(russh::ChannelMsg::Close)
+                | None => break,
+                _ => {}
+            }
+        }
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    }
+
     /// 主动断开会话（幂等：多次调用安全）
     ///
     /// 发送 SSH `DISCONNECT` 消息（ByApplication），通知对端优雅关闭。

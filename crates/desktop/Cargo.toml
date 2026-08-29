@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # workspace 依赖
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

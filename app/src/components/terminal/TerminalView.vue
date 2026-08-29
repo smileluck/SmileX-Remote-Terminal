@@ -3,25 +3,41 @@
  * TerminalView - SSH 终端视图
  *
  * 承载 xterm.js 实例。
- * - tab 已带 sessionId（从 SideBar 会话卡片连接进入）：直接展示终端
+ * - tab 已带 sessionId（从 SideBar 会话卡片连接进入）：初始化 xterm 后 bind 到会话
  * - tab 未带 sessionId（从 ActivityRail 新建）：显示快速连接表单
+ * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮
  */
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, computed } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
-import { NButton, NInput, NInputNumber, NIcon, NForm, NFormItem, useMessage } from 'naive-ui'
-import { Terminal2 } from '@vicons/tabler'
+import {
+  NButton,
+  NInput,
+  NInputNumber,
+  NIcon,
+  NForm,
+  NFormItem,
+  useMessage,
+} from 'naive-ui'
+import { Terminal2, Refresh } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
+import { connectProfile } from '@/composables/useSshConnect'
 import { useTabsStore } from '@/stores/tabs'
+import { useProfilesStore } from '@/stores/profiles'
+import { useMonitorStore } from '@/stores/monitor'
 import type { TabItem, SshConfig } from '@/types/session'
 
 const props = defineProps<{ tab: TabItem }>()
 const tabs = useTabsStore()
+const profiles = useProfilesStore()
+const monitor = useMonitorStore()
 const message = useMessage()
-const { term, error, init, connect, fit } = useTerminal()
+const { term, sessionId, error, init, bind, connect, fit } = useTerminal()
 
 const containerRef = ref<HTMLDivElement | null>(null)
 /** tab 已带 sessionId 则不显示快速表单 */
 const showForm = ref(!props.tab.sessionId)
+/** 重连中 */
+const reconnecting = ref(false)
 const config = ref<SshConfig>({
   host: '127.0.0.1',
   port: 22,
@@ -29,7 +45,12 @@ const config = ref<SshConfig>({
   auth: { type: 'password', value: '' },
 })
 
-/** 容器首次挂载时初始化 xterm */
+/** 重连目标档案（tab 带 profileId 时可用） */
+const profile = computed(() =>
+  props.tab.profileId ? profiles.profiles.find((p) => p.id === props.tab.profileId) : null,
+)
+
+/** 容器首次挂载时初始化 xterm，并绑定已存在的会话 */
 watch(
   () => containerRef.value,
   async (el) => {
@@ -37,6 +58,21 @@ watch(
       init(el)
       await nextTick()
       fit()
+      // SideBar 连接的 tab：xterm 后挂载，需主动绑定
+      const sid = props.tab.sessionId
+      if (sid && sid !== 'connected' && !props.tab.disconnected) {
+        bind(sid)
+      }
+    }
+  },
+)
+
+/** tab 的 sessionId 变化（重连成功）时重新绑定 */
+watch(
+  () => props.tab.sessionId,
+  (sid) => {
+    if (sid && sid !== 'connected' && term.value && !props.tab.disconnected) {
+      bind(sid)
     }
   },
 )
@@ -53,12 +89,33 @@ async function handleConnect() {
     await connect(config.value)
     tabs.updateTab(props.tab.id, {
       title: `${config.value.host}`,
-      sessionId: 'connected',
+      sessionId: sessionId.value ?? undefined,
       connecting: false,
+      disconnected: false,
     })
   } catch (e) {
     tabs.updateTab(props.tab.id, { error: String(e), connecting: false })
     message.error(String(e))
+    showForm.value = true
+  }
+}
+
+/** 重新连接（基于档案） */
+async function handleReconnect() {
+  if (!profile.value) {
+    message.warning('该会话无关联配置，请从左侧列表重新连接')
+    return
+  }
+  reconnecting.value = true
+  try {
+    const sid = await connectProfile(profile.value)
+    tabs.updateTab(props.tab.id, { sessionId: sid, disconnected: false, error: undefined })
+    monitor.setActive(sid)
+    message.success(`已重新连接「${profile.value.name}」`)
+  } catch (e) {
+    message.error(`重连失败：${e}`)
+  } finally {
+    reconnecting.value = false
   }
 }
 </script>
@@ -93,12 +150,31 @@ async function handleConnect() {
         <NButton type="primary" @click="handleConnect">连接</NButton>
       </NForm>
     </div>
-    <div v-else ref="containerRef" class="xterm-container"></div>
+
+    <template v-else>
+      <div ref="containerRef" class="xterm-container"></div>
+      <!-- 断开遮罩 -->
+      <div v-if="tab.disconnected" class="disconnect-overlay">
+        <div class="disconnect-card">
+          <p class="disconnect-text">会话已断开</p>
+          <NButton
+            type="primary"
+            size="small"
+            :loading="reconnecting"
+            @click="handleReconnect"
+          >
+            <template #icon><NIcon :component="Refresh" /></template>
+            重新连接
+          </NButton>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .terminal-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -109,6 +185,29 @@ async function handleConnect() {
   flex: 1;
   background: #0f1419;
   padding: 4px;
+}
+.disconnect-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 20, 25, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.disconnect-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 28px;
+  background: var(--bg-panel, #161c24);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.disconnect-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 .connect-form {
   padding: 20px 24px;

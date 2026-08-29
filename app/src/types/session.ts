@@ -15,10 +15,14 @@ export interface TabItem {
   title: string
   /** 关联的会话 ID（建立连接后填入） */
   sessionId?: string
+  /** 关联的会话配置 ID（用于重连） */
+  profileId?: string
   /** 是否正在连接 */
   connecting?: boolean
   /** 错误信息 */
   error?: string
+  /** 会话已断开（意外断线，可重连） */
+  disconnected?: boolean
 }
 
 /** SSH 认证方式 */

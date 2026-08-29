@@ -34,7 +34,10 @@ const kindIcon: Record<SessionKind, Component> = {
       @click="tabs.setActive(tab.id)"
     >
       <NIcon :component="kindIcon[tab.kind]" class="tab-icon" />
-      <span class="tab-title">{{ tab.title }}</span>
+      <span class="tab-title" :class="{ disconnected: tab.disconnected }">
+        {{ tab.title }}
+      </span>
+      <span v-if="tab.disconnected" class="tab-dot" title="已断开" />
       <NButton text class="tab-close" @click.stop="tabs.closeTab(tab.id)">
         <NIcon :component="X" />
       </NButton>
@@ -92,6 +95,19 @@ const kindIcon: Record<SessionKind, Component> = {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 13px;
+}
+.tab-title.disconnected {
+  color: var(--danger, #f87171);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  opacity: 0.75;
+}
+.tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger, #f87171);
+  flex-shrink: 0;
 }
 .tab-close {
   flex-shrink: 0;

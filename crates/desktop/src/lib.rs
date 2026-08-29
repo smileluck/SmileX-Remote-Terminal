@@ -5,15 +5,43 @@
 
 pub mod commands;
 pub mod events;
+pub mod monitor;
 pub mod storage;
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use ssh_core::connection::SessionManager as SshSessionManager;
 use ssh_core::terminal::TerminalControl;
 use storage::sqlite::SqliteStorage;
+
+/// 单会话终端流量统计（bytes，Atomic 原子累加）
+#[derive(Debug, Default)]
+pub struct TerminalStats {
+    /// 终端下行（远端 → 本地）累计字节
+    pub rx_bytes: AtomicU64,
+    /// 终端上行（本地 → 远端）累计字节
+    pub tx_bytes: AtomicU64,
+    /// 连接建立时间戳（毫秒，用于会话时长展示）
+    pub connected_at_ms: AtomicU64,
+}
+
+impl TerminalStats {
+    /// 创建并记录当前时间为连接时间
+    pub fn now() -> Self {
+        Self {
+            connected_at_ms: AtomicU64::new(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            ),
+            ..Default::default()
+        }
+    }
+}
 
 /// 应用全局状态（Tauri managed state）
 ///
@@ -39,6 +67,10 @@ pub struct AppState {
         Mutex<HashMap<String, Box<dyn remote_desktop_core::session::RemoteDesktopSession>>>,
     /// SQLite 存储（会话配置持久化）
     pub storage: Arc<SqliteStorage>,
+    /// 监控采样调度器（sessionId → 定时采集 task）
+    pub monitor_sampler: Arc<monitor::sampler::MonitorSampler>,
+    /// sessionId → 终端流量统计
+    pub terminal_stats: Mutex<HashMap<String, Arc<TerminalStats>>>,
 }
 
 impl AppState {
@@ -51,6 +83,8 @@ impl AppState {
             chat_provider: Arc::new(ai_core::provider::chat::ChatProvider::new()),
             desktop_sessions: Mutex::new(HashMap::new()),
             storage: Arc::new(storage),
+            monitor_sampler: Arc::new(monitor::sampler::MonitorSampler::new()),
+            terminal_stats: Mutex::new(HashMap::new()),
         }
     }
 
@@ -66,6 +100,9 @@ impl AppState {
         for (_, session) in sessions.drain() {
             let _ = session.disconnect().await;
         }
+        // 停止所有监控采样 + 清理流量统计
+        self.monitor_sampler.stop_all().await;
+        self.terminal_stats.lock().await.clear();
         tracing::info!("会话清理完成");
     }
 }

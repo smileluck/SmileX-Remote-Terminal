@@ -2,11 +2,14 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 import type { TabItem, SessionKind } from '@/types/session'
+import * as sessionService from '@/services/session'
+import { useMonitorStore } from '@/stores/monitor'
 
 /**
  * 标签管理 store
  *
  * 管理所有打开的标签（SSH/远程桌面/AI），按 SessionKind 渲染对应视图。
+ * closeTab 联动断开会话 + 停止监控采样，避免后端资源泄漏。
  */
 export const useTabsStore = defineStore('tabs', () => {
   /** 所有标签 */
@@ -18,19 +21,34 @@ export const useTabsStore = defineStore('tabs', () => {
   const activeTab = computed(() => tabs.value.find((t) => t.id === activeId.value) || null)
 
   /** 新增标签 */
-  function addTab(kind: SessionKind, title: string, sessionId?: string): TabItem {
+  function addTab(
+    kind: SessionKind,
+    title: string,
+    sessionId?: string,
+    profileId?: string,
+  ): TabItem {
     const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const tab: TabItem = { id, kind, title, sessionId }
+    const tab: TabItem = { id, kind, title, sessionId, profileId }
     tabs.value.push(tab)
     activeId.value = id
     return tab
   }
 
-  /** 关闭标签 */
+  /** 关闭标签（联动断开会话与监控采样） */
   function closeTab(id: string) {
     const idx = tabs.value.findIndex((t) => t.id === id)
     if (idx === -1) return
-    tabs.value.splice(idx, 1)
+    const [tab] = tabs.value.splice(idx, 1)
+
+    // 联动清理后端会话（真实 sessionId 才处理；'connected' 为快速表单占位）
+    if (tab.sessionId && tab.sessionId !== 'connected') {
+      const sessionId = tab.sessionId
+      useMonitorStore().stopSampling(sessionId)
+      sessionService.disconnect(sessionId).catch(() => {
+        /* 会话可能已断开 */
+      })
+    }
+
     // 若关闭的是活动标签，切到相邻
     if (activeId.value === id) {
       const next = tabs.value[idx] || tabs.value[idx - 1] || null

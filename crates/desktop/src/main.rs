@@ -75,6 +75,11 @@ fn main() {
             commands::session::session_input,
             commands::session::session_resize,
             commands::session::session_disconnect,
+            commands::session::session_stats_all,
+            // 监控命令组
+            commands::monitor::monitor_start,
+            commands::monitor::monitor_stop,
+            commands::monitor::monitor_list,
             // 会话配置命令组
             commands::session_profile::session_profile_save,
             commands::session_profile::session_profile_list,

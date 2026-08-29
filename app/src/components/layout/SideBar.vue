@@ -18,7 +18,8 @@ import { NButton, NIcon, NPopconfirm, NEmpty, useMessage } from 'naive-ui'
 import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
-import * as sessionService from '@/services/session'
+import { useMonitorStore } from '@/stores/monitor'
+import { connectProfile } from '@/composables/useSshConnect'
 import * as profileService from '@/services/profile'
 import { decodeExtra } from '@/types/profile'
 import type { SessionProfile } from '@/types/profile'
@@ -26,7 +27,15 @@ import ConnectForm from '@/components/common/ConnectForm.vue'
 
 const profilesStore = useProfilesStore()
 const tabsStore = useTabsStore()
+const monitorStore = useMonitorStore()
 const message = useMessage()
+
+/** profile.id → 是否有已连接（未断开）的 tab */
+function isConnected(profileId: string): boolean {
+  return tabsStore.tabs.some(
+    (t) => t.profileId === profileId && t.sessionId && !t.disconnected,
+  )
+}
 
 /** kind → 图标组件（host = macOS，用 BrandApple） */
 const kindIcon: Record<string, Component> = {
@@ -84,34 +93,11 @@ async function onDelete(profile: SessionProfile) {
 async function onConnect(profile: SessionProfile) {
   connectingId.value = profile.id
   try {
-    // 从 Keyring 取敏感字段
-    const secret = await profileService.getSecret(profile.id)
+    const sessionId = await connectProfile(profile)
 
-    // 构造 ConnectionConfig.auth
-    const authPayload =
-      profile.auth_type === 'password'
-        ? { type: 'password', value: secret || '' }
-        : {
-            type: 'private_key',
-            value: {
-              path: decodeExtra(profile.extra).private_key_path || '',
-              passphrase: secret || undefined,
-            },
-          }
-
-    const sessionId = await sessionService.connect(
-      {
-        host: profile.host,
-        port: profile.port,
-        username: profile.username,
-        auth: authPayload as never,
-        acceptFirstHostKey: decodeExtra(profile.extra).accept_first_host_key ?? false,
-      },
-      80,
-      24,
-    )
-
-    tabsStore.addTab(profile.kind, profile.name, sessionId)
+    tabsStore.addTab(profile.kind, profile.name, sessionId, profile.id)
+    // 自动启动监控采样并设为监控目标
+    monitorStore.setActive(sessionId)
     // 更新最近使用时间
     await profileService.touch(profile.id).catch(() => {
       /* 非关键失败：忽略 */
@@ -169,7 +155,13 @@ onMounted(() => {
               :data-kind="p.kind"
             />
             <div class="card-main">
-              <div class="card-title">{{ p.name }}</div>
+              <div class="card-title">
+                <span
+                  class="status-dot"
+                  :class="isConnected(p.id) ? 'on' : connectingId === p.id ? 'pending' : 'off'"
+                />
+                {{ p.name }}
+              </div>
               <div class="card-meta">{{ p.username }}@{{ p.host }}:{{ p.port }}</div>
               <div class="card-sub">
                 <span v-if="connectingId === p.id" class="connecting">● 连接中…</span>
@@ -278,6 +270,23 @@ onMounted(() => {
 .card-main {
   flex: 1;
   min-width: 0;
+}
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.status-dot.on {
+  background: var(--success, #34d399);
+}
+.status-dot.pending {
+  background: var(--warning, #fbbf24);
+}
+.status-dot.off {
+  background: transparent;
 }
 .card-title {
   font-size: 13px;

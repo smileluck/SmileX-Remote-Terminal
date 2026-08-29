@@ -5,12 +5,12 @@
  * 装配 naive-ui 全局主题（深色 Termius 风）+ 消息/对话框/通知 Provider，
  * 让所有子组件能用 useMessage / useDialog / useNotification / useLoadingBar。
  *
- * 注意：这些 hook 必须在对应 Provider 的【子组件】setup 中调用，App.vue 自身不能用。
- *
- * 布局（PR2 将重构为 Termius 四区：rail + sessions + tabbar + 主区）：
- * 顶部工具栏 + 侧边栏 + 主内容区。
+ * 布局（水平左中右三栏）：
+ * - 左：ActivityRail（功能导航窄栏）+ SideBar（会话管理，可折叠）
+ * - 中：TabBar + MainContent（终端 / 远程桌面 / AI / 设置）
+ * - 右：MonitorPanel（监控看版，可折叠/调宽）
  */
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import {
   NConfigProvider,
   NMessageProvider,
@@ -21,14 +21,41 @@ import {
   type GlobalThemeOverrides,
 } from 'naive-ui'
 import { useTabsStore } from '@/stores/tabs'
+import { useLayoutStore } from '@/stores/layout'
 import TopBar from '@/components/layout/TopBar.vue'
 import SideBar from '@/components/layout/SideBar.vue'
 import MainContent from '@/components/layout/MainContent.vue'
 import ActivityRail from '@/components/layout/ActivityRail.vue'
 import TabBar from '@/components/layout/TabBar.vue'
+import MonitorPanel from '@/components/layout/MonitorPanel.vue'
+import SessionEvents from '@/components/layout/SessionEvents.vue'
 
 const tabsStore = useTabsStore()
+const layoutStore = useLayoutStore()
 const activeTab = computed(() => tabsStore.activeTab)
+
+/** 全局快捷键 */
+function onKeydown(e: KeyboardEvent) {
+  const mod = e.metaKey || e.ctrlKey
+  if (!mod) return
+  const key = e.key.toLowerCase()
+  if (key === 'b') {
+    e.preventDefault()
+    layoutStore.toggleSidebar()
+  } else if (key === 'm') {
+    e.preventDefault()
+    layoutStore.toggleMonitor()
+  } else if (key === 't') {
+    e.preventDefault()
+    tabsStore.addTab('ssh', '新 SSH 会话')
+  } else if (key === 'w') {
+    e.preventDefault()
+    if (tabsStore.activeId) tabsStore.closeTab(tabsStore.activeId)
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 /** Termius 风深色主题覆盖（与 styles/main.css 的 token 对齐） */
 const themeOverrides: GlobalThemeOverrides = {
@@ -78,14 +105,16 @@ const themeOverrides: GlobalThemeOverrides = {
         <NDialogProvider>
           <NNotificationProvider>
             <div class="app-container">
+              <SessionEvents />
               <TopBar />
               <div class="app-body">
                 <ActivityRail />
-                <SideBar />
+                <SideBar v-if="!layoutStore.sidebarCollapsed" />
                 <div class="main-area">
                   <TabBar />
                   <MainContent :tab="activeTab" />
                 </div>
+                <MonitorPanel v-if="layoutStore.monitorVisible" />
               </div>
             </div>
           </NNotificationProvider>

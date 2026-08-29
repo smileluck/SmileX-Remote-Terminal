@@ -14,11 +14,13 @@
 //! 注入到 `SshSession::connect`，由 `HostKeyHandler` 在握手阶段校验。
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::events::TerminalOutputPayload;
-use crate::AppState;
+use crate::{AppState, TerminalStats};
 use ssh_core::connection::ConnectionConfig;
 use ssh_core::known_hosts::KnownHostsStore;
 
@@ -73,12 +75,21 @@ pub async fn session_connect(
         .await
         .insert(session_id.clone(), control);
 
+    // 注册流量统计（含连接时间戳，供会话健康面板使用）
+    let stats = Arc::new(TerminalStats::now());
+    state
+        .terminal_stats
+        .lock()
+        .await
+        .insert(session_id.clone(), stats.clone());
+
     // 5) 拉起推送 task：从 mpsc 消费数据 → emit 事件
     //    channel_ids / terminal_controls 清理由 session_disconnect 统一负责
     let app_clone = app.clone();
     let session_id_clone = session_id.clone();
     tokio::spawn(async move {
         while let Some(chunk) = stream.rx.recv().await {
+            stats.rx_bytes.fetch_add(chunk.data.len() as u64, Ordering::Relaxed);
             let payload = TerminalOutputPayload {
                 session_id: session_id_clone.clone(),
                 data: chunk.data,
@@ -90,6 +101,11 @@ pub async fn session_connect(
         // channel 已关闭：drop stream 自动 abort 读循环
         stream.stop().await;
         drop(stream);
+        // 通知前端会话已断开（tab 标记 + 通知 + 提供重连入口）
+        let _ = app_clone.emit(
+            "session_closed",
+            serde_json::json!({ "session_id": session_id_clone }),
+        );
     });
 
     tracing::info!(
@@ -130,6 +146,11 @@ pub async fn session_input(
         .write(channel_id, &data)
         .await
         .map_err(|e| format!("{e}"))?;
+
+    // 累计上行流量（统计句柄可能已被清理，忽略即可）
+    if let Some(stats) = state.terminal_stats.lock().await.get(&session_id) {
+        stats.tx_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+    }
     Ok(())
 }
 
@@ -173,10 +194,14 @@ pub async fn session_disconnect(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<(), String> {
+    // 停止该会话的监控采样
+    state.monitor_sampler.stop(&session_id).await;
     // 清理 channel_id 映射
     state.channel_ids.lock().await.remove(&session_id);
     // 清理 TerminalControl（drop 后读循环 ctrl_rx.recv() 返回 None 退出）
     state.terminal_controls.lock().await.remove(&session_id);
+    // 清理流量统计
+    state.terminal_stats.lock().await.remove(&session_id);
 
     // 断开并移除会话
     state
@@ -185,5 +210,37 @@ pub async fn session_disconnect(
         .await
         .map_err(|e| format!("{e}"))?;
     Ok(())
+}
+
+/// 单会话健康信息（`session_stats_all` 返回项）
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionHealth {
+    pub session_id: String,
+    /// 是否仍连接（存在于 ssh_manager）
+    pub connected: bool,
+    /// 连接建立时间戳（毫秒）
+    pub connected_at_ms: u64,
+    /// 下行累计字节
+    pub rx_bytes: u64,
+    /// 上行累计字节
+    pub tx_bytes: u64,
+}
+
+/// 所有会话的健康/流量信息（右栏会话健康面板轮询）
+#[tauri::command]
+pub async fn session_stats_all(state: State<'_, AppState>) -> Result<Vec<SessionHealth>, String> {
+    let stats_map = state.terminal_stats.lock().await.clone();
+    let mut result = Vec::with_capacity(stats_map.len());
+    for (session_id, stats) in stats_map {
+        let connected = state.ssh_manager.get(&session_id).await.is_some();
+        result.push(SessionHealth {
+            session_id,
+            connected,
+            connected_at_ms: stats.connected_at_ms.load(Ordering::Relaxed),
+            rx_bytes: stats.rx_bytes.load(Ordering::Relaxed),
+            tx_bytes: stats.tx_bytes.load(Ordering::Relaxed),
+        });
+    }
+    Ok(result)
 }
 
