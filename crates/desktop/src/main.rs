@@ -76,6 +76,7 @@ fn main() {
             commands::session::session_resize,
             commands::session::session_disconnect,
             commands::session::session_stats_all,
+            commands::session::host_key_respond,
             // 监控命令组
             commands::monitor::monitor_start,
             commands::monitor::monitor_stop,

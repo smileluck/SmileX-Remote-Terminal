@@ -71,6 +71,9 @@ pub struct AppState {
     pub monitor_sampler: Arc<monitor::sampler::MonitorSampler>,
     /// sessionId → 终端流量统计
     pub terminal_stats: Mutex<HashMap<String, Arc<TerminalStats>>>,
+    /// host key 确认等待表：requestId → oneshot 应答通道
+    /// （Arc 包装：交互式确认回调需跨 task 持有）
+    pub host_key_awaits: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 impl AppState {
@@ -85,6 +88,7 @@ impl AppState {
             storage: Arc::new(storage),
             monitor_sampler: Arc::new(monitor::sampler::MonitorSampler::new()),
             terminal_stats: Mutex::new(HashMap::new()),
+            host_key_awaits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

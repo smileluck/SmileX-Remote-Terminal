@@ -12,7 +12,9 @@
 //! - 调整尺寸：通过 [`crate::terminal::TerminalControl`] 投递到 select! 读循环
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::ToSocketAddrs;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -90,6 +92,24 @@ pub struct PtyHandle {
     pub channel: russh::Channel<client::Msg>,
 }
 
+/// host key 确认挑战信息（未知主机时交由应用层 UI 确认）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HostKeyChallenge {
+    pub host: String,
+    pub port: u16,
+    pub key_type: String,
+    pub fingerprint: String,
+}
+
+/// host key 交互式确认回调的返回 Future
+pub type ConfirmFuture = Pin<Box<dyn Future<Output = bool> + Send>>;
+
+/// 未知主机 host key 的交互式确认回调
+///
+/// 应用层（desktop）注入：emit 事件给前端弹窗，等待用户选择。
+/// 返回 `true` 表示信任并保存；超时/拒绝返回 `false`。
+pub type HostKeyConfirm = Arc<dyn Fn(HostKeyChallenge) -> ConfirmFuture + Send + Sync>;
+
 /// host key 校验处理器
 ///
 /// 实现 `russh::client::Handler`，目前只覆盖 `check_server_key`。
@@ -98,6 +118,7 @@ pub struct PtyHandle {
 /// 1. 从 store 查询 `host:port` 的已知记录
 /// 2. 调用 [`verify_host_key`] 按策略判断
 /// 3. 若策略为 `AcceptNew` 且接受 → 保存到 store（后续按已知处理）
+/// 4. 未知主机被拒时，若注入了 [`HostKeyConfirm`] 回调 → 交给用户确认
 struct HostKeyHandler {
     /// 主机（用于 store 查询/保存）
     host: String,
@@ -107,6 +128,8 @@ struct HostKeyHandler {
     policy: HostKeyPolicy,
     /// 已知主机存储（应用层注入）
     store: Arc<dyn KnownHostsStore>,
+    /// 未知主机交互式确认回调（应用层注入，可选）
+    confirm: Option<HostKeyConfirm>,
 }
 
 #[async_trait]
@@ -145,7 +168,37 @@ impl client::Handler for HostKeyHandler {
             }
         };
 
-        let accepted = verify_host_key(&key_type, &fingerprint, known.as_ref(), self.policy);
+        let mut accepted = verify_host_key(&key_type, &fingerprint, known.as_ref(), self.policy);
+
+        // 未知主机被策略拒绝时，交由应用层交互式确认（UI 弹窗）
+        if !accepted && known.is_none() {
+            if let Some(confirm) = &self.confirm {
+                let challenge = HostKeyChallenge {
+                    host: self.host.clone(),
+                    port: self.port,
+                    key_type: key_type.clone(),
+                    fingerprint: fingerprint.clone(),
+                };
+                accepted = confirm(challenge).await;
+                if accepted {
+                    // 用户明确信任 → 落盘保存
+                    let entry = KnownHost {
+                        host: self.host.clone(),
+                        port: self.port,
+                        key_type: key_type.clone(),
+                        fingerprint: fingerprint.clone(),
+                    };
+                    if let Err(e) = self.store.save(entry).await {
+                        tracing::warn!(
+                            host = %self.host,
+                            port = self.port,
+                            error = %e,
+                            "保存 known_hosts 失败（本次仍接受，下次可能再次提示）"
+                        );
+                    }
+                }
+            }
+        }
 
         if accepted {
             // AcceptNew 策略下若为首次（known=None），写入 store
@@ -216,9 +269,11 @@ impl SshSession {
     /// # 参数
     /// - `config`：连接配置（地址 / 认证 / `accept_first_host_key` 标志）
     /// - `known_hosts`：已知主机存储（由应用层注入，如 SQLite）
+    /// - `confirm`：未知主机交互式确认回调（UI 弹窗，可选）
     pub async fn connect(
         config: &ConnectionConfig,
         known_hosts: Arc<dyn KnownHostsStore>,
+        confirm: Option<HostKeyConfirm>,
     ) -> Result<Self> {
         let session_id = Uuid::new_v4().to_string();
 
@@ -237,6 +292,7 @@ impl SshSession {
             port: config.port,
             policy: HostKeyPolicy::from_accept_first(config.accept_first_host_key),
             store: known_hosts,
+            confirm,
         };
 
         // 3) TCP + SSH 协议握手
@@ -464,12 +520,14 @@ impl SessionManager {
     /// # 参数
     /// - `config`：连接配置
     /// - `known_hosts`：已知主机存储（传递给 `SshSession::connect`）
+    /// - `confirm`：未知主机交互式确认回调（可选，传递给 `SshSession::connect`）
     pub async fn connect(
         &self,
         config: &ConnectionConfig,
         known_hosts: Arc<dyn KnownHostsStore>,
+        confirm: Option<HostKeyConfirm>,
     ) -> Result<Arc<SshSession>> {
-        let session = Arc::new(SshSession::connect(config, known_hosts).await?);
+        let session = Arc::new(SshSession::connect(config, known_hosts, confirm).await?);
         self.sessions
             .lock()
             .await

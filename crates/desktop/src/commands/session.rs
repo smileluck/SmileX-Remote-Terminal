@@ -49,10 +49,55 @@ pub async fn session_connect(
     //    clone Arc 廉价，后续在 HostKeyHandler::check_server_key 中查询/保存
     let known_hosts: Arc<dyn KnownHostsStore> = state.storage.clone();
 
+    // 0.5) 注入未知主机交互式确认回调：emit `hostkey_confirm` → 前端弹窗
+    //      → 前端 invoke `host_key_respond` → oneshot 唤醒握手流程（60s 超时）
+    let confirm_app = app.clone();
+    let confirm_awaits = state.host_key_awaits.clone();
+    let confirm: Option<ssh_core::connection::HostKeyConfirm> = Some(Arc::new(
+        move |challenge: ssh_core::connection::HostKeyChallenge| {
+            let app = confirm_app.clone();
+            let awaits = confirm_awaits.clone();
+            Box::pin(async move {
+                let request_id = uuid::Uuid::new_v4().to_string();
+                let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+                awaits.lock().await.insert(request_id.clone(), tx);
+
+                let payload = serde_json::json!({
+                    "request_id": request_id,
+                    "host": challenge.host,
+                    "port": challenge.port,
+                    "key_type": challenge.key_type,
+                    "fingerprint": challenge.fingerprint,
+                });
+                tracing::info!(
+                    host = %challenge.host,
+                    port = challenge.port,
+                    request_id = %request_id,
+                    "等待用户确认 host key"
+                );
+                if app.emit("hostkey_confirm", payload).is_err() {
+                    awaits.lock().await.remove(&request_id);
+                    return false;
+                }
+
+                // 60s 未应答视为拒绝，避免握手无限挂起
+                let accepted = tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    rx,
+                )
+                .await
+                .map(|r| r.unwrap_or(false))
+                .unwrap_or(false);
+                awaits.lock().await.remove(&request_id);
+                accepted
+            })
+        },
+    ));
+
     // 1) 建立 SSH 连接（含 host key 校验）
     let session = state
         .ssh_manager
-        .connect(&config, known_hosts)
+        .connect(&config, known_hosts, confirm)
         .await
         .map_err(|e| format!("{e}"))?;
 
@@ -115,6 +160,22 @@ pub async fn session_connect(
     );
 
     Ok(session_id)
+}
+
+/// 前端 host key 确认弹窗的应答
+///
+/// 配合 `hostkey_confirm` 事件：用户选择「信任」/「拒绝」后调用，
+/// 唤醒被挂起的 SSH 握手流程。
+#[tauri::command]
+pub async fn host_key_respond(
+    state: State<'_, AppState>,
+    request_id: String,
+    accept: bool,
+) -> Result<(), String> {
+    if let Some(tx) = state.host_key_awaits.lock().await.remove(&request_id) {
+        let _ = tx.send(accept);
+    }
+    Ok(())
 }
 
 /// 终端输入（用户键盘输入）
