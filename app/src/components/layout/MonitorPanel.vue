@@ -11,6 +11,7 @@ import { NIcon } from 'naive-ui'
 import { X } from '@vicons/tabler'
 import { useLayoutStore } from '@/stores/layout'
 import MonitorDashboard from '@/components/monitor/MonitorDashboard.vue'
+import AlertRules from '@/components/monitor/AlertRules.vue'
 
 const layout = useLayoutStore()
 
@@ -49,6 +50,7 @@ function onDragStart(e: MouseEvent) {
     </header>
     <div class="panel-body">
       <MonitorDashboard />
+      <AlertRules />
     </div>
   </aside>
 </template>

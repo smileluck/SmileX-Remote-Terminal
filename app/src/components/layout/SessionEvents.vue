@@ -66,6 +66,21 @@ onMounted(async () => {
   })
 
   await listen<HostKeyConfirmPayload>('hostkey_confirm', showHostKeyConfirm)
+
+  // 告警规则触发 → 桌面通知
+  await listen<{
+    name: string
+    metric: string
+    value: number
+    threshold: number
+    op: string
+  }>('alert_fired', (p) => {
+    notification.error({
+      title: `告警：${p.name}`,
+      content: `${p.metric} 当前 ${p.value.toFixed(1)}，${p.op === 'gt' ? '超过' : '低于'}阈值 ${p.threshold}`,
+      duration: 8000,
+    })
+  })
 })
 </script>
 

@@ -18,11 +18,69 @@ use tokio_util::sync::CancellationToken;
 
 use ssh_core::connection::SessionManager as SshSessionManager;
 
-use crate::events::{MonitorDisk, MonitorMetricsPayload};
+use crate::events::{AlertFiredPayload, MonitorDisk, MonitorMetricsPayload};
 use crate::monitor::metrics::{self, RawMetrics};
+use crate::storage::sqlite::{AlertRule, SqliteStorage};
 
 /// exec 超时（慢速网络 / 高负载主机兜底）
 const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 从采样 payload 提取指标值
+fn metric_value(payload: &MonitorMetricsPayload, metric: &str) -> Option<f64> {
+    match metric {
+        "cpu_percent" => payload.cpu_percent,
+        "mem_percent" => Some(payload.mem_percent),
+        "load1" => Some(payload.load1),
+        "net_rx_bps" => Some(payload.net_rx_bps),
+        "net_tx_bps" => Some(payload.net_tx_bps),
+        _ => None,
+    }
+}
+
+/// 评估告警规则（返回触发列表）
+fn evaluate_rules(
+    payload: &MonitorMetricsPayload,
+    rules: &[AlertRule],
+    last_fired: &mut HashMap<(String, String), u64>,
+) -> Vec<AlertFiredPayload> {
+    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+    let mut fired = Vec::new();
+    for rule in rules {
+        if !rule.enabled {
+            continue;
+        }
+        let Some(value) = metric_value(payload, &rule.metric) else {
+            continue;
+        };
+        let hit = match rule.op.as_str() {
+            "gt" => value > rule.threshold,
+            "lt" => value < rule.threshold,
+            _ => false,
+        };
+        if !hit {
+            continue;
+        }
+        // 冷却期去重
+        let key = (rule.id.clone(), payload.session_id.clone());
+        if let Some(&last) = last_fired.get(&key) {
+            if now_ms.saturating_sub(last) < rule.cooldown_sec as u64 * 1000 {
+                continue;
+            }
+        }
+        last_fired.insert(key, now_ms);
+        fired.push(AlertFiredPayload {
+            rule_id: rule.id.clone(),
+            name: rule.name.clone(),
+            session_id: payload.session_id.clone(),
+            metric: rule.metric.clone(),
+            value,
+            threshold: rule.threshold,
+            op: rule.op.clone(),
+            timestamp_ms: now_ms,
+        });
+    }
+    fired
+}
 
 /// 采样调度器（Tauri managed state）
 #[derive(Default)]
@@ -41,6 +99,7 @@ impl MonitorSampler {
         &self,
         app: tauri::AppHandle,
         ssh_manager: Arc<SshSessionManager>,
+        storage: Arc<SqliteStorage>,
         session_id: String,
         interval_ms: u64,
     ) {
@@ -60,6 +119,8 @@ impl MonitorSampler {
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let mut prev: Option<RawMetrics> = None;
+            // (rule_id, session_id) → 上次触发时间戳（告警冷却去重）
+            let mut last_fired: HashMap<(String, String), u64> = HashMap::new();
             loop {
                 tokio::select! {
                     _ = token.cancelled() => break,
@@ -138,9 +199,23 @@ impl MonitorSampler {
                     error: None,
                 };
 
-                if app.emit("monitor_metrics", payload).is_err() {
+                if app.emit("monitor_metrics", &payload).is_err() {
                     break;
                 }
+
+                // 告警规则评估（每轮重新加载，规则变更即时生效）
+                if let Ok(rules) = storage.list_alert_rules(true).await {
+                    for alert in evaluate_rules(&payload, &rules, &mut last_fired) {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            rule = %alert.name,
+                            value = alert.value,
+                            "告警规则触发"
+                        );
+                        let _ = app.emit("alert_fired", alert);
+                    }
+                }
+
                 prev = Some(raw);
             }
             tracing::debug!(session_id = %session_id, "监控采样 task 退出");

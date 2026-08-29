@@ -23,7 +23,13 @@ pub async fn monitor_start(
     }
     state
         .monitor_sampler
-        .start(app, state.ssh_manager.clone(), session_id, interval_ms.unwrap_or(3000))
+        .start(
+            app,
+            state.ssh_manager.clone(),
+            state.storage.clone(),
+            session_id,
+            interval_ms.unwrap_or(3000),
+        )
         .await;
     Ok(())
 }

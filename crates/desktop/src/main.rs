@@ -95,6 +95,10 @@ fn main() {
             commands::snippet::history_add,
             commands::snippet::history_list,
             commands::snippet::history_clear,
+            // 告警规则
+            commands::alert::alert_rule_list,
+            commands::alert::alert_rule_save,
+            commands::alert::alert_rule_delete,
             // 会话配置命令组
             commands::session_profile::session_profile_save,
             commands::session_profile::session_profile_list,

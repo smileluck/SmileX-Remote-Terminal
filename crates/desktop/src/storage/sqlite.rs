@@ -112,6 +112,23 @@ pub struct CommandHistory {
     pub created_at: i64,
 }
 
+/// 监控告警规则
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertRule {
+    pub id: String,
+    pub name: String,
+    /// 指标名：cpu_percent / mem_percent / load1 / net_rx_bps / net_tx_bps
+    pub metric: String,
+    /// 比较符：gt / lt
+    pub op: String,
+    pub threshold: f64,
+    pub enabled: bool,
+    /// 触发冷却（秒）
+    pub cooldown_sec: u32,
+    pub created_at: i64,
+}
+
 /// SQLite 存储句柄
 ///
 /// 内部用 `tokio::sync::Mutex` 包装 `Connection`，保证并发安全。
@@ -226,6 +243,18 @@ impl SqliteStorage {
 
             CREATE INDEX IF NOT EXISTS idx_command_history_time
                 ON command_history(created_at DESC);
+
+            -- 监控告警规则
+            CREATE TABLE IF NOT EXISTS alert_rules (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                name          TEXT    NOT NULL,
+                metric        TEXT    NOT NULL,   -- cpu_percent / mem_percent / load1 / net_rx_bps / net_tx_bps
+                op            TEXT    NOT NULL,   -- gt / lt
+                threshold     REAL    NOT NULL,
+                enabled       INTEGER NOT NULL DEFAULT 1,
+                cooldown_sec  INTEGER NOT NULL DEFAULT 300,
+                created_at    INTEGER NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -571,6 +600,52 @@ impl SqliteStorage {
         conn.execute("DELETE FROM command_history", [])?;
         Ok(())
     }
+
+    /// 保存告警规则（id UPSERT）
+    pub async fn save_alert_rule(&self, rule: &AlertRule) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO alert_rules (id, name, metric, op, threshold, enabled, cooldown_sec, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                rule.id, rule.name, rule.metric, rule.op,
+                rule.threshold, rule.enabled as i32, rule.cooldown_sec, rule.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 全部告警规则（仅启用的可选）
+    pub async fn list_alert_rules(&self, enabled_only: bool) -> Result<Vec<AlertRule>> {
+        let conn = self.conn.lock().await;
+        let sql = if enabled_only {
+            "SELECT id, name, metric, op, threshold, enabled, cooldown_sec, created_at FROM alert_rules WHERE enabled = 1 ORDER BY created_at DESC"
+        } else {
+            "SELECT id, name, metric, op, threshold, enabled, cooldown_sec, created_at FROM alert_rules ORDER BY created_at DESC"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], row_to_alert_rule)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 删除告警规则
+    pub async fn delete_alert_rule(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        Ok(conn.execute("DELETE FROM alert_rules WHERE id = ?1", params![id])? > 0)
+    }
+}
+
+/// 把 rusqlite `Row` 映射为 [`AlertRule`]
+fn row_to_alert_rule(row: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRule> {
+    Ok(AlertRule {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        metric: row.get(2)?,
+        op: row.get(3)?,
+        threshold: row.get(4)?,
+        enabled: row.get::<_, i32>(5)? != 0,
+        cooldown_sec: row.get(6)?,
+        created_at: row.get(7)?,
+    })
 }
 
 /// 把 rusqlite `Row` 映射为 [`SessionProfile`]

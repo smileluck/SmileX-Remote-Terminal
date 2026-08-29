@@ -97,3 +97,24 @@ pub struct MonitorMetricsPayload {
     /// 采集错误（预留：用于推送采样失败通知）
     pub error: Option<String>,
 }
+
+/// `alert_fired` 事件 payload（告警规则触发）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertFiredPayload {
+    /// 规则 ID
+    pub rule_id: String,
+    /// 规则名称
+    pub name: String,
+    /// 会话 ID
+    pub session_id: String,
+    /// 指标名
+    pub metric: String,
+    /// 当前值
+    pub value: f64,
+    /// 阈值
+    pub threshold: f64,
+    /// 比较符
+    pub op: String,
+    /// 触发时间戳（毫秒）
+    pub timestamp_ms: u64,
+}
