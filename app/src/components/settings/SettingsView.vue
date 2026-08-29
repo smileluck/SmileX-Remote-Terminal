@@ -28,9 +28,12 @@ import {
   NPopconfirm,
   NEmpty,
   NSpin,
+  NRadioGroup,
+  NRadioButton,
   useMessage,
 } from 'naive-ui'
 import { Plus } from '@vicons/tabler'
+import { useThemeStore } from '@/stores/theme'
 import {
   PROVIDER_OPTIONS,
   createDefaultProfileFields,
@@ -49,6 +52,7 @@ function genId(): string {
 }
 
 const message = useMessage()
+const themeStore = useThemeStore()
 
 /** 所有档案（左侧列表展示） */
 const profiles = ref<LlmProfile[]>([])
@@ -323,6 +327,20 @@ onMounted(() => {
       </p>
     </header>
 
+    <!-- 外观：主题切换 -->
+    <section class="appearance">
+      <span class="appearance-label">外观</span>
+      <NRadioGroup
+        :value="themeStore.mode"
+        size="small"
+        @update:value="(v: string) => themeStore.setMode(v as 'dark' | 'light' | 'auto')"
+      >
+        <NRadioButton value="dark">深色</NRadioButton>
+        <NRadioButton value="light">浅色</NRadioButton>
+        <NRadioButton value="auto">跟随系统</NRadioButton>
+      </NRadioGroup>
+    </section>
+
     <NSpin v-if="loading && profiles.length === 0" class="loading" />
 
     <div v-else class="layout">
@@ -477,6 +495,18 @@ onMounted(() => {
   padding: 16px 24px 12px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+}
+.appearance {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.appearance-label {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 .header h2 {
   margin: 0 0 4px 0;

@@ -3,16 +3,18 @@
  *
  * 封装 xterm.js 实例 + SSH 会话绑定 + 输入/输出转发。
  */
-import { ref, onUnmounted, type Ref } from 'vue'
+import { ref, onUnmounted, watch, type Ref } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
 import * as sessionService from '@/services/session'
 import * as snippetsService from '@/services/snippets'
+import { useThemeStore, xtermThemeDark, xtermThemeLight } from '@/stores/theme'
 import type { SshConfig } from '@/types/session'
 
 export function useTerminal() {
+  const themeStore = useThemeStore()
   const term = ref<Terminal | null>(null)
   const fitAddon = ref<FitAddon | null>(null)
   const sessionId = ref<string | null>(null)
@@ -24,29 +26,7 @@ export function useTerminal() {
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 14,
       cursorBlink: true,
-      theme: {
-        background: '#0f1419',
-        foreground: '#e6e9ef',
-        cursor: '#4c8dff',
-        cursorAccent: '#0f1419',
-        selectionBackground: 'rgba(58, 122, 254, 0.3)',
-        black: '#0f1419',
-        red: '#f87171',
-        green: '#34d399',
-        yellow: '#fbbf24',
-        blue: '#6ba9ff',
-        magenta: '#a87cff',
-        cyan: '#22d3ee',
-        white: '#e6e9ef',
-        brightBlack: '#6b7280',
-        brightRed: '#fca5a5',
-        brightGreen: '#6ee7b7',
-        brightYellow: '#fcd34d',
-        brightBlue: '#93c5fd',
-        brightMagenta: '#c4b5fd',
-        brightCyan: '#67e8f9',
-        brightWhite: '#f3f4f6',
-      },
+      theme: themeStore.resolved === 'dark' ? xtermThemeDark : xtermThemeLight,
     })
     const fit = new FitAddon()
     t.loadAddon(fit)
@@ -55,6 +35,14 @@ export function useTerminal() {
     term.value = t
     fitAddon.value = fit
   }
+
+  /** 主题切换时更新已创建终端的配色 */
+  watch(
+    () => themeStore.resolved,
+    (r) => {
+      if (term.value) term.value.options.theme = r === 'dark' ? xtermThemeDark : xtermThemeLight
+    },
+  )
 
   /** 绑定到已建立的会话（SideBar 连接的 tab：xterm 后挂载场景）
    *

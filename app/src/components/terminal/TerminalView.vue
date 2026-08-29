@@ -210,7 +210,7 @@ async function handleReconnect() {
 }
 .xterm-container {
   flex: 1;
-  background: #0f1419;
+  background: var(--bg-app);
   padding: 4px;
   min-width: 0;
 }

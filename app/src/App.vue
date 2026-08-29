@@ -20,6 +20,7 @@ import {
   darkTheme,
   type GlobalThemeOverrides,
 } from 'naive-ui'
+import { useThemeStore } from '@/stores/theme'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
 import TopBar from '@/components/layout/TopBar.vue'
@@ -63,8 +64,13 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
+/** 主题 store（dark / light / auto） */
+const themeStore = useThemeStore()
+/** naive-ui 主题：浅色时用 null（默认亮色），深色用 darkTheme */
+const naiveTheme = computed(() => (themeStore.resolved === 'dark' ? darkTheme : null))
+
 /** Termius 风深色主题覆盖（与 styles/main.css 的 token 对齐） */
-const themeOverrides: GlobalThemeOverrides = {
+const darkOverrides: GlobalThemeOverrides = {
   common: {
     bodyColor: '#0f1419',
     baseColor: '#0f1419',
@@ -102,10 +108,54 @@ const themeOverrides: GlobalThemeOverrides = {
   },
   Tag: { borderRadius: '4px' },
 }
+
+/** 浅色主题覆盖（与 .theme-light token 对齐） */
+const lightOverrides: GlobalThemeOverrides = {
+  common: {
+    bodyColor: '#f5f7fa',
+    baseColor: '#f5f7fa',
+    primaryColor: '#2e6be6',
+    primaryColorHover: '#4c8dff',
+    primaryColorPressed: '#1f56c4',
+    primaryColorSuppl: '#2e6be6',
+    infoColor: '#2e6be6',
+    successColor: '#059669',
+    warningColor: '#d97706',
+    errorColor: '#dc2626',
+    textColor1: '#1f2733',
+    textColor2: '#5b6575',
+    textColor3: '#8b95a5',
+    placeholderColor: '#8b95a5',
+    borderColor: '#e3e8ef',
+    dividerColor: '#e3e8ef',
+    hoverColor: '#eef2f7',
+    fontFamily:
+      '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    borderRadius: '6px',
+    borderRadiusSmall: '4px',
+  },
+  Button: { fontWeight: '500' },
+  Card: {
+    color: '#ffffff',
+    colorModal: '#ffffff',
+    borderColor: '#e3e8ef',
+  },
+  Input: {
+    color: '#ffffff',
+    colorFocus: '#ffffff',
+    borderHover: '1px solid #2e6be6',
+    borderFocus: '1px solid #2e6be6',
+  },
+  Tag: { borderRadius: '4px' },
+}
+
+const themeOverrides = computed<GlobalThemeOverrides>(() =>
+  themeStore.resolved === 'dark' ? darkOverrides : lightOverrides,
+)
 </script>
 
 <template>
-  <NConfigProvider :theme="darkTheme" :theme-overrides="themeOverrides">
+  <NConfigProvider :theme="naiveTheme" :theme-overrides="themeOverrides">
     <NLoadingBarProvider>
       <NMessageProvider>
         <NDialogProvider>

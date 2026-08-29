@@ -73,7 +73,49 @@ body,
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
-/* 深色滚动条（细 + 半透明） */
+/* 浅色主题 token（html.theme-light 时覆盖） */
+.theme-light {
+  --bg-app: #f5f7fa;
+  --bg-rail: #eceff4;
+  --bg-sidebar: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-elevated: #eef2f7;
+  --bg-input: #ffffff;
+
+  --text-primary: #1f2733;
+  --text-secondary: #5b6575;
+  --text-tertiary: #8b95a5;
+
+  --border-color: #e3e8ef;
+  --border-strong: #d3dae4;
+  --divider: #e3e8ef;
+
+  --primary: #2e6be6;
+  --primary-hover: #4c8dff;
+  --primary-active: #1f56c4;
+  --primary-bg: rgba(46, 107, 230, 0.1);
+
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #2e6be6;
+
+  --kind-ssh-bg: rgba(5, 150, 105, 0.12);
+  --kind-ssh-fg: #059669;
+  --kind-rdp-bg: rgba(46, 107, 230, 0.12);
+  --kind-rdp-fg: #2e6be6;
+  --kind-host-bg: rgba(220, 38, 38, 0.12);
+  --kind-host-fg: #dc2626;
+  --kind-chat-bg: rgba(124, 58, 237, 0.12);
+  --kind-chat-fg: #7c3aed;
+  --kind-settings-bg: rgba(91, 101, 117, 0.12);
+  --kind-settings-fg: #5b6575;
+
+  --shadow-card: 0 1px 2px rgba(31, 39, 51, 0.08);
+  --shadow-pop: 0 8px 24px rgba(31, 39, 51, 0.14);
+}
+
+/* 深色滚动条（细 + 半透明；浅色加深一档） */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -87,4 +129,10 @@ body,
 }
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(122, 137, 160, 0.45);
+}
+.theme-light ::-webkit-scrollbar-thumb {
+  background: rgba(91, 101, 117, 0.3);
+}
+.theme-light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(91, 101, 117, 0.5);
 }
