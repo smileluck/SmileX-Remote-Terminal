@@ -81,6 +81,13 @@ fn main() {
             commands::monitor::monitor_start,
             commands::monitor::monitor_stop,
             commands::monitor::monitor_list,
+            // SFTP 命令组
+            commands::sftp::sftp_list,
+            commands::sftp::sftp_upload,
+            commands::sftp::sftp_download,
+            commands::sftp::sftp_mkdir,
+            commands::sftp::sftp_remove,
+            commands::sftp::sftp_rename,
             // 会话配置命令组
             commands::session_profile::session_profile_save,
             commands::session_profile::session_profile_list,

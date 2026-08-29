@@ -16,10 +16,7 @@ pub mod connection;
 pub mod error;
 pub mod keys;
 pub mod known_hosts;
+pub mod sftp;
 pub mod terminal;
-
-// 以下模块在阶段 4/5 实现，暂以 mod 声明占位（可在 src 下后续补全）
-// pub mod sftp;
-// pub mod tunnel;
 
 pub use error::{Error, Result};

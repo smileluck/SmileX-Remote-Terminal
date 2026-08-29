@@ -16,14 +16,16 @@ import {
   NIcon,
   NForm,
   NFormItem,
+  NTooltip,
   useMessage,
 } from 'naive-ui'
-import { Terminal2, Refresh } from '@vicons/tabler'
+import { Terminal2, Refresh, Folder } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
 import { connectProfile } from '@/composables/useSshConnect'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
+import FilePanel from '@/components/sftp/FilePanel.vue'
 import type { TabItem, SshConfig } from '@/types/session'
 
 const props = defineProps<{ tab: TabItem }>()
@@ -34,6 +36,8 @@ const message = useMessage()
 const { term, sessionId, error, init, bind, connect, fit } = useTerminal()
 
 const containerRef = ref<HTMLDivElement | null>(null)
+/** SFTP 文件面板开关 */
+const showFiles = ref(false)
 /** tab 已带 sessionId 则不显示快速表单 */
 const showForm = ref(!props.tab.sessionId)
 /** 重连中 */
@@ -152,7 +156,30 @@ async function handleReconnect() {
     </div>
 
     <template v-else>
-      <div ref="containerRef" class="xterm-container"></div>
+      <div class="terminal-main">
+        <div ref="containerRef" class="xterm-container"></div>
+        <!-- SFTP 文件面板 -->
+        <FilePanel
+          v-if="showFiles && tab.sessionId && !tab.disconnected"
+          :session-id="tab.sessionId"
+        />
+        <!-- 文件面板开关 -->
+        <NTooltip v-if="tab.sessionId" placement="left">
+          <template #trigger>
+            <NButton
+              quaternary
+              circle
+              size="small"
+              class="files-toggle"
+              :type="showFiles ? 'primary' : 'default'"
+              @click="showFiles = !showFiles"
+            >
+              <NIcon :component="Folder" />
+            </NButton>
+          </template>
+          文件管理（SFTP）
+        </NTooltip>
+      </div>
       <!-- 断开遮罩 -->
       <div v-if="tab.disconnected" class="disconnect-overlay">
         <div class="disconnect-card">
@@ -185,6 +212,19 @@ async function handleReconnect() {
   flex: 1;
   background: #0f1419;
   padding: 4px;
+  min-width: 0;
+}
+.terminal-main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.files-toggle {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  z-index: 5;
 }
 .disconnect-overlay {
   position: absolute;

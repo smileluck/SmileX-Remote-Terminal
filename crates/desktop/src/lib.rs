@@ -75,6 +75,8 @@ pub struct AppState {
     /// host key 确认等待表：requestId → oneshot 应答通道
     /// （Arc 包装：交互式确认回调需跨 task 持有）
     pub host_key_awaits: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// sessionId → SFTP 客户端（懒初始化，断开会话时移除）
+    pub sftp_clients: Mutex<HashMap<String, ssh_core::sftp::SftpClient>>,
 }
 
 impl AppState {
@@ -90,6 +92,7 @@ impl AppState {
             monitor_sampler: Arc::new(monitor::sampler::MonitorSampler::new()),
             terminal_stats: Mutex::new(HashMap::new()),
             host_key_awaits: Arc::new(Mutex::new(HashMap::new())),
+            sftp_clients: Mutex::new(HashMap::new()),
         }
     }
 
@@ -108,6 +111,7 @@ impl AppState {
         // 停止所有监控采样 + 清理流量统计
         self.monitor_sampler.stop_all().await;
         self.terminal_stats.lock().await.clear();
+        self.sftp_clients.lock().await.clear();
         tracing::info!("会话清理完成");
     }
 }

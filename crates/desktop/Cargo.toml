@@ -45,6 +45,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 keyring = "3"
 # 时间戳（SessionProfile.created_at / last_used_at）
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# 本地目录定位（SFTP 下载保存到 ~/Downloads）
+dirs = "5"
 
 # 日志
 log = "0.4"

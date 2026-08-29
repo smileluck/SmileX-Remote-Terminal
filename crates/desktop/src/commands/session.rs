@@ -264,6 +264,8 @@ pub async fn session_disconnect(
     state.terminal_controls.lock().await.remove(&session_id);
     // 清理流量统计
     state.terminal_stats.lock().await.remove(&session_id);
+    // 清理 SFTP 客户端缓存
+    state.sftp_clients.lock().await.remove(&session_id);
 
     // 断开并移除会话
     state

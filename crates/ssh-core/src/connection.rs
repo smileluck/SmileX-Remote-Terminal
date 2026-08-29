@@ -472,6 +472,26 @@ impl SshSession {
         Ok(String::from_utf8_lossy(&out).into_owned())
     }
 
+    /// 在当前连接上打开 SFTP 通道并初始化协议
+    ///
+    /// 每次调用建立独立通道；调用方（应用层）可按 sessionId 缓存复用。
+    pub async fn open_sftp(&self) -> Result<crate::sftp::SftpClient> {
+        let channel = {
+            let handle = self.handle.lock().await;
+            handle
+                .channel_open_session()
+                .await
+                .map_err(|e| Error::Terminal(format!("打开 SFTP channel 失败: {e}")))?
+        };
+
+        let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| Error::Terminal(format!("SFTP 协议初始化失败: {e}")))?;
+
+        tracing::debug!(session_id = %self.id, "SFTP 通道已建立");
+        Ok(crate::sftp::SftpClient::new(sftp))
+    }
+
     /// 主动断开会话（幂等：多次调用安全）
     ///
     /// 发送 SSH `DISCONNECT` 消息（ByApplication），通知对端优雅关闭。
