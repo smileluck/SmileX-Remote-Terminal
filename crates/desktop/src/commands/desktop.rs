@@ -15,7 +15,7 @@ pub async fn desktop_connect(
     app: AppHandle,
     state: State<'_, AppState>,
     config: SessionConfig,
-) -> Result<String, String> {
+) -> Result<String, crate::error::AppError> {
     let session_id = uuid::Uuid::new_v4().to_string();
 
     // 创建会话实例（按 config.kind 路由）
@@ -25,7 +25,7 @@ pub async fn desktop_connect(
     );
 
     // 启动会话，获取帧接收端
-    let mut rx = session.start(&config).await.map_err(|e| format!("{e}"))?;
+    let mut rx = session.start(&config).await.map_err(|e| crate::error::AppError::desktop(format!("{e}")))?;
 
     // 注册到 state
     state
@@ -63,7 +63,7 @@ pub async fn desktop_input(
     state: State<'_, AppState>,
     session_id: String,
     event: InputEvent,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let sessions = state.desktop_sessions.lock().await;
     let session = sessions
         .get(&session_id)
@@ -71,7 +71,7 @@ pub async fn desktop_input(
     session
         .send_input(event)
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::error::AppError::desktop(format!("{e}")))?;
     Ok(())
 }
 
@@ -80,13 +80,13 @@ pub async fn desktop_input(
 pub async fn desktop_disconnect(
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let mut sessions = state.desktop_sessions.lock().await;
     if let Some(session) = sessions.remove(&session_id) {
         session
             .disconnect()
             .await
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|e| crate::error::AppError::desktop(format!("{e}")))?;
     }
     Ok(())
 }

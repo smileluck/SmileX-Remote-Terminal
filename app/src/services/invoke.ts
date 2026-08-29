@@ -8,9 +8,26 @@
 // 检测 Tauri 环境（web 预览时回退到 noop）
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+/** 结构化后端错误（对应 crates/desktop/src/error.rs 的 AppError） */
+export interface AppErrorShape {
+  code: string
+  message: string
+}
+
+/** 判断是否为结构化 AppError */
+function isAppError(e: unknown): e is AppErrorShape {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'code' in e &&
+    'message' in e &&
+    typeof (e as AppErrorShape).message === 'string'
+  )
+}
+
 /**
  * 安全调用 Tauri invoke
- * @throws 若不在 Tauri 环境，抛出友好错误
+ * @throws Error（message 为后端结构化错误的 message；code 挂在 err.code）
  */
 export async function invoke<T = unknown>(
   cmd: string,
@@ -20,7 +37,17 @@ export async function invoke<T = unknown>(
     throw new Error(`非 Tauri 环境，无法调用 ${cmd}（请通过 cargo tauri dev 运行）`)
   }
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
-  return tauriInvoke<T>(cmd, args)
+  try {
+    return await tauriInvoke<T>(cmd, args)
+  } catch (e) {
+    // 统一解析后端结构化错误 {code, message} → Error
+    if (isAppError(e)) {
+      const err = new Error(e.message) as Error & { code?: string }
+      err.code = e.code
+      throw err
+    }
+    throw e instanceof Error ? e : new Error(String(e))
+  }
 }
 
 /**

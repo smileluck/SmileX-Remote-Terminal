@@ -42,7 +42,7 @@ pub async fn session_connect(
     cols: Option<u32>,
     rows: Option<u32>,
     on_output: tauri::ipc::Channel<TerminalOutputPayload>,
-) -> Result<String, String> {
+) -> Result<String, crate::error::AppError> {
     let cols = cols.unwrap_or(80);
     let rows = rows.unwrap_or(24);
 
@@ -100,12 +100,12 @@ pub async fn session_connect(
         .ssh_manager
         .connect(&config, known_hosts, confirm)
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::error::AppError::session(format!("{e}")))?;
 
     let session_id = session.id.clone();
 
     // 2) 打开 PTY + 3) 拉起 select! 读循环
-    let pty = session.open_pty(cols, rows).await.map_err(|e| format!("{e}"))?;
+    let pty = session.open_pty(cols, rows).await.map_err(|e| crate::error::AppError::session(format!("{e}")))?;
     let channel_id = pty.channel_id;
     let (mut stream, control) = ssh_core::terminal::TerminalStream::start(pty);
 
@@ -172,7 +172,7 @@ pub async fn host_key_respond(
     state: State<'_, AppState>,
     request_id: String,
     accept: bool,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     if let Some(tx) = state.host_key_awaits.lock().await.remove(&request_id) {
         let _ = tx.send(accept);
     }
@@ -187,7 +187,7 @@ pub async fn session_input(
     state: State<'_, AppState>,
     session_id: String,
     data: Vec<u8>,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     // 查 channel_id
     let channel_id = state
         .channel_ids
@@ -207,7 +207,7 @@ pub async fn session_input(
     session
         .write(channel_id, &data)
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::error::AppError::session(format!("{e}")))?;
 
     // 累计上行流量（统计句柄可能已被清理，忽略即可）
     if let Some(stats) = state.terminal_stats.lock().await.get(&session_id) {
@@ -227,7 +227,7 @@ pub async fn session_resize(
     session_id: String,
     cols: u32,
     rows: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     // 查 TerminalControl
     let control = state
         .terminal_controls
@@ -241,7 +241,7 @@ pub async fn session_resize(
     control
         .resize(cols, rows)
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::error::AppError::session(format!("{e}")))?;
     Ok(())
 }
 
@@ -255,7 +255,7 @@ pub async fn session_resize(
 pub async fn session_disconnect(
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     // 停止该会话的监控采样
     state.monitor_sampler.stop(&session_id).await;
     // 清理 channel_id 映射
@@ -270,7 +270,7 @@ pub async fn session_disconnect(
         .ssh_manager
         .disconnect(&session_id)
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::error::AppError::session(format!("{e}")))?;
     Ok(())
 }
 
@@ -290,7 +290,7 @@ pub struct SessionHealth {
 
 /// 所有会话的健康/流量信息（右栏会话健康面板轮询）
 #[tauri::command]
-pub async fn session_stats_all(state: State<'_, AppState>) -> Result<Vec<SessionHealth>, String> {
+pub async fn session_stats_all(state: State<'_, AppState>) -> Result<Vec<SessionHealth>, crate::error::AppError> {
     let stats_map = state.terminal_stats.lock().await.clone();
     let mut result = Vec::with_capacity(stats_map.len());
     for (session_id, stats) in stats_map {

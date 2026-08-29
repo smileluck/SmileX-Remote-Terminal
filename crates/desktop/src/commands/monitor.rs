@@ -16,10 +16,10 @@ pub async fn monitor_start(
     state: State<'_, AppState>,
     session_id: String,
     interval_ms: Option<u64>,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     // 会话必须存在（未连接时报错给前端）
     if state.ssh_manager.get(&session_id).await.is_none() {
-        return Err(format!("会话 {session_id} 不存在或已断开"));
+        return Err(crate::error::AppError::monitor(format!("会话 {session_id} 不存在或已断开")));
     }
     state
         .monitor_sampler
@@ -33,13 +33,13 @@ pub async fn monitor_start(
 pub async fn monitor_stop(
     state: State<'_, AppState>,
     session_id: String,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     state.monitor_sampler.stop(&session_id).await;
     Ok(())
 }
 
 /// 当前采样中的会话列表
 #[tauri::command]
-pub async fn monitor_list(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+pub async fn monitor_list(state: State<'_, AppState>) -> Result<Vec<String>, crate::error::AppError> {
     Ok(state.monitor_sampler.list().await)
 }

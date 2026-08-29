@@ -33,7 +33,7 @@ pub async fn ai_chat_send(
     session_id: String,
     message: String,
     ctx: Context,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let provider = state.chat_provider.clone();
 
     // token 回调：emit `ai_token` 事件
@@ -58,33 +58,33 @@ pub async fn ai_chat_send(
         AiDonePayload {
             session_id,
             success: result.is_ok(),
-            error: result.as_ref().err().map(|e| format!("{e}")),
+            error: result.as_ref().err().map(|e| e.to_string()),
         },
     );
 
-    result.map_err(|e| format!("{e}"))?;
+    result.map_err(|e| crate::error::AppError::ai(format!("{e}")))?;
     Ok(())
 }
 
 /// 中断当前生成
 #[tauri::command]
-pub async fn ai_chat_abort(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn ai_chat_abort(state: State<'_, AppState>) -> Result<(), crate::error::AppError> {
     state
         .chat_provider
         .abort()
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::error::AppError::ai(format!("{e}")))?;
     Ok(())
 }
 
 /// 清空对话历史
 #[tauri::command]
-pub async fn ai_chat_clear(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn ai_chat_clear(state: State<'_, AppState>) -> Result<(), crate::error::AppError> {
     state
         .chat_provider
         .clear()
         .await
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| crate::error::AppError::ai(format!("{e}")))?;
     Ok(())
 }
 
@@ -95,7 +95,7 @@ pub async fn ai_chat_clear(state: State<'_, AppState>) -> Result<(), String> {
 pub async fn ai_update_config(
     state: State<'_, AppState>,
     config: LlmProviderConfig,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     state.chat_provider.update_config(config).await;
     Ok(())
 }
@@ -106,16 +106,16 @@ pub async fn ai_update_config(
 #[tauri::command]
 pub async fn ai_config_get(
     state: State<'_, AppState>,
-) -> Result<Option<LlmProviderConfig>, String> {
+) -> Result<Option<LlmProviderConfig>, crate::error::AppError> {
     let json = state
         .storage
         .get_config(CONFIG_KEY)
         .await
-        .map_err(|e| format!("读取 LLM 配置失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::ai(format!("读取 LLM 配置失败: {e}")))?;
 
     if let Some(json) = json {
         let mut config: LlmProviderConfig = serde_json::from_str(&json)
-            .map_err(|e| format!("解析 LLM 配置 JSON 失败: {e}"))?;
+            .map_err(|e| crate::error::AppError::ai(format!("解析 LLM 配置 JSON 失败: {e}")))?;
         // 出于安全考虑，持久化的值不通过此命令返回 API Key
         config.api_key = None;
         Ok(Some(config))
@@ -136,14 +136,14 @@ pub async fn ai_config_get(
 pub async fn ai_config_save(
     state: State<'_, AppState>,
     mut config: LlmProviderConfig,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let now = chrono::Utc::now().timestamp();
 
     // 1) 处理 API Key（Some/non-empty 写入；Some/empty 清除；None 保持）
     match config.api_key.take() {
         Some(k) if !k.is_empty() => {
             keyring::set_credential(SECRET_KEY, &k)
-                .map_err(|e| format!("写入 API Key 到 Keyring 失败: {e}"))?;
+                .map_err(|e| crate::error::AppError::ai(format!("写入 API Key 到 Keyring 失败: {e}")))?;
             // 重新合并以便后续 apply 使用
             config.api_key = Some(k);
         }
@@ -165,12 +165,12 @@ pub async fn ai_config_save(
     let mut for_storage = config.clone();
     for_storage.api_key = None;
     let json = serde_json::to_string(&for_storage)
-        .map_err(|e| format!("序列化 LLM 配置失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::ai(format!("序列化 LLM 配置失败: {e}")))?;
     state
         .storage
         .set_config(CONFIG_KEY, &json, now)
         .await
-        .map_err(|e| format!("写入 LLM 配置到 SQLite 失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::ai(format!("写入 LLM 配置到 SQLite 失败: {e}")))?;
 
     // 3) 应用到当前 ChatProvider（含 api_key）
     let mut applied = config;
@@ -185,8 +185,8 @@ pub async fn ai_config_save(
 ///
 /// 仅在用户主动打开设置页时调用，避免 API Key 常驻前端内存。
 #[tauri::command]
-pub async fn ai_secret_get(_state: State<'_, AppState>) -> Result<Option<String>, String> {
-    keyring::get_credential(SECRET_KEY).map_err(|e| format!("读取 API Key 失败: {e}"))
+pub async fn ai_secret_get(_state: State<'_, AppState>) -> Result<Option<String>, crate::error::AppError> {
+    keyring::get_credential(SECRET_KEY).map_err(|e| crate::error::AppError::ai(format!("读取 API Key 失败: {e}")))
 }
 
 /// 从持久化加载 LLM 配置并应用到 ChatProvider（启动时调用）

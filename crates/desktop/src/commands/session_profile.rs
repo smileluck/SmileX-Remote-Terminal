@@ -42,7 +42,7 @@ pub async fn session_profile_save(
     state: State<'_, AppState>,
     mut profile: SessionProfile,
     secret: Option<String>,
-) -> Result<SessionProfile, String> {
+) -> Result<SessionProfile, crate::error::AppError> {
     // 新建时若 created_at 未填，补当前时间
     if profile.created_at == 0 {
         profile.created_at = chrono::Utc::now().timestamp();
@@ -53,13 +53,13 @@ pub async fn session_profile_save(
         .storage
         .save_profile(&profile)
         .await
-        .map_err(|e| format!("保存会话配置失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::storage(format!("保存会话配置失败: {e}")))?;
 
     // 同步敏感字段到 Keyring
     if let Some(secret_value) = secret {
         if !secret_value.is_empty() {
             keyring::set_credential(&keyring_key(&profile.id), &secret_value)
-                .map_err(|e| format!("写入 Keyring 失败: {e}"))?;
+                .map_err(|e| crate::error::AppError::storage(format!("写入 Keyring 失败: {e}")))?;
         } else {
             // 空字符串视为清除凭据
             let _ = keyring::delete_credential(&keyring_key(&profile.id));
@@ -74,12 +74,12 @@ pub async fn session_profile_save(
 #[tauri::command]
 pub async fn session_profile_list(
     state: State<'_, AppState>,
-) -> Result<Vec<SessionProfile>, String> {
+) -> Result<Vec<SessionProfile>, crate::error::AppError> {
     state
         .storage
         .list_profiles()
         .await
-        .map_err(|e| format!("列出会话配置失败: {e}"))
+        .map_err(|e| crate::error::AppError::storage(format!("列出会话配置失败: {e}")))
 }
 
 /// 按 id 获取会话配置（不返回敏感字段）
@@ -87,12 +87,12 @@ pub async fn session_profile_list(
 pub async fn session_profile_get(
     state: State<'_, AppState>,
     id: String,
-) -> Result<Option<SessionProfile>, String> {
+) -> Result<Option<SessionProfile>, crate::error::AppError> {
     state
         .storage
         .get_profile(&id)
         .await
-        .map_err(|e| format!("获取会话配置失败: {e}"))
+        .map_err(|e| crate::error::AppError::storage(format!("获取会话配置失败: {e}")))
 }
 
 /// 按 id 获取会话配置的敏感字段（密码 / 私钥口令）
@@ -102,8 +102,8 @@ pub async fn session_profile_get(
 pub async fn session_profile_get_secret(
     _state: State<'_, AppState>,
     id: String,
-) -> Result<Option<String>, String> {
-    keyring::get_credential(&keyring_key(&id)).map_err(|e| format!("读取 Keyring 失败: {e}"))
+) -> Result<Option<String>, crate::error::AppError> {
+    keyring::get_credential(&keyring_key(&id)).map_err(|e| crate::error::AppError::storage(format!("读取 Keyring 失败: {e}")))
 }
 
 /// 删除会话配置（同时清理 SQLite + Keyring）
@@ -111,13 +111,13 @@ pub async fn session_profile_get_secret(
 pub async fn session_profile_delete(
     state: State<'_, AppState>,
     id: String,
-) -> Result<bool, String> {
+) -> Result<bool, crate::error::AppError> {
     // 先删 SQLite
     let deleted = state
         .storage
         .delete_profile(&id)
         .await
-        .map_err(|e| format!("删除会话配置失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::storage(format!("删除会话配置失败: {e}")))?;
 
     // 再清 Keyring（即使 SQLite 删除失败也尝试清理凭据，避免残留）
     let _ = keyring::delete_credential(&keyring_key(&id));
@@ -133,12 +133,12 @@ pub async fn session_profile_delete(
 pub async fn session_profile_touch(
     state: State<'_, AppState>,
     id: String,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     let now = chrono::Utc::now().timestamp();
     state
         .storage
         .touch_profile(&id, now)
         .await
-        .map_err(|e| format!("更新 last_used_at 失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::storage(format!("更新 last_used_at 失败: {e}")))?;
     Ok(())
 }

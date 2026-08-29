@@ -45,17 +45,17 @@ fn keyring_key(profile_id: &str) -> String {
 /// 把字符串 provider 名转为 `LlmProvider` 枚举
 ///
 /// 未知值返回错误（避免静默使用错误的 Provider）。
-fn parse_provider(s: &str) -> Result<LlmProvider, String> {
+fn parse_provider(s: &str) -> Result<LlmProvider, crate::error::AppError> {
     match s.to_lowercase().as_str() {
         "openai" => Ok(LlmProvider::OpenAi),
         "claude" => Ok(LlmProvider::Claude),
         "ollama" => Ok(LlmProvider::Ollama),
-        other => Err(format!("未知的 Provider 类型: {other}")),
+        other => Err(crate::error::AppError::llm(format!("未知的 Provider 类型: {other}"))),
     }
 }
 
 /// 把 `LlmProfile` + `api_key` 构造为 `LlmProviderConfig`（应用到 ChatProvider）
-fn build_config(profile: &LlmProfile, api_key: Option<String>) -> Result<LlmProviderConfig, String> {
+fn build_config(profile: &LlmProfile, api_key: Option<String>) -> Result<LlmProviderConfig, crate::error::AppError> {
     Ok(LlmProviderConfig {
         provider: parse_provider(&profile.provider)?,
         model: profile.model.clone(),
@@ -79,7 +79,7 @@ pub async fn llm_profile_save(
     state: State<'_, AppState>,
     mut profile: LlmProfile,
     api_key: Option<String>,
-) -> Result<LlmProfile, String> {
+) -> Result<LlmProfile, crate::error::AppError> {
     let now = chrono::Utc::now().timestamp();
     if profile.created_at == 0 {
         profile.created_at = now;
@@ -90,7 +90,7 @@ pub async fn llm_profile_save(
     let resolved_api_key: Option<String> = match api_key {
         Some(k) if !k.is_empty() => {
             keyring::set_credential(&keyring_key(&profile.id), &k)
-                .map_err(|e| format!("写入 API Key 失败: {e}"))?;
+                .map_err(|e| crate::error::AppError::llm(format!("写入 API Key 失败: {e}")))?;
             Some(k)
         }
         Some(_) => {
@@ -101,7 +101,7 @@ pub async fn llm_profile_save(
         None => {
             // 保持现状：读回
             keyring::get_credential(&keyring_key(&profile.id))
-                .map_err(|e| format!("读取 API Key 失败: {e}"))?
+                .map_err(|e| crate::error::AppError::llm(format!("读取 API Key 失败: {e}")))?
         }
     };
 
@@ -112,7 +112,7 @@ pub async fn llm_profile_save(
         .storage
         .save_llm_profile(&profile)
         .await
-        .map_err(|e| format!("保存 LLM 配置失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::llm(format!("保存 LLM 配置失败: {e}")))?;
 
     // 若是 active，同步应用到 ChatProvider
     if is_active {
@@ -129,12 +129,12 @@ pub async fn llm_profile_save(
 #[tauri::command]
 pub async fn llm_profile_list(
     state: State<'_, AppState>,
-) -> Result<Vec<LlmProfile>, String> {
+) -> Result<Vec<LlmProfile>, crate::error::AppError> {
     state
         .storage
         .list_llm_profiles()
         .await
-        .map_err(|e| format!("列出 LLM 配置失败: {e}"))
+        .map_err(|e| crate::error::AppError::llm(format!("列出 LLM 配置失败: {e}")))
 }
 
 /// 按 id 获取单个 LLM 配置档案（不含 API Key）
@@ -142,12 +142,12 @@ pub async fn llm_profile_list(
 pub async fn llm_profile_get(
     state: State<'_, AppState>,
     id: String,
-) -> Result<Option<LlmProfile>, String> {
+) -> Result<Option<LlmProfile>, crate::error::AppError> {
     state
         .storage
         .get_llm_profile(&id)
         .await
-        .map_err(|e| format!("获取 LLM 配置失败: {e}"))
+        .map_err(|e| crate::error::AppError::llm(format!("获取 LLM 配置失败: {e}")))
 }
 
 /// 读取指定档案的 API Key（编辑时回填用）
@@ -155,8 +155,8 @@ pub async fn llm_profile_get(
 pub async fn llm_profile_get_api_key(
     _state: State<'_, AppState>,
     id: String,
-) -> Result<Option<String>, String> {
-    keyring::get_credential(&keyring_key(&id)).map_err(|e| format!("读取 API Key 失败: {e}"))
+) -> Result<Option<String>, crate::error::AppError> {
+    keyring::get_credential(&keyring_key(&id)).map_err(|e| crate::error::AppError::llm(format!("读取 API Key 失败: {e}")))
 }
 
 /// 删除 LLM 配置档案（同时清理 SQLite + Keyring）
@@ -164,13 +164,13 @@ pub async fn llm_profile_get_api_key(
 pub async fn llm_profile_delete(
     state: State<'_, AppState>,
     id: String,
-) -> Result<bool, String> {
+) -> Result<bool, crate::error::AppError> {
     // 先删 SQLite
     let deleted = state
         .storage
         .delete_llm_profile(&id)
         .await
-        .map_err(|e| format!("删除 LLM 配置失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::llm(format!("删除 LLM 配置失败: {e}")))?;
 
     // 再清 Keyring（即使 SQLite 删除失败也尝试清理）
     let _ = keyring::delete_credential(&keyring_key(&id));
@@ -191,24 +191,24 @@ pub async fn llm_profile_delete(
 pub async fn llm_profile_set_active(
     state: State<'_, AppState>,
     id: String,
-) -> Result<(), String> {
+) -> Result<(), crate::error::AppError> {
     // 1) 设置 active 标记
     state
         .storage
         .set_active_llm_profile(&id)
         .await
-        .map_err(|e| format!("设置激活 LLM 配置失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::llm(format!("设置激活 LLM 配置失败: {e}")))?;
 
     // 2) 读取完整 profile + api_key
     let profile = state
         .storage
         .get_llm_profile(&id)
         .await
-        .map_err(|e| format!("读取激活配置失败: {e}"))?
+        .map_err(|e| crate::error::AppError::llm(format!("读取激活配置失败: {e}")))?
         .ok_or_else(|| format!("配置 {id} 不存在"))?;
 
     let api_key = keyring::get_credential(&keyring_key(&id))
-        .map_err(|e| format!("读取 API Key 失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::llm(format!("读取 API Key 失败: {e}")))?;
 
     // 3) 应用
     let config = build_config(&profile, api_key)?;
@@ -222,12 +222,12 @@ pub async fn llm_profile_set_active(
 #[tauri::command]
 pub async fn llm_profile_get_active(
     state: State<'_, AppState>,
-) -> Result<Option<LlmProfile>, String> {
+) -> Result<Option<LlmProfile>, crate::error::AppError> {
     state
         .storage
         .get_active_llm_profile()
         .await
-        .map_err(|e| format!("读取激活 LLM 配置失败: {e}"))
+        .map_err(|e| crate::error::AppError::llm(format!("读取激活 LLM 配置失败: {e}")))
 }
 
 /// 连通性测试
@@ -244,17 +244,17 @@ pub async fn llm_profile_get_active(
 pub async fn llm_profile_test(
     state: State<'_, AppState>,
     id: String,
-) -> Result<String, String> {
+) -> Result<String, crate::error::AppError> {
     // 1) 读取 profile
     let profile = state
         .storage
         .get_llm_profile(&id)
         .await
-        .map_err(|e| format!("读取配置失败: {e}"))?
+        .map_err(|e| crate::error::AppError::llm(format!("读取配置失败: {e}")))?
         .ok_or_else(|| format!("配置 {id} 不存在"))?;
 
     let api_key = keyring::get_credential(&keyring_key(&id))
-        .map_err(|e| format!("读取 API Key 失败: {e}"))?;
+        .map_err(|e| crate::error::AppError::llm(format!("读取 API Key 失败: {e}")))?;
 
     // 2) 构造 config + 临时 client
     let config = build_config(&profile, api_key)?;

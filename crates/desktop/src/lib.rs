@@ -4,6 +4,7 @@
 //! 暴露 Tauri commands 给前端调用。
 
 pub mod commands;
+pub mod error;
 pub mod events;
 pub mod monitor;
 pub mod storage;
