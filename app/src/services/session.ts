@@ -10,8 +10,8 @@ import { invoke } from './invoke'
 import { Channel } from '@tauri-apps/api/core'
 import type { SshConfig, TerminalOutputPayload } from '@/types/session'
 
-/** sessionId → 终端输出处理器 */
-const handlers = new Map<string, (p: TerminalOutputPayload) => void>()
+/** sessionId → 终端输出处理器集合（多消费者场景：如多个分屏 pane 绑定同一会话） */
+const handlers = new Map<string, Set<(p: TerminalOutputPayload) => void>>()
 /** sessionId → 待回放的缓冲（bind 前到达的输出） */
 const pending = new Map<string, TerminalOutputPayload[]>()
 
@@ -23,9 +23,9 @@ export async function connect(
 ): Promise<string> {
   const channel = new Channel<TerminalOutputPayload>()
   channel.onmessage = (p) => {
-    const h = handlers.get(p.sessionId)
-    if (h) {
-      h(p)
+    const set = handlers.get(p.sessionId)
+    if (set && set.size > 0) {
+      for (const h of set) h(p)
     } else {
       const q = pending.get(p.sessionId) ?? []
       q.push(p)
@@ -40,9 +40,14 @@ export async function connect(
   })
 }
 
-/** 绑定终端输出处理器（回放缓冲后转入实时分发） */
+/** 绑定终端输出处理器（回放缓冲后转入实时分发；后绑定的消费者不重复回放历史） */
 export function bindOutput(sessionId: string, cb: (p: TerminalOutputPayload) => void) {
-  handlers.set(sessionId, cb)
+  let set = handlers.get(sessionId)
+  if (!set) {
+    set = new Set()
+    handlers.set(sessionId, set)
+  }
+  set.add(cb)
   // 回放缓冲（有限：超出 500 条丢弃最旧）
   const q = pending.get(sessionId)
   if (q) {
@@ -52,10 +57,15 @@ export function bindOutput(sessionId: string, cb: (p: TerminalOutputPayload) => 
   }
 }
 
-/** 解绑（组件卸载时调用） */
-export function unbindOutput(sessionId: string) {
-  handlers.delete(sessionId)
-  pending.delete(sessionId)
+/** 解绑指定处理器（该会话无剩余消费者时一并清理缓冲） */
+export function unbindOutput(sessionId: string, cb: (p: TerminalOutputPayload) => void) {
+  const set = handlers.get(sessionId)
+  if (!set) return
+  set.delete(cb)
+  if (set.size === 0) {
+    handlers.delete(sessionId)
+    pending.delete(sessionId)
+  }
 }
 
 /** 终端输入 */
@@ -71,7 +81,8 @@ export async function resize(sessionId: string, cols: number, rows: number): Pro
 
 /** 断开会话 */
 export async function disconnect(sessionId: string): Promise<void> {
-  unbindOutput(sessionId)
+  handlers.delete(sessionId)
+  pending.delete(sessionId)
   return invoke<void>('session_disconnect', { sessionId })
 }
 

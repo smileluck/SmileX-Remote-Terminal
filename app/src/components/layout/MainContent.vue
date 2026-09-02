@@ -8,6 +8,7 @@
  * - settings：设置页
  * 无 active tab 时显示欢迎空状态（引导用户新建会话）。
  */
+import { computed } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
 import { Terminal2, DeviceDesktop, Robot } from '@vicons/tabler'
 import type { TabItem } from '@/types/session'
@@ -23,13 +24,25 @@ defineProps<{ tab: TabItem | null }>()
 const tabs = useTabsStore()
 const ui = useUiStore()
 const layout = useLayoutStore()
+
+/** 所有 SSH tab：常驻渲染、按需显示，保证每个 tab 的终端实例与分屏状态完全独立 */
+const sshTabs = computed(() => tabs.tabs.filter((t) => t.kind === 'ssh'))
 </script>
 
 <template>
   <div class="main-content">
+    <!-- SSH 终端：每个 tab 常驻一个独立视图，切换仅隐藏/显示（保留终端内容与会话绑定） -->
+    <div
+      v-for="t in sshTabs"
+      :key="t.id"
+      v-show="t.id === tab?.id"
+      class="tab-view"
+    >
+      <TerminalView :tab="t" />
+    </div>
+
     <template v-if="tab">
-      <TerminalView v-if="tab.kind === 'ssh'" :tab="tab" />
-      <DesktopView v-else-if="tab.kind === 'rdp' || tab.kind === 'host'" :tab="tab" />
+      <DesktopView v-if="tab.kind === 'rdp' || tab.kind === 'host'" :tab="tab" />
       <SettingsView v-else-if="tab.kind === 'settings'" />
     </template>
 
@@ -63,6 +76,12 @@ const layout = useLayoutStore()
   overflow: hidden;
   display: flex;
   background: var(--bg-app);
+}
+.tab-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
 }
 .empty-wrap {
   flex: 1;

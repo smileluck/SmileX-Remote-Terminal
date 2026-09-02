@@ -12,7 +12,7 @@ import * as sessionService from '@/services/session'
 import * as snippetsService from '@/services/snippets'
 import { Suggester } from '@/composables/useAutocomplete'
 import { useThemeStore, xtermThemeDark, xtermThemeLight } from '@/stores/theme'
-import type { SshConfig } from '@/types/session'
+import type { SshConfig, TerminalOutputPayload } from '@/types/session'
 
 export function useTerminal() {
   const themeStore = useThemeStore()
@@ -84,17 +84,36 @@ export function useTerminal() {
     }
   }
 
-  /** 注册输出分发（Channel 回调 → xterm.write） */
+  /** 当前注册的输出回调（id + 引用，按引用解绑，不影响绑定同一会话的其他终端） */
+  let boundOutput: { id: string; cb: (p: TerminalOutputPayload) => void } | null = null
+
+  /** 解绑当前输出回调 */
+  function detachOutput() {
+    if (boundOutput) {
+      sessionService.unbindOutput(boundOutput.id, boundOutput.cb)
+      boundOutput = null
+    }
+  }
+
+  /** 注册输出分发（Channel 回调 → xterm.write）；先解绑旧会话，防止其输出继续写入本终端（串台） */
   function attachOutput(id: string, t: Terminal) {
-    sessionService.bindOutput(id, (payload) => {
+    detachOutput()
+    const cb = (payload: TerminalOutputPayload) => {
       if (payload.sessionId === id) {
         t.write(new Uint8Array(payload.data))
       }
-    })
+    }
+    sessionService.bindOutput(id, cb)
+    boundOutput = { id, cb }
   }
 
-  /** 注册输入/resize 转发（幂等：xterm 事件可重复注册但建议仅一次） */
+  /** 输入监听是否已挂载（xterm onData 是累加订阅，重复挂载会导致击键多次发送） */
+  let inputAttached = false
+
+  /** 注册输入/resize 转发（幂等：仅首次调用生效） */
   function attachInput(t: Terminal) {
+    if (inputAttached) return
+    inputAttached = true
     // 用户输入 → 后端（先经补全器：拦截补全按键 / 维护行缓冲）
     t.onData((data) => {
       if (sessionId.value) {
@@ -152,13 +171,14 @@ export function useTerminal() {
   /** 断开连接 */
   async function disconnect() {
     if (sessionId.value) {
+      detachOutput()
       await sessionService.disconnect(sessionId.value).catch(() => {})
       sessionId.value = null
     }
   }
 
   onUnmounted(() => {
-    if (sessionId.value) sessionService.unbindOutput(sessionId.value)
+    detachOutput()
     suggester?.destroy()
     term.value?.dispose()
   })

@@ -50,7 +50,8 @@ watch(
 )
 
 useResizeObserver(containerRef, () => {
-  if (term.value) fit()
+  // tab 被隐藏（v-show 切走）时容器尺寸为 0，跳过无效 fit
+  if (term.value && containerRef.value?.clientWidth) fit()
 })
 
 /** 所有 tab 的活跃 SSH 会话（供 pane 绑定） */
