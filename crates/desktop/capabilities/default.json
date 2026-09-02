@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "默认权限：核心事件监听（ai_token / ai_done / session_closed / monitor_metrics 等）与窗口基础能力",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

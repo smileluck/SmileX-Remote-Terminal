@@ -111,7 +111,9 @@ pub async fn ai_chat_send(
     // 调用 ChatProvider
     let result = provider.send(&message, &ctx, on_token).await;
 
-    // 无论成功/失败/取消，都发 ai_done 让前端停止 loading
+    // 无论成功/失败/取消，都发 ai_done 让前端停止 loading。
+    // 生成结果（含失败）统一经该事件回报，命令仅表示受理——
+    // 不再把失败作为 Err 返回，避免前端事件监听与 invoke catch 双重提示。
     let _ = app.emit(
         "ai_done",
         AiDonePayload {
@@ -120,8 +122,6 @@ pub async fn ai_chat_send(
             error: result.as_ref().err().map(|e| e.to_string()),
         },
     );
-
-    result.map_err(|e| crate::error::AppError::ai(format!("{e}")))?;
     Ok(())
 }
 

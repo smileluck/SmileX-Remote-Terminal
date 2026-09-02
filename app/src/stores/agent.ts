@@ -95,7 +95,11 @@ export const useAgentStore = defineStore('agent', () => {
       }
     })
   }
-  void setupListeners()
+  void setupListeners().catch((e) => {
+    // 事件监听注册失败（如 capability 未授权）会静默丢失 ai_token/ai_done，
+    // 这里至少暴露到控制台，避免完全无感知
+    console.error('[agent] 事件监听注册失败:', e)
+  })
 
   /* ---------------- 会话绑定：跟随激活的 SSH tab ---------------- */
   watch(
@@ -144,15 +148,18 @@ export const useAgentStore = defineStore('agent', () => {
     loading.value = true
     error.value = null
     try {
+      // 生成结果（含失败）由 ai_done 事件回填气泡
       await aiService.chatSend(chatSessionId, text, buildCtx())
     } catch (e) {
+      // 兜底：invoke 本身失败（此场景不会有 ai_done 事件），错误只写入气泡，
+      // 不设置 error.value 以免与气泡双重显示
       loading.value = false
-      error.value = String(e)
+      const msg = e instanceof Error ? e.message : String(e)
       const last = messages.value[messages.value.length - 1]
       if (last && last.role === 'assistant') {
         last.pending = false
         last.error = true
-        last.content = error.value
+        last.content = msg
       }
     }
   }
