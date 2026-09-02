@@ -2,55 +2,37 @@
 /**
  * TerminalView - SSH 终端视图（支持分屏）
  *
- * - tab 未带 sessionId（从 ActivityRail 新建）：显示快速连接表单
- * - tab 已带 sessionId：分屏容器渲染 PaneTerminal（≤4 窗格，水平/垂直分割）
- * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮
+ * - tab 已带 sessionId（统一连接入口创建）：分屏容器渲染 PaneTerminal（≤4 窗格）
+ * - 无 sessionId 的窗格：显示「绑定现有会话 / 新建连接」选择器（见 PaneTerminal）
+ * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮（原地重连）
  * - 右上角工具按钮：SFTP 文件面板 / 向右分屏 / 向下分屏
  */
 import { ref, computed, onUnmounted, watch } from 'vue'
+import { NButton, NIcon, NTooltip, useMessage } from 'naive-ui'
 import {
-  NButton,
-  NInput,
-  NInputNumber,
-  NIcon,
-  NForm,
-  NFormItem,
-  NTooltip,
-  useMessage,
-} from 'naive-ui'
-import {
-  Terminal2,
   Refresh,
   Folder,
   ArrowsSplit2,
   LayoutRows,
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
-import { connectProfile } from '@/composables/useSshConnect'
-import { useTabsStore } from '@/stores/tabs'
+import { useConnectFlow } from '@/composables/useConnectFlow'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
 import FilePanel from '@/components/sftp/FilePanel.vue'
 import PaneTerminal from './PaneTerminal.vue'
-import type { TabItem, SshConfig } from '@/types/session'
+import type { TabItem } from '@/types/session'
 
 const props = defineProps<{ tab: TabItem }>()
-const tabs = useTabsStore()
 const profiles = useProfilesStore()
 const monitor = useMonitorStore()
 const message = useMessage()
+const { reconnectInTab } = useConnectFlow()
 
-const showForm = ref(!props.tab.sessionId)
 /** SFTP 文件面板开关 */
 const showFiles = ref(false)
 /** 重连中 */
 const reconnecting = ref(false)
-const config = ref<SshConfig>({
-  host: '127.0.0.1',
-  port: 22,
-  username: 'root',
-  auth: { type: 'password', value: '' },
-})
 
 /** 重连目标档案（tab 带 profileId 时可用） */
 const profile = computed(() =>
@@ -130,30 +112,7 @@ onUnmounted(() => {
   }
 })
 
-/* ---------------- 快速连接（无 sessionId 时） ---------------- */
-async function handleConnect() {
-  showForm.value = false
-  try {
-    // 直接在主 pane 中快速连接
-    const cols = 80
-    const rows = 24
-    const sid = await sessionService.connect(config.value, cols, rows)
-    panes.value[0].sessionId = sid
-    monitor.startSampling(sid)
-    tabs.updateTab(props.tab.id, {
-      title: `${config.value.host}`,
-      sessionId: sid,
-      connecting: false,
-      disconnected: false,
-    })
-  } catch (e) {
-    tabs.updateTab(props.tab.id, { error: String(e), connecting: false })
-    message.error(String(e))
-    showForm.value = true
-  }
-}
-
-/** 重新连接（基于档案） */
+/** 重新连接（基于档案，复用当前 tab） */
 async function handleReconnect() {
   if (!profile.value) {
     message.warning('该会话无关联配置，请从左侧列表重新连接')
@@ -161,9 +120,7 @@ async function handleReconnect() {
   }
   reconnecting.value = true
   try {
-    const sid = await connectProfile(profile.value)
-    tabs.updateTab(props.tab.id, { sessionId: sid, disconnected: false, error: undefined })
-    monitor.setActive(sid)
+    await reconnectInTab(props.tab, profile.value)
     message.success(`已重新连接「${profile.value.name}」`)
   } catch (e) {
     message.error(`重连失败：${e}`)
@@ -175,109 +132,79 @@ async function handleReconnect() {
 
 <template>
   <div class="terminal-view">
-    <div v-if="showForm" class="connect-form">
-      <h3 class="form-title">
-        <NIcon :component="Terminal2" />
-        SSH 连接
-      </h3>
-      <NForm label-placement="top" size="small" class="quick-form">
-        <NFormItem label="主机">
-          <NInput v-model:value="config.host" placeholder="192.168.1.10" />
-        </NFormItem>
-        <NFormItem label="端口">
-          <NInputNumber v-model:value="config.port" :min="1" :max="65535" style="width: 100%" />
-        </NFormItem>
-        <NFormItem label="用户名">
-          <NInput v-model:value="config.username" placeholder="root" />
-        </NFormItem>
-        <NFormItem label="密码">
-          <NInput
-            :value="config.auth.type === 'password' ? config.auth.value : ''"
-            type="password"
-            show-password-on="click"
-            placeholder="输入密码"
-            @update:value="(v: string) => (config.auth = { type: 'password', value: v })"
+    <div class="terminal-main">
+      <div class="split-area" :class="splitDir">
+        <template v-for="(pane, i) in panes" :key="pane.id">
+          <PaneTerminal
+            class="split-pane"
+            :style="{ flexGrow: ratios[i], flexBasis: 0 }"
+            :session-id="pane.sessionId"
+            :closable="panes.length > 1"
+            @bind="(sid: string) => bindPane(i, sid)"
+            @close="closePane(i)"
           />
-        </NFormItem>
-        <NButton type="primary" @click="handleConnect">连接</NButton>
-      </NForm>
-    </div>
-
-    <template v-else>
-      <div class="terminal-main">
-        <div class="split-area" :class="splitDir">
-          <template v-for="(pane, i) in panes" :key="pane.id">
-            <PaneTerminal
-              class="split-pane"
-              :style="{ flexGrow: ratios[i], flexBasis: 0 }"
-              :session-id="pane.sessionId"
-              :closable="panes.length > 1"
-              @bind="(sid: string) => bindPane(i, sid)"
-              @close="closePane(i)"
-            />
-            <div
-              v-if="i < panes.length - 1"
-              class="split-divider"
-              :class="splitDir"
-              @mousedown="onDividerDown($event, i)"
-            />
+          <div
+            v-if="i < panes.length - 1"
+            class="split-divider"
+            :class="splitDir"
+            @mousedown="onDividerDown($event, i)"
+          />
+        </template>
+      </div>
+      <!-- SFTP 文件面板 -->
+      <FilePanel
+        v-if="showFiles && tab.sessionId && !tab.disconnected"
+        :session-id="tab.sessionId"
+      />
+      <!-- 工具按钮 -->
+      <div class="view-tools">
+        <NTooltip v-if="tab.sessionId" placement="left">
+          <template #trigger>
+            <NButton
+              quaternary
+              circle
+              size="small"
+              :type="showFiles ? 'primary' : 'default'"
+              @click="showFiles = !showFiles"
+            >
+              <NIcon :component="Folder" />
+            </NButton>
           </template>
-        </div>
-        <!-- SFTP 文件面板 -->
-        <FilePanel
-          v-if="showFiles && tab.sessionId && !tab.disconnected"
-          :session-id="tab.sessionId"
-        />
-        <!-- 工具按钮 -->
-        <div class="view-tools">
-          <NTooltip v-if="tab.sessionId" placement="left">
-            <template #trigger>
-              <NButton
-                quaternary
-                circle
-                size="small"
-                :type="showFiles ? 'primary' : 'default'"
-                @click="showFiles = !showFiles"
-              >
-                <NIcon :component="Folder" />
-              </NButton>
-            </template>
-            文件管理（SFTP）
-          </NTooltip>
-          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
-            <template #trigger>
-              <NButton quaternary circle size="small" @click="addPane('row')">
-                <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
-              </NButton>
-            </template>
-            向右分屏
-          </NTooltip>
-          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
-            <template #trigger>
-              <NButton quaternary circle size="small" @click="addPane('column')">
-                <NIcon :component="LayoutRows" />
-              </NButton>
-            </template>
-            向下分屏
-          </NTooltip>
-        </div>
+          文件管理（SFTP）
+        </NTooltip>
+        <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+          <template #trigger>
+            <NButton quaternary circle size="small" @click="addPane('row')">
+              <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
+            </NButton>
+          </template>
+          向右分屏
+        </NTooltip>
+        <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+          <template #trigger>
+            <NButton quaternary circle size="small" @click="addPane('column')">
+              <NIcon :component="LayoutRows" />
+            </NButton>
+          </template>
+          向下分屏
+        </NTooltip>
       </div>
-      <!-- 断开遮罩 -->
-      <div v-if="tab.disconnected" class="disconnect-overlay">
-        <div class="disconnect-card">
-          <p class="disconnect-text">会话已断开</p>
-          <NButton
-            type="primary"
-            size="small"
-            :loading="reconnecting"
-            @click="handleReconnect"
-          >
-            <template #icon><NIcon :component="Refresh" /></template>
-            重新连接
-          </NButton>
-        </div>
+    </div>
+    <!-- 断开遮罩 -->
+    <div v-if="tab.disconnected" class="disconnect-overlay">
+      <div class="disconnect-card">
+        <p class="disconnect-text">会话已断开</p>
+        <NButton
+          type="primary"
+          size="small"
+          :loading="reconnecting"
+          @click="handleReconnect"
+        >
+          <template #icon><NIcon :component="Refresh" /></template>
+          重新连接
+        </NButton>
       </div>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -362,24 +289,5 @@ async function handleReconnect() {
   margin: 0;
   font-size: 13px;
   color: var(--text-secondary);
-}
-.connect-form {
-  padding: 20px 24px;
-  background: var(--bg-panel);
-  max-width: 420px;
-}
-.form-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 12px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.quick-form {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 </style>

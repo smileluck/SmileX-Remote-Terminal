@@ -6,7 +6,7 @@
  * 激活态：底部 2px 主色边框 + 背景提亮（VSCode 编辑器标签风）。
  */
 import { NIcon, NButton } from 'naive-ui'
-import { Terminal2, DeviceDesktop, Robot, Settings, X } from '@vicons/tabler'
+import { Terminal2, DeviceDesktop, Settings, X } from '@vicons/tabler'
 import { useTabsStore } from '@/stores/tabs'
 import type { SessionKind } from '@/types/session'
 import type { Component } from 'vue'
@@ -18,7 +18,6 @@ const kindIcon: Record<SessionKind, Component> = {
   ssh: Terminal2,
   rdp: DeviceDesktop,
   host: DeviceDesktop,
-  chat: Robot,
   settings: Settings,
 }
 </script>

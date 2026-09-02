@@ -50,10 +50,14 @@ pub async fn ai_chat_send(
     let provider = state.chat_provider.clone();
 
     // 上下文注入：前端只传 sessionId + include_context 标志，
-    // 终端输出与监控摘要由后端在此填充（单一可信来源）
+    // 终端输出、监控摘要与服务器身份由后端在此填充（单一可信来源）
     let mut ctx = ctx;
     if ctx.include_context {
         if let Some(sid) = ctx.session_id.clone() {
+            // 目标服务器身份（user@host:port，Agent 的命令执行目标）
+            if let Some(info) = state.session_meta.lock().await.get(&sid).cloned() {
+                ctx.server_info = Some(info);
+            }
             // 终端回滚缓冲（约最近 200 行）
             let scrollback = state
                 .terminal_scrollback

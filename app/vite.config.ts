@@ -13,7 +13,7 @@ export default defineConfig({
   // Tauri 期望前端在固定端口启动
   clearScreen: false,
   server: {
-    port: 5173,
+    port: 6173,
     strictPort: true,
   },
   // 生产构建产物到 dist/（Tauri 配置 frontendDist 指向此处）

@@ -4,17 +4,18 @@
  *
  * 功能：
  * - 名称 / 主机 / 端口 / 用户名 输入
- * - 认证方式（password / private_key）切换
+ * - 认证方式（password / private_key / private_key_mem）切换
  * - 密码或私钥口令（敏感字段，仅在保存时写入 Keyring）
- * - 仅连接（不保存）/ 保存并连接 / 仅保存 三个动作
+ * - 保存并连接 / 仅保存 两个动作（连接统一走 useConnectFlow）
  * - 编辑模式下回填字段（密码/口令不回填）
  *
  * UI：naive-ui NForm 声明式校验 + useMessage 反馈。
  *
  * 对接：
- * - services/profile.save / getSecret（持久化）
- * - services/session.connect（建立 SSH）
- * - stores/tabs.addTab（打开终端 Tab）
+ * - services/profile.save（持久化，含 Keyring 敏感字段）
+ * - composables/useConnectFlow（统一连接流程：tab 复用/断线重连）
+ *
+ * 由 ConnectDialog 弹窗承载（全局唯一的新建/编辑入口）。
  */
 import { reactive, ref, computed, onMounted } from 'vue'
 import {
@@ -32,12 +33,10 @@ import {
   type FormRules,
 } from 'naive-ui'
 import { useProfilesStore } from '@/stores/profiles'
-import { useTabsStore } from '@/stores/tabs'
-import * as sessionService from '@/services/session'
 import * as sshKeys from '@/services/sshKeys'
 import { decodeExtra, encodeExtra } from '@/types/profile'
 import type { SessionProfile, AuthType } from '@/types/profile'
-import { buildConfig } from '@/composables/useSshConnect'
+import { useConnectFlow } from '@/composables/useConnectFlow'
 
 const props = defineProps<{
   /** 编辑模式：传入 profile id；新建模式：不传 */
@@ -50,8 +49,8 @@ const emit = defineEmits<{
 }>()
 
 const profilesStore = useProfilesStore()
-const tabsStore = useTabsStore()
 const message = useMessage()
+const { connect } = useConnectFlow()
 
 /** 表单字段 */
 const form = reactive({
@@ -151,20 +150,6 @@ function buildSecret(): string | null {
   return form.privateKeyPassphrase || null
 }
 
-/** 拉取并建立连接（共用逻辑，认证细节统一走 buildConfig） */
-async function doConnect(profile: SessionProfile, secret: string | null) {
-  const config = await buildConfig(profile, secret)
-
-  const sessionId = await sessionService.connect(config, 80, 24)
-
-  // 打开终端 Tab
-  tabsStore.addTab('ssh', profile.name, sessionId)
-  // 标记最近使用
-  await profilesStore.save(profile).catch(() => {
-    /* 非关键失败：忽略 */
-  })
-}
-
 /** 统一提交入口：先校验，通过则执行 action，成功后关闭表单 */
 async function submit(action: () => Promise<unknown>) {
   try {
@@ -184,15 +169,11 @@ async function submit(action: () => Promise<unknown>) {
   }
 }
 
-/** 仅连接（不保存） */
-const onConnectOnly = () => submit(() => doConnect(buildProfile(), buildSecret()))
-
-/** 保存并连接 */
+/** 保存并连接（连接走统一流程：含 tab 复用 / 断线原地重连） */
 const onSaveAndConnect = () =>
   submit(async () => {
-    const profile = buildProfile(props.profileId)
-    const saved = await profilesStore.save(profile, buildSecret())
-    await doConnect(saved, buildSecret())
+    const saved = await profilesStore.save(buildProfile(props.profileId), buildSecret())
+    await connect(saved)
   })
 
 /** 仅保存（不连接） */
@@ -229,8 +210,6 @@ onMounted(() => {
 
 <template>
   <div class="connect-form-wrap">
-    <h3 class="form-title">{{ isEdit ? '编辑 SSH 会话' : '新建 SSH 会话' }}</h3>
-
     <NForm
       ref="formRef"
       :model="form"
@@ -326,30 +305,21 @@ onMounted(() => {
 
     <div class="actions">
       <NButton :disabled="busy" @click="onCancel">取消</NButton>
-      <NButton tertiary :disabled="busy" @click="onConnectOnly">仅连接</NButton>
-      <NButton type="primary" :loading="busy" @click="onSaveAndConnect">保存并连接</NButton>
       <NButton tertiary :disabled="busy" @click="onSaveOnly">仅保存</NButton>
+      <NButton type="primary" :loading="busy" @click="onSaveAndConnect">保存并连接</NButton>
     </div>
   </div>
 </template>
 
 <style scoped>
 .connect-form-wrap {
-  padding: 16px 18px;
-  background: var(--bg-panel);
-  border-radius: var(--radius-md);
-}
-.form-title {
-  margin: 0 0 12px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
+  /* 弹窗卡片自带背景与圆角，这里只做布局 */
+  padding: 2px 4px 0;
 }
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 14px;
-  max-width: 640px;
 }
 .col-span-2 {
   grid-column: 1 / 3;

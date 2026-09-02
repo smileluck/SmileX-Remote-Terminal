@@ -5,7 +5,7 @@
   "identifier": "com.smilex.remote-terminal",
   "build": {
     "frontendDist": "../../app/dist",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:6173",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build"
   },

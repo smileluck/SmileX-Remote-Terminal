@@ -3,7 +3,7 @@
  */
 
 /** 会话类型 */
-export type SessionKind = 'ssh' | 'rdp' | 'host' | 'chat' | 'settings'
+export type SessionKind = 'ssh' | 'rdp' | 'host' | 'settings'
 
 /** 标签数据 */
 export interface TabItem {

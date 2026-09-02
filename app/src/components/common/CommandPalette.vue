@@ -25,7 +25,7 @@ import {
 } from '@vicons/tabler'
 import * as snippetsApi from '@/services/snippets'
 import * as sessionService from '@/services/session'
-import { connectProfile } from '@/composables/useSshConnect'
+import { useConnectFlow } from '@/composables/useConnectFlow'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
 import type { CommandSnippet, CommandHistory } from '@/services/snippets'
@@ -35,6 +35,7 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 const tabs = useTabsStore()
 const profiles = useProfilesStore()
 const message = useMessage()
+const { connect } = useConnectFlow()
 
 const keyword = ref('')
 const snippets = ref<CommandSnippet[]>([])
@@ -123,14 +124,13 @@ async function removeSnippet(id: string) {
   }
 }
 
-/** 连接主机 */
+/** 连接主机（统一流程：已连接弹「切换/新开」，断线原地重连） */
 async function connectHost(profileId: string) {
   const profile = profiles.profiles.find((p) => p.id === profileId)
   if (!profile) return
+  emit('close')
   try {
-    const sid = await connectProfile(profile)
-    tabs.addTab('ssh', profile.name, sid, profile.id)
-    emit('close')
+    await connect(profile)
   } catch (e) {
     message.error(`连接失败：${e}`)
   }

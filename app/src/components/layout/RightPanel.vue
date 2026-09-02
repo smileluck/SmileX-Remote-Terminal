@@ -1,21 +1,28 @@
 <script setup lang="ts">
 /**
- * MonitorPanel - 右栏监控看版容器
+ * RightPanel - 右栏容器（Agent 助手 / 监控看版）
  *
  * 三栏布局的右栏：
+ * - 顶部页签切换：Agent 助手（关联 SSH 会话的运维 Agent）/ 监控
  * - 可拖拽左边缘调宽（240–560px，持久化到 layout store）
- * - 内容区由监控子组件填充（阶段 2：指标卡片 + 会话健康列表）
  */
 import { ref, computed } from 'vue'
 import { NIcon } from 'naive-ui'
 import { X } from '@vicons/tabler'
-import { useLayoutStore } from '@/stores/layout'
+import { useLayoutStore, type RightPanelTab } from '@/stores/layout'
 import MonitorDashboard from '@/components/monitor/MonitorDashboard.vue'
 import AlertRules from '@/components/monitor/AlertRules.vue'
+import ChatPanel from '@/components/ai/ChatPanel.vue'
 
 const layout = useLayoutStore()
 
 const width = computed(() => `${layout.monitorWidth}px`)
+
+/** 页签定义 */
+const panelTabs: { key: RightPanelTab; label: string }[] = [
+  { key: 'agent', label: 'Agent' },
+  { key: 'monitor', label: '监控' },
+]
 
 /** 拖拽调宽状态 */
 const dragging = ref(false)
@@ -40,23 +47,36 @@ function onDragStart(e: MouseEvent) {
 </script>
 
 <template>
-  <aside class="monitor-panel" :style="{ width }">
+  <aside class="right-panel" :style="{ width }">
     <div class="resize-handle" :class="{ dragging }" @mousedown="onDragStart" />
     <header class="panel-header">
-      <span class="panel-title">监控看版</span>
+      <div class="tab-switch">
+        <button
+          v-for="t in panelTabs"
+          :key="t.key"
+          class="tab-btn"
+          :class="{ active: layout.rightTab === t.key }"
+          @click="layout.setRightTab(t.key)"
+        >
+          {{ t.label }}
+        </button>
+      </div>
       <button class="close-btn" title="收起面板（⌘M）" @click="layout.toggleMonitor()">
         <NIcon :component="X" :size="14" />
       </button>
     </header>
-    <div class="panel-body">
-      <MonitorDashboard />
-      <AlertRules />
+    <div class="panel-body" :class="{ agent: layout.rightTab === 'agent' }">
+      <ChatPanel v-if="layout.rightTab === 'agent'" />
+      <template v-else>
+        <MonitorDashboard />
+        <AlertRules />
+      </template>
     </div>
   </aside>
 </template>
 
 <style scoped>
-.monitor-panel {
+.right-panel {
   position: relative;
   flex-shrink: 0;
   background: var(--bg-sidebar);
@@ -83,16 +103,34 @@ function onDragStart(e: MouseEvent) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px;
+  padding: 8px 10px 8px 14px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
-.panel-title {
-  font-size: 12px;
-  font-weight: 600;
+.tab-switch {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  padding: 2px;
+}
+.tab-btn {
+  border: none;
+  background: transparent;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  font-size: 12px;
+  padding: 3px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.12s, background-color 0.12s;
+}
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+.tab-btn.active {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-weight: 600;
 }
 .close-btn {
   display: flex;
@@ -114,5 +152,12 @@ function onDragStart(e: MouseEvent) {
   flex: 1;
   overflow-y: auto;
   padding: 10px;
+  min-height: 0;
+}
+/* Agent 面板自带内边距与滚动区，撑满高度 */
+.panel-body.agent {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
 }
 </style>

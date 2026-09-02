@@ -3,9 +3,9 @@
  * SideBar - 侧边栏（会话面板）
  *
  * Termius 风卡片化会话列表：
- * - 顶部 header（「会话」标题 + 新建按钮）
+ * - 顶部 header（「会话」标题 + 新建按钮，打开全局连接弹窗）
  * - 卡片：kind 图标 + 名称 + user@host:port + 相对时间 + 悬浮 编辑/删除
- * - 点击卡片发起连接；编辑/新建 inline 展开 ConnectForm
+ * - 点击卡片走统一连接流程（已连接弹「切换/新开」，断线原地重连）
  *
  * 已打开的 Tab 不再在此展示（移至顶部 TabBar）。
  *
@@ -18,16 +18,15 @@ import { NButton, NIcon, NPopconfirm, NEmpty, NInput, useMessage } from 'naive-u
 import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
-import { useMonitorStore } from '@/stores/monitor'
-import { connectProfile } from '@/composables/useSshConnect'
-import * as profileService from '@/services/profile'
+import { useUiStore } from '@/stores/ui'
+import { useConnectFlow } from '@/composables/useConnectFlow'
 import { decodeExtra } from '@/types/profile'
 import type { SessionProfile } from '@/types/profile'
-import ConnectForm from '@/components/common/ConnectForm.vue'
 
 const profilesStore = useProfilesStore()
 const tabsStore = useTabsStore()
-const monitorStore = useMonitorStore()
+const ui = useUiStore()
+const { connect } = useConnectFlow()
 const message = useMessage()
 
 /** profile.id → 是否有已连接（未断开）的 tab */
@@ -44,10 +43,6 @@ const kindIcon: Record<string, Component> = {
   host: BrandApple,
 }
 
-/** 是否正在显示编辑表单（profileId 非 null 表示进入编辑/新建） */
-const editingProfileId = ref<string | null>(null)
-/** 是否处于「新建」模式 */
-const creating = ref(false)
 /** 正在连接的 profile id（禁用按钮防抖） */
 const connectingId = ref<string | null>(null)
 
@@ -92,24 +87,6 @@ function toggleGroup(name: string) {
   collapsedGroups.value = s
 }
 
-/** 进入新建模式 */
-function startCreate() {
-  creating.value = true
-  editingProfileId.value = null
-}
-
-/** 进入编辑模式 */
-function startEdit(id: string) {
-  creating.value = false
-  editingProfileId.value = id
-}
-
-/** 关闭表单 */
-function closeForm() {
-  creating.value = false
-  editingProfileId.value = null
-}
-
 /** 相对时间格式化（last_used_at → 「刚刚 / x 分钟前 / …」） */
 function formatRelativeTime(ts: number): string {
   if (!ts) return '从未连接'
@@ -130,20 +107,11 @@ async function onDelete(profile: SessionProfile) {
   }
 }
 
-/** 点击会话卡片发起连接 */
+/** 点击会话卡片发起连接（统一流程：已连接弹「切换/新开」，断线原地重连） */
 async function onConnect(profile: SessionProfile) {
   connectingId.value = profile.id
   try {
-    const sessionId = await connectProfile(profile)
-
-    tabsStore.addTab(profile.kind, profile.name, sessionId, profile.id)
-    // 自动启动监控采样并设为监控目标
-    monitorStore.setActive(sessionId)
-    // 更新最近使用时间
-    await profileService.touch(profile.id).catch(() => {
-      /* 非关键失败：忽略 */
-    })
-    await profilesStore.loadAll()
+    await connect(profile)
   } catch (e) {
     message.error(`连接失败：${e}`)
   } finally {
@@ -160,7 +128,7 @@ onMounted(() => {
   <aside class="side-bar">
     <header class="section-header">
       <span class="section-title">会话</span>
-      <NButton quaternary size="tiny" circle title="新建会话" @click="startCreate">
+      <NButton quaternary size="tiny" circle title="新建会话" @click="ui.openConnectDialog()">
         <NIcon :component="Plus" />
       </NButton>
     </header>
@@ -172,13 +140,8 @@ onMounted(() => {
     </div>
 
     <div class="list-scroll">
-      <!-- 新建表单 -->
-      <div v-if="creating" class="form-slot">
-        <ConnectForm @close="closeForm" />
-      </div>
-
       <!-- 空状态 -->
-      <div v-else-if="profilesStore.profiles.length === 0" class="empty">
+      <div v-if="profilesStore.profiles.length === 0" class="empty">
         <NEmpty size="small" description="暂无会话">
           <template #extra>
             <span class="empty-hint">点击上方 + 新建</span>
@@ -207,58 +170,51 @@ onMounted(() => {
 
           <div v-show="!isGroupCollapsed(g.name)" class="group-body">
             <div v-for="p in g.profiles" :key="p.id" class="card-slot">
-          <!-- 卡片（默认） -->
-          <div
-            v-if="editingProfileId !== p.id"
-            class="profile-card"
-            :title="`${p.username}@${p.host}:${p.port}`"
-            @click="onConnect(p)"
-          >
-            <NIcon
-              :component="kindIcon[p.kind] || Terminal2"
-              class="card-icon"
-              :data-kind="p.kind"
-            />
-            <div class="card-main">
-              <div class="card-title">
-                <span
-                  class="status-dot"
-                  :class="isConnected(p.id) ? 'on' : connectingId === p.id ? 'pending' : 'off'"
+              <div
+                class="profile-card"
+                :title="`${p.username}@${p.host}:${p.port}`"
+                @click="onConnect(p)"
+              >
+                <NIcon
+                  :component="kindIcon[p.kind] || Terminal2"
+                  class="card-icon"
+                  :data-kind="p.kind"
                 />
-                {{ p.name }}
-              </div>
-              <div class="card-meta">{{ p.username }}@{{ p.host }}:{{ p.port }}</div>
-              <div class="card-sub">
-                <span v-if="connectingId === p.id" class="connecting">● 连接中…</span>
-                <span v-else class="time">{{ formatRelativeTime(p.last_used_at) }}</span>
-              </div>
-            </div>
-            <div class="card-actions">
-              <NButton text size="tiny" title="编辑" @click.stop="startEdit(p.id)">
-                <NIcon :component="Pencil" />
-              </NButton>
-              <NPopconfirm @positive-click="onDelete(p)">
-                <template #trigger>
-                  <NButton
-                    text
-                    size="tiny"
-                    class="danger"
-                    title="删除"
-                    @click.stop
-                  >
-                    <NIcon :component="Trash" />
+                <div class="card-main">
+                  <div class="card-title">
+                    <span
+                      class="status-dot"
+                      :class="isConnected(p.id) ? 'on' : connectingId === p.id ? 'pending' : 'off'"
+                    />
+                    {{ p.name }}
+                  </div>
+                  <div class="card-meta">{{ p.username }}@{{ p.host }}:{{ p.port }}</div>
+                  <div class="card-sub">
+                    <span v-if="connectingId === p.id" class="connecting">● 连接中…</span>
+                    <span v-else class="time">{{ formatRelativeTime(p.last_used_at) }}</span>
+                  </div>
+                </div>
+                <div class="card-actions">
+                  <NButton text size="tiny" title="编辑" @click.stop="ui.openConnectDialog(p.id)">
+                    <NIcon :component="Pencil" />
                   </NButton>
-                </template>
-                确定删除会话「{{ p.name }}」吗？
-              </NPopconfirm>
+                  <NPopconfirm @positive-click="onDelete(p)">
+                    <template #trigger>
+                      <NButton
+                        text
+                        size="tiny"
+                        class="danger"
+                        title="删除"
+                        @click.stop
+                      >
+                        <NIcon :component="Trash" />
+                      </NButton>
+                    </template>
+                    确定删除会话「{{ p.name }}」吗？
+                  </NPopconfirm>
+                </div>
+              </div>
             </div>
-          </div>
-
-          <!-- 编辑表单（inline） -->
-          <div v-else class="form-slot">
-            <ConnectForm :profile-id="p.id" @close="closeForm" />
-          </div>
-        </div>
           </div>
         </div>
       </div>
@@ -449,8 +405,5 @@ onMounted(() => {
 }
 .card-actions .danger:hover {
   --n-text-color: var(--danger) !important;
-}
-.form-slot {
-  padding: 4px 0;
 }
 </style>

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 /**
- * MessageBubble - 单条消息（Markdown 渲染）
+ * MessageBubble - 单条消息
  *
- * 用户消息右对齐，AI 消息左对齐 + Markdown 渲染。
+ * - user：右对齐纯文本
+ * - assistant：左对齐 Markdown 渲染；```run 块渲染为可执行命令卡片（RunBlock）
+ * - tool：命令执行结果，终端风格回显
  * 深色主题，代码高亮使用 github-dark。
  */
 import { computed } from 'vue'
@@ -10,6 +12,7 @@ import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import type { ChatMessage } from '@/types/ai'
+import RunBlock from './RunBlock.vue'
 
 const props = defineProps<{ message: ChatMessage }>()
 
@@ -31,15 +34,62 @@ const md = new MarkdownIt({
   },
 })
 
-const html = computed(() => md.render(props.message.content || ''))
+/** ```run 块标记（agent 命令执行协议，流式生成中只匹配已闭合的块） */
+const RUN_RE = /```run\s*\n([\s\S]*?)```/g
+
+interface Segment {
+  type: 'md' | 'run'
+  text: string
+  /** run 段在消息内的序号（与 agent store runStates key 对应） */
+  index: number
+}
+
+/** 把 assistant 消息拆成 markdown 段与 run 命令块（保持顺序） */
+const segments = computed<Segment[]>(() => {
+  if (props.message.role !== 'assistant') return []
+  const content = props.message.content || ''
+  const list: Segment[] = []
+  let last = 0
+  let runIdx = 0
+  for (const m of content.matchAll(RUN_RE)) {
+    const idx = m.index ?? 0
+    if (idx > last) list.push({ type: 'md', text: content.slice(last, idx), index: -1 })
+    list.push({ type: 'run', text: m[1].trim(), index: runIdx })
+    runIdx++
+    last = idx + m[0].length
+  }
+  if (last < content.length) list.push({ type: 'md', text: content.slice(last), index: -1 })
+  return list
+})
+
+function renderMd(text: string): string {
+  return md.render(text)
+}
 </script>
 
 <template>
   <div class="message" :class="message.role">
     <div class="bubble" :class="{ error: message.error, pending: message.pending }">
-      <div v-if="message.role === 'assistant'" class="md" v-html="html"></div>
+      <!-- 命令执行结果：终端风格回显 -->
+      <template v-if="message.role === 'tool'">
+        <pre class="tool-out">{{ message.content }}</pre>
+      </template>
+      <!-- assistant：markdown + run 命令卡片 -->
+      <template v-else-if="message.role === 'assistant'">
+        <template v-for="(seg, i) in segments" :key="i">
+          <div v-if="seg.type === 'md' && seg.text.trim()" class="md" v-html="renderMd(seg.text)"></div>
+          <RunBlock
+            v-else-if="seg.type === 'run'"
+            :message-id="message.id"
+            :index="seg.index"
+            :command="seg.text"
+            :disabled="message.pending"
+          />
+        </template>
+        <span v-if="message.pending && segments.length === 0" class="cursor">▋</span>
+      </template>
       <template v-else>{{ message.content }}</template>
-      <span v-if="message.pending" class="cursor">▋</span>
+      <span v-if="message.pending && message.role !== 'assistant'" class="cursor">▋</span>
     </div>
   </div>
 </template>
@@ -52,11 +102,12 @@ const html = computed(() => md.render(props.message.content || ''))
 .message.user {
   justify-content: flex-end;
 }
-.message.assistant {
+.message.assistant,
+.message.tool {
   justify-content: flex-start;
 }
 .bubble {
-  max-width: 80%;
+  max-width: 92%;
   padding: 10px 14px;
   border-radius: var(--radius-lg);
   background: var(--bg-panel);
@@ -69,6 +120,11 @@ const html = computed(() => md.render(props.message.content || ''))
   background: var(--primary-bg);
   border: 1px solid rgba(58, 122, 254, 0.3);
 }
+.message.tool .bubble {
+  background: #0d1117;
+  border: 1px solid var(--border-color);
+  max-width: 100%;
+}
 .bubble.error {
   background: rgba(248, 113, 113, 0.1);
   color: var(--danger);
@@ -76,6 +132,14 @@ const html = computed(() => md.render(props.message.content || ''))
 }
 .bubble.pending .md {
   opacity: 0.95;
+}
+.tool-out {
+  margin: 0;
+  font-family: ui-monospace, Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .md :deep(p) {
   margin: 4px 0;

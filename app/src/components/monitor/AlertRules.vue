@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * AlertRules - 告警规则管理（MonitorPanel 底部区块）
+ * AlertRules - 告警规则管理（RightPanel 监控页签底部区块）
  *
  * 规则 CRUD + 最近触发记录；触发通知由 SessionEvents 全局监听。
  */

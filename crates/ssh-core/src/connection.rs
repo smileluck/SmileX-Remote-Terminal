@@ -30,7 +30,7 @@ use crate::known_hosts::{
 
 /// SSH 认证方式
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type", content = "value")]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum AuthMethod {
     /// 密码认证（密码从应用层 OS Keyring 取后传入）
     Password(String),
@@ -52,6 +52,7 @@ pub enum AuthMethod {
 
 /// SSH 连接配置（从前端会话配置传入）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectionConfig {
     /// 目标主机（IP 或域名）
     pub host: String,
@@ -574,5 +575,43 @@ impl SessionManager {
         for (_, session) in sessions.drain() {
             let _ = session.disconnect().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 前端（app/src/types/session.ts、useSshConnect.ts）实际发送的 JSON 形状，
+    /// 锁定 serde tag/字段命名，防止再次出现大小写不匹配。
+    #[test]
+    fn deserializes_frontend_auth_shapes() {
+        let password: AuthMethod =
+            serde_json::from_str(r#"{"type":"password","value":"pw"}"#).unwrap();
+        assert!(matches!(password, AuthMethod::Password(p) if p == "pw"));
+
+        let key: AuthMethod = serde_json::from_str(
+            r#"{"type":"private_key","value":{"path":"/id_ed25519","passphrase":"pp"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(key, AuthMethod::PrivateKey { ref path, ref passphrase }
+            if path == "/id_ed25519" && passphrase.as_deref() == Some("pp")));
+
+        let key_mem: AuthMethod = serde_json::from_str(
+            r#"{"type":"private_key_mem","value":{"key_data":"PEM"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(key_mem, AuthMethod::PrivateKeyMem { ref key_data, passphrase }
+            if key_data == "PEM" && passphrase.is_none()));
+    }
+
+    /// acceptFirstHostKey 为 camelCase（Tauri 只转换顶层参数名，不递归转换嵌套字段）
+    #[test]
+    fn deserializes_camel_case_config_fields() {
+        let cfg: ConnectionConfig = serde_json::from_str(
+            r#"{"host":"h","port":22,"username":"u","auth":{"type":"password","value":"pw"},"acceptFirstHostKey":true}"#,
+        )
+        .unwrap();
+        assert!(cfg.accept_first_host_key);
     }
 }

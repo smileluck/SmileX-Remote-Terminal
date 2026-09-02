@@ -7,8 +7,8 @@
  *
  * 布局（水平左中右三栏）：
  * - 左：ActivityRail（功能导航窄栏）+ SideBar（会话管理，可折叠）
- * - 中：TabBar + MainContent（终端 / 远程桌面 / AI / 设置）
- * - 右：MonitorPanel（监控看版，可折叠/调宽）
+ * - 中：TabBar + MainContent（终端 / 远程桌面 / 设置）
+ * - 右：RightPanel（Agent 助手 / 监控看版，可折叠/调宽/切页签）
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
@@ -23,18 +23,26 @@ import {
 import { useThemeStore } from '@/stores/theme'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
+import { useUiStore } from '@/stores/ui'
+import { useAgentStore } from '@/stores/agent'
 import TopBar from '@/components/layout/TopBar.vue'
 import SideBar from '@/components/layout/SideBar.vue'
 import MainContent from '@/components/layout/MainContent.vue'
 import ActivityRail from '@/components/layout/ActivityRail.vue'
 import TabBar from '@/components/layout/TabBar.vue'
-import MonitorPanel from '@/components/layout/MonitorPanel.vue'
+import RightPanel from '@/components/layout/RightPanel.vue'
 import SessionEvents from '@/components/layout/SessionEvents.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
+import ConnectDialog from '@/components/common/ConnectDialog.vue'
 
 const tabsStore = useTabsStore()
 const layoutStore = useLayoutStore()
+const uiStore = useUiStore()
+// 实例化 agent store：注册 ai_token/ai_done 监听与 SSH 会话跟随（App 级一次）
+useAgentStore()
+
 const activeTab = computed(() => tabsStore.activeTab)
+
 /** ⌘K 命令面板 */
 const showPalette = ref(false)
 
@@ -49,12 +57,20 @@ function onKeydown(e: KeyboardEvent) {
   } else if (key === 'm') {
     e.preventDefault()
     layoutStore.toggleMonitor()
+  } else if (key === 'j') {
+    e.preventDefault()
+    // 右栏已在 Agent 页签时收起，否则打开并切到 Agent
+    if (layoutStore.monitorVisible && layoutStore.rightTab === 'agent') {
+      layoutStore.toggleMonitor()
+    } else {
+      layoutStore.openRightPanel('agent')
+    }
   } else if (key === 'k') {
     e.preventDefault()
     showPalette.value = !showPalette.value
   } else if (key === 't') {
     e.preventDefault()
-    tabsStore.addTab('ssh', '新 SSH 会话')
+    uiStore.openConnectDialog()
   } else if (key === 'w') {
     e.preventDefault()
     if (tabsStore.activeId) tabsStore.closeTab(tabsStore.activeId)
@@ -163,6 +179,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
             <div class="app-container">
               <SessionEvents />
               <CommandPalette v-if="showPalette" @close="showPalette = false" />
+              <ConnectDialog />
               <TopBar />
               <div class="app-body">
                 <ActivityRail />
@@ -171,7 +188,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
                   <TabBar />
                   <MainContent :tab="activeTab" />
                 </div>
-                <MonitorPanel v-if="layoutStore.monitorVisible" />
+                <RightPanel v-if="layoutStore.monitorVisible" />
               </div>
             </div>
           </NNotificationProvider>

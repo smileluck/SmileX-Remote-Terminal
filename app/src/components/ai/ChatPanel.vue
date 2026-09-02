@@ -1,40 +1,53 @@
 <script setup lang="ts">
 /**
- * ChatPanel - AI 助手面板
+ * ChatPanel - AI Agent 助手面板（右栏页签）
  *
- * 消息列表 + 输入框 + 上下文开关。
- * 深色主题，背景与全局对齐。
+ * 与远程服务器绑定（跟随激活的 SSH tab，可手动切换）：
+ * - 未连接：空状态引导新建连接，输入禁用
+ * - 已连接：上下文（终端输出/监控/服务器身份）与命令执行均作用于绑定的服务器；
+ *   AI 回复中的命令块可经确认（或自动模式）执行，结果回传继续分析
+ *
+ * 对话状态在 agent store（全局），切换页签/收起面板不丢对话。
  */
-import { ref, computed } from 'vue'
-import { NButton, NInput, NPopconfirm, NIcon, NSelect } from 'naive-ui'
-import { Send, PlayerStop, Trash } from '@vicons/tabler'
-import { useChat } from '@/composables/useChat'
+import { ref, computed, nextTick, watch } from 'vue'
+import { NButton, NInput, NPopconfirm, NIcon, NSelect, NTag, NSwitch, NTooltip } from 'naive-ui'
+import { Send, PlayerStop, Trash, PlugConnected } from '@vicons/tabler'
+import { useAgentStore } from '@/stores/agent'
 import { useTabsStore } from '@/stores/tabs'
+import { useProfilesStore } from '@/stores/profiles'
+import { useUiStore } from '@/stores/ui'
 import MessageBubble from './MessageBubble.vue'
 import ContextToggle from './ContextToggle.vue'
 
-const { messages, loading, error, includeContext, sshSessionId, send, abort, clear } = useChat()
-
+const agent = useAgentStore()
 const tabs = useTabsStore()
-const input = ref('')
+const profiles = useProfilesStore()
+const ui = useUiStore()
 
-/** 可选作上下文的活跃 SSH 会话 */
+const input = ref('')
+const listRef = ref<HTMLElement | null>(null)
+
+/** 是否已绑定可用的 SSH 会话 */
+const connected = computed(() => !!agent.sshSessionId)
+
+/** 可绑定的活跃 SSH 会话（多会话时手动切换） */
 const sshOptions = computed(() =>
   tabs.tabs
     .filter((t) => t.kind === 'ssh' && t.sessionId && !t.disconnected)
     .map((t) => ({ label: t.title, value: t.sessionId! })),
 )
 
-/** 默认跟随激活的 SSH tab */
-const activeSsh = computed(() => {
-  const t = tabs.activeTab
-  return t?.kind === 'ssh' && t.sessionId && !t.disconnected ? t.sessionId : null
+/** 绑定服务器的展示名：user@host（回退 tab 标题） */
+const serverLabel = computed(() => {
+  const tab = tabs.tabs.find((t) => t.sessionId === agent.sshSessionId)
+  if (!tab) return ''
+  const profile = tab.profileId ? profiles.findById(tab.profileId) : null
+  return profile ? `${profile.username}@${profile.host}` : tab.title
 })
-if (!sshSessionId.value) sshSessionId.value = activeSsh.value
 
 function handleSend() {
-  if (!input.value.trim()) return
-  send(input.value)
+  if (!input.value.trim() || !connected.value) return
+  agent.send(input.value)
   input.value = ''
 }
 
@@ -44,39 +57,69 @@ function handleKeydown(e: KeyboardEvent) {
     handleSend()
   }
 }
+
+/** 新消息时滚动到底部 */
+watch(
+  () => agent.messages.length,
+  async () => {
+    await nextTick()
+    if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
+  },
+)
 </script>
 
 <template>
   <div class="chat-panel">
     <header class="chat-header">
-      <span class="chat-title">AI 助手</span>
+      <NTag v-if="connected" size="small" type="success" :bordered="false" class="server-tag">
+        {{ serverLabel }}
+      </NTag>
       <NSelect
-        v-if="includeContext && sshOptions.length"
-        v-model:value="sshSessionId"
+        v-if="connected && sshOptions.length > 1"
+        v-model:value="agent.sshSessionId"
         size="tiny"
         :options="sshOptions"
         placeholder="选择会话"
         class="ctx-select"
       />
-      <ContextToggle v-model="includeContext" />
-      <NPopconfirm @positive-click="clear">
+      <div class="header-spacer" />
+      <ContextToggle v-model="agent.includeContext" />
+      <NTooltip placement="bottom">
+        <template #trigger>
+          <div class="auto-run">
+            <NSwitch v-model:value="agent.autoRun" size="small" />
+            <span class="auto-run-label">自动执行</span>
+          </div>
+        </template>
+        开启后 AI 生成的命令将直接在服务器执行（危险命令仍需手动确认）
+      </NTooltip>
+      <NPopconfirm @positive-click="agent.clear">
         <template #trigger>
           <NButton quaternary size="small" title="清空对话">
             <template #icon><NIcon :component="Trash" /></template>
-            清空
           </NButton>
         </template>
         确定清空所有对话？
       </NPopconfirm>
     </header>
 
-    <div class="message-list">
-      <div v-if="messages.length === 0" class="empty">
-        <p class="empty-title">向 AI 提问运维问题</p>
-        <p class="empty-hint">可开启「附带上下文」结合当前 SSH 终端输出作答</p>
+    <!-- 未连接：引导先建立 SSH 连接 -->
+    <div v-if="!connected" class="message-list">
+      <div class="empty">
+        <NIcon :component="PlugConnected" :size="36" class="empty-icon" />
+        <p class="empty-title">请先连接 SSH 服务器</p>
+        <p class="empty-hint">连接后 Agent 可结合终端上下文分析问题，<br />并经确认在服务器上执行命令</p>
+        <NButton type="primary" size="small" @click="ui.openConnectDialog()">新建连接</NButton>
       </div>
-      <MessageBubble v-for="msg in messages" :key="msg.id" :message="msg" />
-      <div v-if="error" class="error">{{ error }}</div>
+    </div>
+
+    <div v-else ref="listRef" class="message-list">
+      <div v-if="agent.messages.length === 0" class="empty">
+        <p class="empty-title">向 Agent 提问运维问题</p>
+        <p class="empty-hint">基于「{{ serverLabel }}」的终端输出与监控指标作答，<br />需要更多信息时 Agent 会给出可执行的命令</p>
+      </div>
+      <MessageBubble v-for="msg in agent.messages" :key="msg.id" :message="msg" />
+      <div v-if="agent.error" class="error">{{ agent.error }}</div>
     </div>
 
     <div class="input-area">
@@ -84,15 +127,15 @@ function handleKeydown(e: KeyboardEvent) {
         v-model:value="input"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 6 }"
-        :disabled="loading"
-        placeholder="输入问题（Enter 发送，Shift+Enter 换行）"
+        :disabled="agent.loading || !connected"
+        :placeholder="connected ? '输入问题（Enter 发送，Shift+Enter 换行）' : '请先连接 SSH 服务器'"
         @keydown="handleKeydown"
       />
-      <NButton v-if="!loading" type="primary" @click="handleSend">
+      <NButton v-if="!agent.loading" type="primary" :disabled="!connected" @click="handleSend">
         <template #icon><NIcon :component="Send" /></template>
         发送
       </NButton>
-      <NButton v-else type="error" @click="abort">
+      <NButton v-else type="error" @click="agent.abort">
         <template #icon><NIcon :component="PlayerStop" /></template>
         停止
       </NButton>
@@ -107,42 +150,68 @@ function handleKeydown(e: KeyboardEvent) {
   width: 100%;
   height: 100%;
   background: var(--bg-app);
+  min-height: 0;
 }
 .chat-header {
   display: flex;
   align-items: center;
-  padding: 8px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border-color);
-  gap: 12px;
+  gap: 10px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
-.chat-title {
-  font-weight: 600;
+.header-spacer {
   flex: 1;
-  color: var(--text-primary);
-  font-size: 14px;
+}
+.server-tag {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, ui-monospace, monospace);
 }
 .ctx-select {
-  width: 140px;
+  width: 120px;
   flex-shrink: 0;
+}
+.auto-run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.auto-run-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 .message-list {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  min-height: 0;
 }
 .empty {
   text-align: center;
   margin-top: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.empty-icon {
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
 }
 .empty-title {
   color: var(--text-secondary);
   font-size: 14px;
+  margin: 0;
 }
 .empty-hint {
   font-size: 12px;
-  margin-top: 8px;
   color: var(--text-tertiary);
+  margin: 0 0 10px;
+  line-height: 1.7;
 }
 .error {
   color: var(--danger);

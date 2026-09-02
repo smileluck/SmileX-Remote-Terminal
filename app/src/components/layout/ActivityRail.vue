@@ -2,14 +2,21 @@
 /**
  * ActivityRail - 左侧活动栏（Termius 风）
  *
- * 56px 窄竖栏，承载「新建会话」快捷入口：
- * SSH / RDP / AI 三枚图标按钮 + 底部设置入口（单例）。
+ * 56px 窄竖栏，承载快捷入口：
+ * - 新建 SSH：打开全局连接弹窗（唯一新建入口）
+ * - 新建 RDP：开远程桌面 tab（内含连接表单）
+ * - AI 助手：打开右栏 Agent 页签
+ * - 底部设置入口（单例 tab）
  */
 import { NButton, NIcon, NTooltip } from 'naive-ui'
 import { Terminal2, DeviceDesktop, Robot, Settings } from '@vicons/tabler'
 import { useTabsStore } from '@/stores/tabs'
+import { useUiStore } from '@/stores/ui'
+import { useLayoutStore } from '@/stores/layout'
 
 const tabs = useTabsStore()
+const ui = useUiStore()
+const layout = useLayoutStore()
 
 /** 打开设置 Tab（单例：已存在则激活，否则新建） */
 function openSettings() {
@@ -24,11 +31,11 @@ function openSettings() {
     <div class="rail-group">
       <NTooltip placement="right">
         <template #trigger>
-          <NButton quaternary circle class="rail-btn" @click="tabs.addTab('ssh', '新 SSH 会话')">
+          <NButton quaternary circle class="rail-btn" @click="ui.openConnectDialog()">
             <template #icon><NIcon :component="Terminal2" /></template>
           </NButton>
         </template>
-        新建 SSH 终端
+        新建 SSH 连接
       </NTooltip>
 
       <NTooltip placement="right">
@@ -42,7 +49,13 @@ function openSettings() {
 
       <NTooltip placement="right">
         <template #trigger>
-          <NButton quaternary circle class="rail-btn" @click="tabs.addTab('chat', 'AI 助手')">
+          <NButton
+            quaternary
+            circle
+            class="rail-btn"
+            :class="{ active: layout.monitorVisible && layout.rightTab === 'agent' }"
+            @click="layout.openRightPanel('agent')"
+          >
             <template #icon><NIcon :component="Robot" /></template>
           </NButton>
         </template>
@@ -87,5 +100,8 @@ function openSettings() {
 }
 .rail-btn:hover {
   color: var(--text-primary);
+}
+.rail-btn.active {
+  color: var(--primary);
 }
 </style>

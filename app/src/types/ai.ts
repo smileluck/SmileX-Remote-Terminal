@@ -15,12 +15,18 @@ export interface AiContext {
   includeContext: boolean
 }
 
+/** run 命令块的执行状态（key: `${messageId}#${index}`） */
+export interface RunState {
+  status: 'running' | 'done' | 'error'
+  output?: string
+}
+
 /** 对话消息（UI 展示用） */
 export interface ChatMessage {
   /** 消息 ID */
   id: string
-  /** 角色 */
-  role: 'user' | 'assistant' | 'system'
+  /** 角色（tool = 命令执行结果，仅前端展示层；发往 LLM 时作为 user 消息） */
+  role: 'user' | 'assistant' | 'system' | 'tool'
   /** 内容 */
   content: string
   /** 时间戳 */

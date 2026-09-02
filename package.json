@@ -13,6 +13,6 @@
     "dev": "pnpm --filter app dev",
     "build": "pnpm --filter app build",
     "preview": "pnpm --filter app preview",
-    "tauri": "cargo tauri"
+    "tauri": "app/node_modules/.bin/tauri"
   }
 }

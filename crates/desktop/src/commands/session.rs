@@ -149,6 +149,13 @@ pub async fn session_connect(
         .await
         .insert(session_id.clone(), stats.clone());
 
+    // 注册服务器身份（AI 上下文注入用：user@host:port）
+    state
+        .session_meta
+        .lock()
+        .await
+        .insert(session_id.clone(), format!("{}@{}:{}", config.username, config.host, config.port));
+
     // 5) 拉起推送 task：从 mpsc 消费数据 → 经 ipc::Channel 点对点推送
     //    （相比全局 emit，避免高频终端输出的跨窗口广播与重复序列化）
     //    channel_ids / terminal_controls 清理由 session_disconnect 统一负责
@@ -310,6 +317,8 @@ pub async fn session_disconnect(
     state.sftp_clients.lock().await.remove(&session_id);
     // 清理终端回滚缓冲
     state.terminal_scrollback.lock().await.remove(&session_id);
+    // 清理服务器身份
+    state.session_meta.lock().await.remove(&session_id);
 
     // 断开并移除会话
     state

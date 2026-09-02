@@ -5,7 +5,6 @@
  * 按 tab.kind 渲染对应视图：
  * - ssh：SSH 终端
  * - rdp / host：远程桌面
- * - chat：AI 助手
  * - settings：设置页
  * 无 active tab 时显示欢迎空状态（引导用户新建会话）。
  */
@@ -13,14 +12,17 @@ import { NButton, NIcon } from 'naive-ui'
 import { Terminal2, DeviceDesktop, Robot } from '@vicons/tabler'
 import type { TabItem } from '@/types/session'
 import { useTabsStore } from '@/stores/tabs'
+import { useUiStore } from '@/stores/ui'
+import { useLayoutStore } from '@/stores/layout'
 import BrandMark from '@/components/common/BrandMark.vue'
 import TerminalView from '@/components/terminal/TerminalView.vue'
 import DesktopView from '@/components/desktop/DesktopView.vue'
-import ChatPanel from '@/components/ai/ChatPanel.vue'
 import SettingsView from '@/components/settings/SettingsView.vue'
 
 defineProps<{ tab: TabItem | null }>()
 const tabs = useTabsStore()
+const ui = useUiStore()
+const layout = useLayoutStore()
 </script>
 
 <template>
@@ -28,7 +30,6 @@ const tabs = useTabsStore()
     <template v-if="tab">
       <TerminalView v-if="tab.kind === 'ssh'" :tab="tab" />
       <DesktopView v-else-if="tab.kind === 'rdp' || tab.kind === 'host'" :tab="tab" />
-      <ChatPanel v-else-if="tab.kind === 'chat'" :tab="tab" />
       <SettingsView v-else-if="tab.kind === 'settings'" />
     </template>
 
@@ -38,7 +39,7 @@ const tabs = useTabsStore()
         <h2>开始你的第一个连接</h2>
         <p class="empty-hint">SSH 终端 · 远程桌面 · AI 运维助手</p>
         <div class="empty-actions">
-          <NButton type="primary" size="large" @click="tabs.addTab('ssh', '新 SSH 会话')">
+          <NButton type="primary" size="large" @click="ui.openConnectDialog()">
             <template #icon><NIcon :component="Terminal2" /></template>
             新建 SSH
           </NButton>
@@ -46,7 +47,7 @@ const tabs = useTabsStore()
             <template #icon><NIcon :component="DeviceDesktop" /></template>
             远程桌面
           </NButton>
-          <NButton size="large" @click="tabs.addTab('chat', 'AI 助手')">
+          <NButton size="large" @click="layout.openRightPanel('agent')">
             <template #icon><NIcon :component="Robot" /></template>
             AI 助手
           </NButton>

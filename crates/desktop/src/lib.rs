@@ -79,6 +79,8 @@ pub struct AppState {
     pub sftp_clients: Mutex<HashMap<String, ssh_core::sftp::SftpClient>>,
     /// sessionId → 终端回滚缓冲（AI 上下文注入用，约最近 200 行）
     pub terminal_scrollback: Mutex<HashMap<String, Arc<Mutex<String>>>>,
+    /// sessionId → 服务器身份（"user@host:port"，AI 上下文注入用）
+    pub session_meta: Mutex<HashMap<String, String>>,
 }
 
 impl AppState {
@@ -96,6 +98,7 @@ impl AppState {
             host_key_awaits: Arc::new(Mutex::new(HashMap::new())),
             sftp_clients: Mutex::new(HashMap::new()),
             terminal_scrollback: Mutex::new(HashMap::new()),
+            session_meta: Mutex::new(HashMap::new()),
         }
     }
 
@@ -116,6 +119,7 @@ impl AppState {
         self.terminal_stats.lock().await.clear();
         self.sftp_clients.lock().await.clear();
         self.terminal_scrollback.lock().await.clear();
+        self.session_meta.lock().await.clear();
         tracing::info!("会话清理完成");
     }
 }
