@@ -20,7 +20,11 @@ export async function buildConfig(
   const extra = decodeExtra(profile.extra)
   let authPayload
   if (profile.auth_type === 'password') {
-    authPayload = { type: 'password', value: secret || '' }
+    // 空密码快速失败：避免静默发送空串后被服务器以"认证被拒"误导排查方向
+    if (!secret) {
+      throw new Error('未设置密码：请编辑会话填写密码后重试')
+    }
+    authPayload = { type: 'password', value: secret }
   } else if (profile.auth_type === 'private_key_mem' && extra.ssh_key_id) {
     // 密钥管理器中的密钥：从 OS Keyring 读取私钥，内存传递
     const keyData = await getPrivateKey(extra.ssh_key_id)

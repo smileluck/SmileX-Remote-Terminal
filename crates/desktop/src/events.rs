@@ -5,7 +5,11 @@
 use serde::{Deserialize, Serialize};
 
 /// `terminal_output` 事件 payload
+///
+/// 前端（app/src/types/session.ts）读 camelCase `sessionId`，
+/// 经 `Channel::send` 序列化不做自动命名转换，须显式 rename。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalOutputPayload {
     /// 会话 ID
     pub session_id: String,
@@ -14,7 +18,10 @@ pub struct TerminalOutputPayload {
 }
 
 /// `desktop_frame` 事件 payload
+///
+/// 前端（app/src/types/desktop.ts）读 camelCase `sessionId`/`keyFrame`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopFramePayload {
     /// 会话 ID
     pub session_id: String,
@@ -31,7 +38,10 @@ pub struct DesktopFramePayload {
 }
 
 /// `ai_token` 事件 payload（流式 token）
+///
+/// 前端（app/src/types/ai.ts、stores/agent.ts）读 camelCase `sessionId`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AiTokenPayload {
     /// 会话 ID
     pub session_id: String,
@@ -40,7 +50,10 @@ pub struct AiTokenPayload {
 }
 
 /// `ai_done` 事件 payload（响应结束）
+///
+/// 前端（app/src/types/ai.ts、stores/agent.ts）读 camelCase `sessionId`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AiDonePayload {
     /// 会话 ID
     pub session_id: String,
@@ -117,4 +130,75 @@ pub struct AlertFiredPayload {
     pub op: String,
     /// 触发时间戳（毫秒）
     pub timestamp_ms: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 前端读取这些 payload 的字段名是 camelCase（ipc::Channel / emit 序列化
+    /// 不做自动命名转换），锁定字段命名，防止再次出现 session_id/sessionId
+    /// 不匹配导致输出被静默丢弃。
+    #[test]
+    fn payloads_serialize_to_camel_case() {
+        let terminal = TerminalOutputPayload {
+            session_id: "s1".into(),
+            data: vec![1, 2],
+        };
+        let v = serde_json::to_value(&terminal).unwrap();
+        assert_eq!(v["sessionId"], "s1");
+        assert!(v.get("session_id").is_none());
+
+        let frame = DesktopFramePayload {
+            session_id: "s1".into(),
+            seq: 1,
+            width: 2,
+            height: 3,
+            rgba: vec![0],
+            key_frame: true,
+        };
+        let v = serde_json::to_value(&frame).unwrap();
+        assert_eq!(v["sessionId"], "s1");
+        assert_eq!(v["keyFrame"], true);
+
+        let token = AiTokenPayload {
+            session_id: "chat-1".into(),
+            token: "hi".into(),
+        };
+        let v = serde_json::to_value(&token).unwrap();
+        assert_eq!(v["sessionId"], "chat-1");
+
+        let done = AiDonePayload {
+            session_id: "chat-1".into(),
+            success: true,
+            error: None,
+        };
+        let v = serde_json::to_value(&done).unwrap();
+        assert_eq!(v["sessionId"], "chat-1");
+    }
+
+    /// monitor/alert 事件前端读 snake_case（stores/monitor.ts 读 session_id），
+    /// 两侧约定一致，不得改成 camelCase。
+    #[test]
+    fn monitor_payloads_stay_snake_case() {
+        let metrics = MonitorMetricsPayload {
+            session_id: "s1".into(),
+            timestamp_ms: 1,
+            latency_ms: None,
+            cpu_percent: None,
+            mem_total_bytes: 1,
+            mem_used_bytes: 1,
+            mem_percent: 0.0,
+            swap_total_bytes: 0,
+            swap_used_bytes: 0,
+            load1: 0.0,
+            uptime_s: 1,
+            net_rx_bps: 0.0,
+            net_tx_bps: 0.0,
+            disks: vec![],
+            error: None,
+        };
+        let v = serde_json::to_value(&metrics).unwrap();
+        assert_eq!(v["session_id"], "s1");
+    }
 }

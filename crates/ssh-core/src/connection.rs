@@ -303,12 +303,32 @@ impl SshSession {
             .map_err(|e| Error::Connect(format!("SSH 连接失败 {addr_str}: {e}")))?;
 
         // 4) 认证（按分支调用对应 API）
+        let auth_method_name = match &config.auth {
+            AuthMethod::Password(_) => "密码认证",
+            AuthMethod::PrivateKey { .. } => "私钥文件认证",
+            AuthMethod::PrivateKeyMem { .. } => "密钥管理器认证",
+        };
         let auth_ok = match &config.auth {
             AuthMethod::Password(pwd) => {
-                handle
+                if pwd.is_empty() {
+                    return Err(Error::Auth(format!(
+                        "密码为空：Keyring 中未取到该会话的密码，请编辑会话重新保存（{}@{}）",
+                        config.username, addr_str
+                    )));
+                }
+                let ok = handle
                     .authenticate_password(config.username.clone(), pwd.clone())
                     .await
-                    .map_err(|e| Error::Auth(format!("密码认证请求失败: {e}")))?
+                    .map_err(|e| Error::Auth(format!("密码认证请求失败: {e}")))?;
+                if ok {
+                    true
+                } else {
+                    // 密码方法被拒 → keyboard-interactive 兜底（部分服务器只开启该方式，如 NAS/PAM 配置）
+                    tracing::info!(session_id = %session_id, "密码认证被拒，尝试 keyboard-interactive 兜底");
+                    keyboard_interactive_fallback(&mut handle, &config.username, pwd)
+                        .await
+                        .map_err(|e| Error::Auth(format!("keyboard-interactive 认证请求失败: {e}")))?
+                }
             }
             AuthMethod::PrivateKey { path, passphrase } => {
                 // 从文件加载私钥
@@ -340,8 +360,8 @@ impl SshSession {
                 .disconnect(russh::Disconnect::ByApplication, "", "en")
                 .await;
             return Err(Error::Auth(format!(
-                "认证被拒：{}@{}",
-                config.username, addr_str
+                "认证被拒（{}@{}，{}）：密码/密钥错误，或服务器未开启该认证方式",
+                config.username, addr_str, auth_method_name
             )));
         }
 
@@ -513,6 +533,38 @@ impl SshSession {
     pub async fn is_closed(&self) -> bool {
         *self.closed.lock().await
     }
+}
+
+/// keyboard-interactive 兜底认证：用密码应答服务器全部 prompt（最多 3 轮）
+///
+/// 适用场景：服务器未开启 `password` 认证、仅允许 `keyboard-interactive`
+/// （常见于 NAS / PAM 配置）。OpenSSH CLI 也会两种方式依次尝试。
+/// 服务器不支持该方式时直接返回 `AuthFailure`，此处转为 `Ok(false)`。
+async fn keyboard_interactive_fallback(
+    handle: &mut client::Handle<HostKeyHandler>,
+    username: &str,
+    password: &str,
+) -> Result<bool> {
+    let mut resp = handle
+        .authenticate_keyboard_interactive_start(username, None::<String>)
+        .await
+        .map_err(|e| Error::Auth(format!("keyboard-interactive 请求失败: {e}")))?;
+    for _ in 0..3 {
+        match resp {
+            client::KeyboardInteractiveAuthResponse::Success => return Ok(true),
+            client::KeyboardInteractiveAuthResponse::Failure => return Ok(false),
+            client::KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                resp = handle
+                    .authenticate_keyboard_interactive_respond(
+                        prompts.into_iter().map(|_| password.to_string()).collect(),
+                    )
+                    .await
+                    .map_err(|e| Error::Auth(format!("keyboard-interactive 应答失败: {e}")))?;
+            }
+        }
+    }
+    tracing::warn!("keyboard-interactive 认证轮次超限（3 轮），视为失败");
+    Ok(false)
 }
 
 impl Drop for SshSession {

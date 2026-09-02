@@ -108,6 +108,16 @@ const rules: FormRules = {
       return true
     },
   },
+  password: {
+    trigger: ['blur', 'input'],
+    validator: (_rule, value) => {
+      // 新建模式必填；编辑模式留空表示沿用已存密码
+      if (form.authType === 'password' && !isEdit.value && !value) {
+        return new Error('请输入密码')
+      }
+      return true
+    },
+  },
   sshKeyId: {
     trigger: ['blur', 'change'],
     validator: (_rule, value) => {
