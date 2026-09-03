@@ -43,13 +43,19 @@ tauri-plugin-shell = "2"
 # 存储
 rusqlite = { version = "0.31", features = ["bundled"] }
 # keyring v3 平台后端按 feature 启用；不开任何 feature 时各平台都退化为
-# 进程内 mock 存储（重启即丢密码），必须显式启用目标平台的原生后端
+# 进程内 mock 存储（重启即丢密码），必须显式启用目标平台的原生后端。
+# 注意：现已改为本地加密 vault 存储凭据，keyring 仅用于读取历史数据迁移。
 keyring = { version = "3", features = [
     "apple-native",
     "windows-native",
     "sync-secret-service",
     "crypto-rust",
 ] }
+# 凭据本地加密存储（AES-256-GCM）：dev 构建为 ad-hoc 签名，每次重编译 code
+# identity 变化，macOS Keychain 每次读取都弹系统授权框，开发期不可用
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
 # 时间戳（SessionProfile.created_at / last_used_at）
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # 本地目录定位（SFTP 下载保存到 ~/Downloads）
