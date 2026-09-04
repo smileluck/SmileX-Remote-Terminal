@@ -6,7 +6,7 @@
  * - 生成：Ed25519（推荐）/ RSA 4096
  * - 导入：PEM 私钥文本（可选口令）
  *
- * 私钥存 OS Keyring，前端永不展示明文。
+ * 私钥加密存储于本地凭据库，前端永不展示明文。
  */
 import { onMounted, ref } from 'vue'
 import {
@@ -15,7 +15,6 @@ import {
   NInput,
   NRadioGroup,
   NRadioButton,
-  NSelect,
   NEmpty,
   NPopconfirm,
   NSpin,
@@ -126,10 +125,13 @@ onMounted(load)
 <template>
   <div class="key-manager">
     <!-- 生成 -->
-    <section class="block">
-      <h4 class="block-title">生成新密钥</h4>
+    <section class="settings-card">
+      <div>
+        <h4 class="settings-card-title">生成新密钥</h4>
+        <p class="settings-card-desc">推荐 Ed25519：更快、更安全；RSA 4096 仅为兼容旧服务端保留。</p>
+      </div>
       <div class="gen-row">
-        <NInput v-model:value="genName" placeholder="密钥名称，如 prod-deploy" style="flex: 1" />
+        <NInput v-model:value="genName" class="gen-name" placeholder="密钥名称，如 prod-deploy" />
         <NRadioGroup v-model:value="genType" size="small">
           <NRadioButton value="ed25519">Ed25519</NRadioButton>
           <NRadioButton value="rsa">RSA 4096</NRadioButton>
@@ -142,9 +144,12 @@ onMounted(load)
     </section>
 
     <!-- 导入 -->
-    <section class="block">
+    <section class="settings-card">
       <div class="block-title-row">
-        <h4 class="block-title">导入私钥</h4>
+        <div>
+          <h4 class="settings-card-title">导入私钥</h4>
+          <p class="settings-card-desc">粘贴已有 PEM 格式私钥；若私钥已加密需填写口令。</p>
+        </div>
         <NButton size="tiny" tertiary @click="showImport = !showImport">
           {{ showImport ? '收起' : '展开' }}
         </NButton>
@@ -155,8 +160,8 @@ onMounted(load)
           v-model:value="importPem"
           type="textarea"
           :rows="4"
+          class="mono"
           placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
-          style="font-family: var(--font-mono, monospace)"
         />
         <NInput
           v-model:value="importPassphrase"
@@ -169,10 +174,10 @@ onMounted(load)
     </section>
 
     <!-- 列表 -->
-    <section class="block">
-      <h4 class="block-title">已存密钥（{{ keys.length }}）</h4>
-      <NSpin v-if="loading" size="small" style="width: 100%; padding: 16px 0" />
-      <NEmpty v-else-if="keys.length === 0" size="small" description="暂无密钥" style="padding: 20px 0" />
+    <section class="settings-card">
+      <h4 class="settings-card-title">已存密钥（{{ keys.length }}）</h4>
+      <NSpin v-if="loading" size="small" class="list-state" />
+      <NEmpty v-else-if="keys.length === 0" size="small" description="暂无密钥" class="list-state" />
       <div v-else class="key-list">
         <div v-for="k in keys" :key="k.id" class="key-item">
           <div class="key-main">
@@ -205,34 +210,34 @@ onMounted(load)
 .key-manager {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   max-width: 640px;
-}
-.block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.block-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
 }
 .block-title-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 12px;
 }
 .gen-row {
   display: flex;
   gap: 8px;
   align-items: center;
 }
+.gen-name {
+  flex: 1;
+}
 .import-form {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.mono {
+  font-family: var(--font-mono);
+}
+.list-state {
+  width: 100%;
+  padding: 16px 0;
 }
 .key-list {
   display: flex;
@@ -267,7 +272,7 @@ onMounted(load)
 .key-fp {
   font-size: 11px;
   color: var(--text-secondary);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

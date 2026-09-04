@@ -1,12 +1,14 @@
 <script setup lang="ts">
 /**
- * SettingsView - 设置页（多 LLM 配置档案管理）
+ * SettingsView - 设置页（左侧分区导航 + 右侧内容区）
  *
- * 双栏布局：
+ * 分区：外观（主题）/ LLM 配置 / SSH 密钥（KeyManager）。
+ *
+ * LLM 分区为双栏布局：
  * - 左侧：档案列表（含「+ 新建」「设为默认」「删除」「编辑」）
  * - 右侧：编辑区（名称 / Provider / Model / BaseURL / API Key / 流式）
  *
- * UI：naive-ui 控件 + useMessage/useDialog 反馈。
+ * UI：naive-ui 控件 + useMessage 反馈。
  *
  * 数据流：
  * - 加载：listProfiles()（含 isActive 标记）
@@ -17,9 +19,11 @@
  *
  * 安全：API Key 在前端不回填明文，仅在用户主动输入时携带。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, type Component } from 'vue'
 import {
   NButton,
+  NForm,
+  NFormItem,
   NIcon,
   NInput,
   NSelect,
@@ -28,12 +32,10 @@ import {
   NPopconfirm,
   NEmpty,
   NSpin,
-  NRadioGroup,
-  NRadioButton,
   useMessage,
 } from 'naive-ui'
-import { Plus } from '@vicons/tabler'
-import { useThemeStore } from '@/stores/theme'
+import { Plus, Palette, Robot, Key } from '@vicons/tabler'
+import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import KeyManager from '@/components/settings/KeyManager.vue'
 import {
   PROVIDER_OPTIONS,
@@ -55,8 +57,43 @@ function genId(): string {
 const message = useMessage()
 const themeStore = useThemeStore()
 
-/** 设置分区：llm 配置 / ssh 密钥 */
-const section = ref<'llm' | 'keys'>('llm')
+/** 设置分区：外观 / llm 配置 / ssh 密钥 */
+type Section = 'appearance' | 'llm' | 'keys'
+const section = ref<Section>('llm')
+
+/** 分区元信息（左侧导航 + 内容区标题） */
+const SECTIONS: { value: Section; label: string; icon: Component; title: string; desc: string }[] = [
+  {
+    value: 'appearance',
+    label: '外观',
+    icon: Palette,
+    title: '外观',
+    desc: '选择应用界面主题，「跟随系统」将随系统外观自动切换。',
+  },
+  {
+    value: 'llm',
+    label: 'LLM 配置',
+    icon: Robot,
+    title: 'LLM 配置',
+    desc: '管理 AI 助手的 LLM 配置，可保存多个 Provider 档案并快速切换激活。API Key 加密存储于本地。',
+  },
+  {
+    value: 'keys',
+    label: 'SSH 密钥',
+    icon: Key,
+    title: 'SSH 密钥',
+    desc: '生成或导入 SSH 密钥用于连接认证，私钥加密存储于本地，前端不展示明文。',
+  },
+]
+
+const currentSection = computed(() => SECTIONS.find((s) => s.value === section.value)!)
+
+/** 主题选项（外观分区） */
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: 'dark', label: '深色' },
+  { value: 'light', label: '浅色' },
+  { value: 'auto', label: '跟随系统' },
+]
 
 /** 所有档案（左侧列表展示） */
 const profiles = ref<LlmProfile[]>([])
@@ -142,7 +179,7 @@ async function selectProfile(id: string) {
     const existing = await settingsService.getApiKey(id)
     hasExistingApiKey.value = !!existing
   } catch {
-    // 静默失败（Keyring 可能不可用）
+    // 静默失败（凭据库可能不可用）
   }
 }
 
@@ -323,182 +360,217 @@ onMounted(() => {
 
 <template>
   <div class="settings-view">
-    <header class="header">
-      <h2>设置</h2>
-      <p class="hint">
-        管理 AI 助手的 LLM 配置。可保存多个 Provider 配置并快速切换激活。
-        API Key 加密存储于系统凭据库（Keyring）。
-      </p>
-    </header>
-
-    <!-- 外观：主题切换 -->
-    <section class="appearance">
-      <span class="appearance-label">外观</span>
-      <NRadioGroup
-        :value="themeStore.mode"
-        size="small"
-        @update:value="(v: string) => themeStore.setMode(v as 'dark' | 'light' | 'auto')"
+    <!-- 左侧：分区导航 -->
+    <nav class="settings-nav">
+      <div class="nav-header">设置</div>
+      <button
+        v-for="s in SECTIONS"
+        :key="s.value"
+        type="button"
+        class="nav-item"
+        :class="{ active: section === s.value }"
+        @click="section = s.value"
       >
-        <NRadioButton value="dark">深色</NRadioButton>
-        <NRadioButton value="light">浅色</NRadioButton>
-        <NRadioButton value="auto">跟随系统</NRadioButton>
-      </NRadioGroup>
-    </section>
+        <NIcon :component="s.icon" class="nav-icon" />
+        <span>{{ s.label }}</span>
+      </button>
+    </nav>
 
-    <!-- 分区切换 -->
-    <section class="appearance">
-      <NRadioGroup v-model:value="section" size="small">
-        <NRadioButton value="llm">LLM 配置</NRadioButton>
-        <NRadioButton value="keys">SSH 密钥</NRadioButton>
-      </NRadioGroup>
-    </section>
+    <!-- 右侧：分区内容 -->
+    <div class="settings-main">
+      <header class="section-header">
+        <h2>{{ currentSection.title }}</h2>
+        <p class="section-desc">{{ currentSection.desc }}</p>
+      </header>
 
-    <!-- SSH 密钥管理 -->
-    <div v-if="section === 'keys'" class="section-body">
-      <KeyManager />
-    </div>
-
-    <template v-else>
-    <NSpin v-if="loading && profiles.length === 0" class="loading" />
-
-    <div v-else class="layout">
-      <!-- 左侧：档案列表 -->
-      <aside class="sidebar">
-        <div class="sidebar-header">
-          <span class="sidebar-title">配置档案</span>
-          <NButton quaternary size="tiny" circle title="新建" @click="newProfile">
-            <template #icon><NIcon :component="Plus" /></template>
-          </NButton>
-        </div>
-        <ul class="profile-list">
-          <li
-            v-for="p in profiles"
-            :key="p.id"
-            class="profile-item"
-            :class="{ active: p.id === selectedId }"
-            @click="selectProfile(p.id)"
-          >
-            <div class="profile-name">
-              <span class="name-text">{{ p.name }}</span>
-              <NTag v-if="p.isActive" size="tiny" type="success" :bordered="false">默认</NTag>
-            </div>
-            <div class="profile-meta">
-              <span>{{ p.provider }}</span>
-              <span class="separator">·</span>
-              <span>{{ p.model }}</span>
-            </div>
-          </li>
-          <li v-if="profiles.length === 0" class="empty-hint">
-            <NEmpty size="small" description="暂无配置">
-              <template #extra>
-                <span class="empty-tip">点击上方 + 新建</span>
-              </template>
-            </NEmpty>
-          </li>
-        </ul>
-      </aside>
-
-      <!-- 右侧：编辑区 -->
-      <section class="editor">
-        <div v-if="!editing" class="editor-empty">
-          <NEmpty description="请在左侧选择或新建配置档案" />
-        </div>
-
-        <form v-else class="form" @submit.prevent="save">
-          <!-- 名称 -->
-          <div class="field">
-            <label class="label">配置名称</label>
-            <NInput
-              v-model:value="editing.name"
-              placeholder="如：OpenAI 工作 / DeepSeek 个人 / Ollama 本地"
-            />
+      <!-- 外观：主题选择 -->
+      <div v-if="section === 'appearance'" class="section-body">
+        <section class="settings-card theme-card">
+          <div>
+            <h3 class="settings-card-title">主题</h3>
+            <p class="settings-card-desc">选择应用界面主题；「跟随系统」将随系统外观自动切换。</p>
           </div>
-
-          <!-- Provider -->
-          <div class="field">
-            <label class="label">Provider</label>
-            <NSelect
-              :value="editing.provider"
-              :options="providerOptions"
-              @update:value="onProviderChange"
-            />
-            <p class="field-hint">{{ editingProviderOption.hint }}</p>
-          </div>
-
-          <!-- Model（级联 + 可自定义输入） -->
-          <div class="field">
-            <label class="label">模型</label>
-            <NSelect
-              v-model:value="editing.model"
-              :options="modelOptions"
-              filterable
-              tag
-              :consistent-menu-width="false"
-              placeholder="选择或输入模型名"
-            />
-          </div>
-
-          <!-- Base URL -->
-          <div class="field">
-            <label class="label">Base URL（可选）</label>
-            <NInput
-              v-model:value="editing.baseUrl"
-              placeholder="留空使用官方默认；或填入代理 / 兼容服务地址"
-            />
-          </div>
-
-          <!-- API Key -->
-          <div class="field">
-            <label class="label">
-              API Key
-              <span v-if="editingProviderOption.needsApiKey" class="required">*</span>
-              <span v-else class="optional">（此 Provider 不需要）</span>
-            </label>
-            <NInput
-              v-model:value="apiKeyInput"
-              type="password"
-              show-password-on="click"
-              :placeholder="hasExistingApiKey ? '已配置（留空保持不变）' : '请输入 API Key'"
-              :disabled="!editingProviderOption.needsApiKey"
-            />
-            <p v-if="hasExistingApiKey" class="field-hint success">
-              ✓ 已配置 API Key（留空保存将保持不变）
-            </p>
-          </div>
-
-          <!-- 流式 -->
-          <div class="field field-inline">
-            <label class="label">流式输出</label>
-            <NSwitch v-model:value="editing.stream" />
-            <span class="inline-hint">逐 token 推送响应（推荐，体验更佳）</span>
-          </div>
-
-          <!-- 动作区 -->
-          <div class="actions">
-            <NButton type="primary" :loading="saving" @click="save">保存</NButton>
-            <NButton :loading="testing" @click="testConnection">测试连接</NButton>
-            <NButton
-              tertiary
-              :disabled="
-                !editing.id ||
-                !profiles.find((p) => p.id === editing!.id) ||
-                editing.isActive
-              "
-              @click="setActive"
+          <div class="theme-options">
+            <button
+              v-for="t in THEME_OPTIONS"
+              :key="t.value"
+              type="button"
+              class="theme-option"
+              :class="{ active: themeStore.mode === t.value }"
+              @click="themeStore.setMode(t.value)"
             >
-              设为默认
-            </NButton>
-            <NPopconfirm @positive-click="remove">
-              <template #trigger>
-                <NButton tertiary type="error">删除</NButton>
-              </template>
-              确认删除配置「{{ editing.name }}」？
-            </NPopconfirm>
+              <span class="theme-preview" :class="t.value">
+                <span class="preview-rail"></span>
+                <span class="preview-body">
+                  <span class="preview-line"></span>
+                  <span class="preview-line short"></span>
+                </span>
+              </span>
+              <span class="theme-option-label">{{ t.label }}</span>
+            </button>
           </div>
-        </form>
-      </section>
+        </section>
+      </div>
+
+      <!-- SSH 密钥管理 -->
+      <div v-else-if="section === 'keys'" class="section-body">
+        <KeyManager />
+      </div>
+
+      <!-- LLM 配置 -->
+      <template v-else>
+        <NSpin v-if="loading && profiles.length === 0" class="loading" />
+
+        <div v-else class="layout">
+          <!-- 左侧：档案列表 -->
+          <aside class="sidebar">
+            <div class="sidebar-header">
+              <span class="sidebar-title">配置档案</span>
+              <NButton quaternary size="tiny" circle title="新建" @click="newProfile">
+                <template #icon><NIcon :component="Plus" /></template>
+              </NButton>
+            </div>
+            <ul class="profile-list">
+              <li
+                v-for="p in profiles"
+                :key="p.id"
+                class="profile-item"
+                :class="{ active: p.id === selectedId }"
+                @click="selectProfile(p.id)"
+              >
+                <div class="profile-name">
+                  <span class="name-text">{{ p.name }}</span>
+                  <NTag v-if="p.isActive" size="tiny" type="success" :bordered="false">默认</NTag>
+                </div>
+                <div class="profile-meta">
+                  <span>{{ p.provider }}</span>
+                  <span class="separator">·</span>
+                  <span>{{ p.model }}</span>
+                </div>
+              </li>
+              <li v-if="profiles.length === 0" class="empty-hint">
+                <NEmpty size="small" description="暂无配置">
+                  <template #extra>
+                    <span class="empty-tip">点击上方 + 新建</span>
+                  </template>
+                </NEmpty>
+              </li>
+            </ul>
+          </aside>
+
+          <!-- 右侧：编辑区 -->
+          <section class="editor">
+            <div v-if="!editing" class="editor-empty">
+              <NEmpty description="请在左侧选择或新建配置档案" />
+            </div>
+
+            <template v-else>
+              <NForm
+                :model="editing"
+                label-placement="top"
+                size="small"
+                class="form"
+                @submit.prevent="save"
+              >
+                <!-- 名称 -->
+                <NFormItem>
+                  <template #label>配置名称<span class="required">*</span></template>
+                  <NInput
+                    v-model:value="editing.name"
+                    placeholder="如：OpenAI 工作 / DeepSeek 个人 / Ollama 本地"
+                  />
+                </NFormItem>
+
+                <!-- Provider -->
+                <NFormItem label="Provider">
+                  <NSelect
+                    :value="editing.provider"
+                    :options="providerOptions"
+                    @update:value="onProviderChange"
+                  />
+                  <p class="field-hint">{{ editingProviderOption.hint }}</p>
+                </NFormItem>
+
+                <!-- Model（级联 + 可自定义输入） -->
+                <NFormItem>
+                  <template #label>模型<span class="required">*</span></template>
+                  <NSelect
+                    v-model:value="editing.model"
+                    :options="modelOptions"
+                    filterable
+                    tag
+                    :consistent-menu-width="false"
+                    placeholder="选择或输入模型名"
+                  />
+                </NFormItem>
+
+                <!-- Base URL -->
+                <NFormItem label="Base URL（可选）">
+                  <NInput
+                    v-model:value="editing.baseUrl"
+                    placeholder="留空使用官方默认；或填入代理 / 兼容服务地址"
+                  />
+                </NFormItem>
+
+                <!-- API Key -->
+                <NFormItem>
+                  <template #label>
+                    API Key
+                    <span v-if="editingProviderOption.needsApiKey" class="required">*</span>
+                    <span v-else class="optional">（此 Provider 不需要）</span>
+                  </template>
+                  <NInput
+                    v-model:value="apiKeyInput"
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="hasExistingApiKey ? '已配置（留空保持不变）' : '请输入 API Key'"
+                    :disabled="!editingProviderOption.needsApiKey"
+                  />
+                  <p v-if="hasExistingApiKey" class="field-hint success">
+                    ✓ 已配置 API Key（留空保存将保持不变）
+                  </p>
+                </NFormItem>
+
+                <!-- 流式 -->
+                <NFormItem label="流式输出">
+                  <div class="inline-switch">
+                    <NSwitch v-model:value="editing.stream" />
+                    <span class="inline-hint">逐 token 推送响应（推荐，体验更佳）</span>
+                  </div>
+                </NFormItem>
+              </NForm>
+
+              <!-- 动作区：左侧主操作，右侧默认/危险操作 -->
+              <div class="actions">
+                <div class="actions-group">
+                  <NButton type="primary" :loading="saving" @click="save">保存</NButton>
+                  <NButton :loading="testing" @click="testConnection">测试连接</NButton>
+                </div>
+                <div class="actions-group">
+                  <NButton
+                    tertiary
+                    :disabled="
+                      !editing.id ||
+                      !profiles.find((p) => p.id === editing!.id) ||
+                      editing.isActive
+                    "
+                    @click="setActive"
+                  >
+                    设为默认
+                  </NButton>
+                  <NPopconfirm @positive-click="remove">
+                    <template #trigger>
+                      <NButton tertiary type="error">删除</NButton>
+                    </template>
+                    确认删除配置「{{ editing.name }}」？
+                  </NPopconfirm>
+                </div>
+              </div>
+            </template>
+          </section>
+        </div>
+      </template>
     </div>
-    </template>
   </div>
 </template>
 
@@ -506,50 +578,190 @@ onMounted(() => {
 .settings-view {
   flex: 1;
   display: flex;
-  flex-direction: column;
   overflow: hidden;
   background: var(--bg-app);
 }
-.header {
-  padding: 16px 24px 12px;
-  border-bottom: 1px solid var(--border-color);
+
+/* 左侧分区导航 */
+.settings-nav {
+  width: 180px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 10px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
 }
-.appearance {
+.nav-header {
+  padding: 4px 10px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.nav-item {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--border-color);
+  gap: 8px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.nav-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.nav-item.active {
+  background: var(--primary-bg);
+  color: var(--primary);
+  font-weight: 500;
+}
+.nav-icon {
+  font-size: 16px;
   flex-shrink: 0;
 }
-.appearance-label {
+
+/* 右侧内容区 */
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.section-header {
+  flex-shrink: 0;
+  padding: 18px 28px 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+.section-header h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.section-desc {
+  margin: 4px 0 0;
   font-size: 13px;
+  line-height: 1.5;
   color: var(--text-secondary);
 }
 .section-body {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px;
-}
-.header h2 {
-  margin: 0 0 4px 0;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.5;
+  padding: 24px 28px;
 }
 .loading {
-  align-self: center;
-  margin-top: 64px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-/* 双栏布局 */
+/* 外观：主题预览卡片 */
+.theme-card {
+  max-width: 520px;
+}
+.theme-options {
+  display: flex;
+  gap: 12px;
+}
+.theme-option {
+  flex: 1;
+  max-width: 148px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.theme-option:hover {
+  background: var(--bg-elevated);
+}
+.theme-option.active {
+  border-color: var(--primary-border);
+  background: var(--primary-bg);
+}
+.theme-option-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.theme-option.active .theme-option-label {
+  color: var(--primary);
+  font-weight: 500;
+}
+/* 预览配色为固定值：展示目标主题的样子，不随当前主题变化 */
+.theme-preview {
+  width: 100%;
+  height: 58px;
+  display: flex;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+}
+.preview-rail {
+  width: 18px;
+  flex-shrink: 0;
+}
+.preview-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+}
+.preview-line {
+  height: 5px;
+  border-radius: 2px;
+}
+.preview-line.short {
+  width: 60%;
+}
+.theme-preview.dark {
+  background: #0f1419;
+}
+.theme-preview.dark .preview-rail {
+  background: #0b0f14;
+}
+.theme-preview.dark .preview-line {
+  background: #2a3340;
+}
+.theme-preview.light {
+  background: #f5f7fa;
+}
+.theme-preview.light .preview-rail {
+  background: #eceff4;
+}
+.theme-preview.light .preview-line {
+  background: #d3dae4;
+}
+.theme-preview.auto {
+  background: linear-gradient(90deg, #0f1419 50%, #f5f7fa 50%);
+}
+.theme-preview.auto .preview-rail {
+  background: linear-gradient(90deg, #0b0f14 50%, #eceff4 50%);
+}
+.theme-preview.auto .preview-line {
+  background: linear-gradient(90deg, #2a3340 50%, #d3dae4 50%);
+}
+
+/* LLM 双栏布局 */
 .layout {
   flex: 1;
   display: flex;
@@ -597,7 +809,7 @@ onMounted(() => {
 }
 .profile-item.active {
   background: var(--primary-bg);
-  border-color: rgba(58, 122, 254, 0.3);
+  border-color: var(--primary-border);
 }
 .profile-item.active .name-text {
   color: var(--primary);
@@ -643,24 +855,28 @@ onMounted(() => {
 }
 .form {
   max-width: 560px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
 }
-.field {
-  display: flex;
+/* n-form-item-blank 默认为横向 flex，会把 field-hint 挤到控件右侧 */
+.form :deep(.n-form-item-blank) {
   flex-direction: column;
-  gap: 6px;
+  align-items: stretch;
 }
-.field-inline {
-  flex-direction: row;
+.inline-switch {
+  display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
-.label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
+.inline-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.field-hint.success {
+  color: var(--success);
 }
 .required {
   color: var(--danger);
@@ -671,22 +887,22 @@ onMounted(() => {
   font-weight: normal;
   font-size: 12px;
 }
-.inline-hint {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.field-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.field-hint.success {
-  color: var(--success);
-}
+
+/* 动作区：主操作与危险操作左右分离 */
 .actions {
+  max-width: 560px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+.actions-group {
   display: flex;
   gap: 10px;
-  margin-top: 8px;
   flex-wrap: wrap;
 }
 </style>

@@ -44,8 +44,13 @@ body,
   --primary-hover: #6fa5ff;
   --primary-active: #3a6fd0;
   --primary-bg: rgba(76, 141, 255, 0.12);
+  --primary-border: rgba(76, 141, 255, 0.35);
   /* 品牌渐变（Logo / 签名元素） */
   --brand-gradient: linear-gradient(135deg, #4c8dff 0%, #8b7cf6 100%);
+
+  /* 等宽字体（指纹 / 公钥 / 终端相关 UI） */
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas,
+    monospace;
 
   /* 语义色 */
   --success: #34d399;
@@ -94,6 +99,7 @@ body,
   --primary-hover: #4c8dff;
   --primary-active: #1f56c4;
   --primary-bg: rgba(46, 107, 230, 0.1);
+  --primary-border: rgba(46, 107, 230, 0.35);
 
   --success: #059669;
   --warning: #d97706;
@@ -164,4 +170,27 @@ body,
 .autocomplete-item.active {
   background: var(--primary, #4f8cff);
   color: #fff;
+}
+
+/* 设置页分区卡片（SettingsView / KeyManager 共用） */
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+}
+.settings-card-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.settings-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
 }
