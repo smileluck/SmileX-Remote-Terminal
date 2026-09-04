@@ -55,8 +55,8 @@ pub async fn session_exec(
 /// 4. 注册 sessionId → channel_id / TerminalControl 映射
 /// 5. 拉起推送 task：mpsc rx → Tauri event `terminal_output`
 #[tauri::command]
-pub async fn session_connect(
-    app: AppHandle,
+pub async fn session_connect<R: tauri::Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     config: ConnectionConfig,
     cols: Option<u32>,
@@ -301,9 +301,9 @@ pub async fn session_resize(
 /// - `channel_ids`：移除 channel_id 映射
 /// - `terminal_controls`：移除 TerminalControl（drop 后读循环控制通道关闭，加速退出）
 #[tauri::command]
-pub async fn session_disconnect(
+pub async fn session_disconnect<R: tauri::Runtime>(
     state: State<'_, AppState>,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<R>,
     session_id: String,
 ) -> Result<(), crate::error::AppError> {
     // 停止该会话的监控采样
