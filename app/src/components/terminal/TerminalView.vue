@@ -14,11 +14,13 @@ import {
   Folder,
   ArrowsSplit2,
   LayoutRows,
+  ChartAreaLine,
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
+import { useLayoutStore } from '@/stores/layout'
 import FilePanel from '@/components/sftp/FilePanel.vue'
 import PaneTerminal from './PaneTerminal.vue'
 import type { TabItem } from '@/types/session'
@@ -26,6 +28,7 @@ import type { TabItem } from '@/types/session'
 const props = defineProps<{ tab: TabItem }>()
 const profiles = useProfilesStore()
 const monitor = useMonitorStore()
+const layout = useLayoutStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
 
@@ -187,6 +190,20 @@ async function handleReconnect() {
             </NButton>
           </template>
           向下分屏
+        </NTooltip>
+        <NTooltip placement="left">
+          <template #trigger>
+            <NButton
+              quaternary
+              circle
+              size="small"
+              :type="layout.monitorVisible ? 'primary' : 'default'"
+              @click="layout.toggleMonitor()"
+            >
+              <NIcon :component="ChartAreaLine" />
+            </NButton>
+          </template>
+          监控看板（⌘M）
         </NTooltip>
       </div>
     </div>

@@ -1,15 +1,10 @@
 <script setup lang="ts">
 /**
- * TopBar - 顶部工具栏
+ * TopBar - 顶部工具栏（品牌标识）
  *
- * 品牌标识 + 右侧布局开关（监控看版；折叠按钮已移至左侧活动栏）。
+ * 布局开关已分散至各栏：折叠按钮在左侧活动栏，监控/AI 在终端工具组。
  */
-import { NButton, NIcon, NTooltip } from 'naive-ui'
-import { ChartAreaLine } from '@vicons/tabler'
-import { useLayoutStore } from '@/stores/layout'
 import BrandMark from '@/components/common/BrandMark.vue'
-
-const layout = useLayoutStore()
 </script>
 
 <template>
@@ -17,23 +12,6 @@ const layout = useLayoutStore()
     <div class="brand">
       <BrandMark :size="22" />
       <span class="brand-name">SmileX <span class="brand-sub">Remote Terminal</span></span>
-    </div>
-
-    <div class="top-actions">
-      <NTooltip placement="bottom">
-        <template #trigger>
-          <NButton
-            quaternary
-            circle
-            size="small"
-            :type="layout.monitorVisible ? 'primary' : 'default'"
-            @click="layout.toggleMonitor()"
-          >
-            <NIcon :component="ChartAreaLine" />
-          </NButton>
-        </template>
-        监控看版（⌘M）
-      </NTooltip>
     </div>
   </header>
 </template>
@@ -63,10 +41,5 @@ const layout = useLayoutStore()
 .brand-sub {
   color: var(--text-secondary);
   font-weight: 400;
-}
-.top-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 </style>
