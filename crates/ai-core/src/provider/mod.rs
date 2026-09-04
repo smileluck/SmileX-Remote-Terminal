@@ -36,14 +36,15 @@ pub trait AgentProvider: Send + Sync {
 
     /// 发送消息（流式响应通过回调推送 token）
     ///
-    /// `ctx` 携带运维上下文（终端最近 N 行）；`on_token` 每个 token 触发一次。
-    async fn send(&self, msg: &str, ctx: &Context, on_token: OnToken) -> Result<()>;
+    /// `session` 标识对话会话（历史按会话隔离）；`ctx` 携带运维上下文
+    /// （终端最近 N 行）；`on_token` 每个 token 触发一次。
+    async fn send(&self, session: &str, msg: &str, ctx: &Context, on_token: OnToken) -> Result<()>;
 
     /// 中断当前生成
     async fn abort(&self) -> Result<()>;
 
-    /// 清空对话历史
-    async fn clear(&self) -> Result<()>;
+    /// 清空指定会话的对话历史
+    async fn clear(&self, session: &str) -> Result<()>;
 }
 
 /// LLM Provider 配置

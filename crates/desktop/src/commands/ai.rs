@@ -14,8 +14,11 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::events::{AiDonePayload, AiTokenPayload};
 use crate::storage::keyring;
+use crate::storage::sqlite::AgentChatMessage;
 use crate::AppState;
+use ai_core::provider::chat::strip_think;
 use ai_core::provider::context::Context;
+use ai_core::provider::history::Message;
 // 引入 AgentProvider trait 才能调用 Arc<ChatProvider> 上的 send/abort/clear
 use ai_core::AgentProvider;
 use ai_core::LlmProviderConfig;
@@ -38,6 +41,20 @@ fn format_uptime(s: u64) -> String {
     }
 }
 
+/// 把持久化的会话消息转为 LLM 历史消息（恢复上下文用）
+///
+/// - user → user
+/// - assistant → assistant（剥离 `<think>` 段；生成失败的占位消息跳过）
+/// - tool → user（与在线链路一致：执行结果作为续问上下文发回 LLM）
+fn to_llm_message(m: &AgentChatMessage) -> Option<Message> {
+    match m.role.as_str() {
+        "user" => Some(Message::user(&m.content)),
+        "assistant" if !m.error => Some(Message::assistant(strip_think(&m.content))),
+        "tool" => Some(Message::user(format!("[命令执行结果]\n{}", m.content))),
+        _ => None,
+    }
+}
+
 /// 发送消息（流式响应通过 `ai_token` 事件推送，结束发 `ai_done`）
 #[tauri::command]
 pub async fn ai_chat_send(
@@ -47,6 +64,7 @@ pub async fn ai_chat_send(
     message: String,
     ctx: Context,
 ) -> Result<(), crate::error::AppError> {
+    // 调用 ChatProvider
     let provider = state.chat_provider.clone();
 
     // 上下文注入：前端只传 sessionId + include_context 标志，
@@ -95,6 +113,20 @@ pub async fn ai_chat_send(
         }
     }
 
+    // 会话历史惰性恢复：内存无该会话历史时（重启/首轮），
+    // 从 SQLite 加载持久化消息重建 LLM 上下文
+    if !provider.has_history(&session_id) {
+        let seed: Vec<Message> = state
+            .storage
+            .list_chat_messages(&session_id)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter_map(to_llm_message)
+            .collect();
+        provider.seed_history(&session_id, seed);
+    }
+
     // token 回调：emit `ai_token` 事件
     let app_clone = app.clone();
     let session_id_clone = session_id.clone();
@@ -109,7 +141,7 @@ pub async fn ai_chat_send(
     }) as Arc<dyn Fn(String) + Send + Sync>;
 
     // 调用 ChatProvider
-    let result = provider.send(&message, &ctx, on_token).await;
+    let result = provider.send(&session_id, &message, &ctx, on_token).await;
 
     // 无论成功/失败/取消，都发 ai_done 让前端停止 loading。
     // 生成结果（含失败）统一经该事件回报，命令仅表示受理——
@@ -136,12 +168,15 @@ pub async fn ai_chat_abort(state: State<'_, AppState>) -> Result<(), crate::erro
     Ok(())
 }
 
-/// 清空对话历史
+/// 清空指定会话的对话历史
 #[tauri::command]
-pub async fn ai_chat_clear(state: State<'_, AppState>) -> Result<(), crate::error::AppError> {
+pub async fn ai_chat_clear(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), crate::error::AppError> {
     state
         .chat_provider
-        .clear()
+        .clear(&session_id)
         .await
         .map_err(|e| crate::error::AppError::ai(format!("{e}")))?;
     Ok(())

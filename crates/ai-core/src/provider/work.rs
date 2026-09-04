@@ -20,7 +20,7 @@ impl AgentProvider for WorkProvider {
         AgentMode::Work
     }
 
-    async fn send(&self, _msg: &str, _ctx: &Context, _on_token: OnToken) -> Result<()> {
+    async fn send(&self, _session: &str, _msg: &str, _ctx: &Context, _on_token: OnToken) -> Result<()> {
         // 阶段 5+ 实现：结合 function calling 自主调用 SSH 命令/远程桌面操作
         Err(Error::WorkNotImplemented)
     }
@@ -29,7 +29,7 @@ impl AgentProvider for WorkProvider {
         Err(Error::WorkNotImplemented)
     }
 
-    async fn clear(&self) -> Result<()> {
+    async fn clear(&self, _session: &str) -> Result<()> {
         Err(Error::WorkNotImplemented)
     }
 }

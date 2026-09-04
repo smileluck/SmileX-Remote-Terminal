@@ -2,6 +2,7 @@
 //!
 //! 已实现：用户提问 → LLM 流式回答；可选附带运维上下文。
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -23,7 +24,8 @@ const DEFAULT_MAX_ROUNDS: usize = 10;
 /// 不入对话历史，避免污染下一轮上下文（也符合 DeepSeek 等对
 /// reasoning 内容不应回传的要求）。未闭合的思考段（生成被中断）
 /// 一并丢弃。模型也常原生输出这些标记，统一在此清理。
-fn strip_think(content: &str) -> String {
+/// pub：命令层从持久化消息恢复历史时同样需要剥离。
+pub fn strip_think(content: &str) -> String {
     fn find_open(s: &str) -> Option<(&str, usize)> {
         // 返回 (开标记, 开标记结束位置)；先出现的优先
         let a = s.find("<think>").map(|i| ("<think>", i + 7));
@@ -57,8 +59,8 @@ pub struct ChatProvider {
     client: AsyncMutex<Option<Arc<dyn LlmClient>>>,
     /// 当前 LLM 配置
     config: AsyncMutex<Option<LlmProviderConfig>>,
-    /// 对话历史
-    history: Mutex<History>,
+    /// 对话历史（按会话隔离，session → 历史）
+    histories: Mutex<HashMap<String, History>>,
     /// 取消标志（用户中断）
     cancelled: AsyncMutex<bool>,
 }
@@ -69,7 +71,7 @@ impl ChatProvider {
         Self {
             client: AsyncMutex::new(None),
             config: AsyncMutex::new(None),
-            history: Mutex::new(History::new(DEFAULT_MAX_ROUNDS)),
+            histories: Mutex::new(HashMap::new()),
             cancelled: AsyncMutex::new(false),
         }
     }
@@ -85,6 +87,26 @@ impl ChatProvider {
     pub async fn is_configured(&self) -> bool {
         self.config.lock().await.is_some()
     }
+
+    /// 指定会话是否已有内存历史（用于判断是否需要从持久化恢复）
+    pub fn has_history(&self, session: &str) -> bool {
+        self.histories.lock().unwrap().contains_key(session)
+    }
+
+    /// 写入指定会话的历史（仅在无条目时生效，幂等）
+    ///
+    /// 用于应用重启后从持久化消息恢复 LLM 上下文；
+    /// 各 History 自身仍按轮数上限截断。
+    pub fn seed_history(&self, session: &str, msgs: Vec<Message>) {
+        let mut map = self.histories.lock().unwrap();
+        map.entry(session.to_string()).or_insert_with(|| {
+            let mut h = History::new(DEFAULT_MAX_ROUNDS);
+            for m in msgs {
+                h.push(m);
+            }
+            h
+        });
+    }
 }
 
 impl Default for ChatProvider {
@@ -99,7 +121,7 @@ impl AgentProvider for ChatProvider {
         AgentMode::Chat
     }
 
-    async fn send(&self, msg: &str, ctx: &Context, on_token: OnToken) -> Result<()> {
+    async fn send(&self, session: &str, msg: &str, ctx: &Context, on_token: OnToken) -> Result<()> {
         // 取 LLM 客户端
         let client_guard = self.client.lock().await;
         let client = client_guard
@@ -120,7 +142,14 @@ impl AgentProvider for ChatProvider {
         }
 
         // 2) 历史对话
-        let history_msgs = self.history.lock().unwrap().messages().to_vec();
+        let history_msgs = self
+            .histories
+            .lock()
+            .unwrap()
+            .entry(session.to_string())
+            .or_insert_with(|| History::new(DEFAULT_MAX_ROUNDS))
+            .messages()
+            .to_vec();
         messages.extend(history_msgs);
 
         // 3) 当前用户问题
@@ -128,7 +157,12 @@ impl AgentProvider for ChatProvider {
         messages.push(user_msg.clone());
 
         // 调用前先把 user 消息入历史
-        self.history.lock().unwrap().push(user_msg);
+        self.histories
+            .lock()
+            .unwrap()
+            .entry(session.to_string())
+            .or_insert_with(|| History::new(DEFAULT_MAX_ROUNDS))
+            .push(user_msg);
 
         // 流式收集 assistant 回复（并行触发 UI 推送）
         let assistant_content = Arc::new(Mutex::new(String::new()));
@@ -145,7 +179,7 @@ impl AgentProvider for ChatProvider {
         if *self.cancelled.lock().await {
             let partial = strip_think(&assistant_content.lock().unwrap().clone());
             if !partial.is_empty() {
-                self.history.lock().unwrap().push(Message::assistant(partial));
+                self.push_assistant(session, partial);
             }
             return Err(Error::Cancelled);
         }
@@ -153,7 +187,7 @@ impl AgentProvider for ChatProvider {
         match result {
             Ok(()) => {
                 let content = strip_think(&assistant_content.lock().unwrap().clone());
-                self.history.lock().unwrap().push(Message::assistant(content));
+                self.push_assistant(session, content);
                 Ok(())
             }
             Err(e) => Err(e),
@@ -165,9 +199,21 @@ impl AgentProvider for ChatProvider {
         Ok(())
     }
 
-    async fn clear(&self) -> Result<()> {
-        self.history.lock().unwrap().clear();
+    async fn clear(&self, session: &str) -> Result<()> {
+        self.histories.lock().unwrap().remove(session);
         Ok(())
+    }
+}
+
+impl ChatProvider {
+    /// 追加 assistant 回复入指定会话的历史
+    fn push_assistant(&self, session: &str, content: String) {
+        self.histories
+            .lock()
+            .unwrap()
+            .entry(session.to_string())
+            .or_insert_with(|| History::new(DEFAULT_MAX_ROUNDS))
+            .push(Message::assistant(content));
     }
 }
 
