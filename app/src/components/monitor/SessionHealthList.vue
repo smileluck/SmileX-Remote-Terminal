@@ -8,6 +8,7 @@
 import { computed } from 'vue'
 import { useMonitorStore } from '@/stores/monitor'
 import { useTabsStore } from '@/stores/tabs'
+import { fmtBytes } from '@/utils/format'
 
 const monitor = useMonitorStore()
 const tabs = useTabsStore()
@@ -20,13 +21,6 @@ const titleOf = (sid: string) =>
 function latencyOf(sid: string): string {
   const s = monitor.samples[sid]?.at(-1)
   return s?.latency_ms != null ? `${s.latency_ms} ms` : '-'
-}
-
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`
-  return `${(n / 1024 ** 3).toFixed(2)} GB`
 }
 
 function fmtDuration(ms: number): string {
