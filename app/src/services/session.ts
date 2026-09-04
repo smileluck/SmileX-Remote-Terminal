@@ -14,6 +14,8 @@ import type { SshConfig, TerminalOutputPayload } from '@/types/session'
 const handlers = new Map<string, Set<(p: TerminalOutputPayload) => void>>()
 /** sessionId → 待回放的缓冲（bind 前到达的输出） */
 const pending = new Map<string, TerminalOutputPayload[]>()
+/** sessionId → 连接配置（分屏克隆用：以原配置新建独立连接；随断开清理） */
+const configBySession = new Map<string, SshConfig>()
 
 /** 建立会话并返回 sessionId；输出经 Channel 分发 */
 export async function connect(
@@ -32,12 +34,25 @@ export async function connect(
       pending.set(p.sessionId, q)
     }
   }
-  return invoke<string>('session_connect', {
+  const sessionId = await invoke<string>('session_connect', {
     config,
     cols,
     rows,
     onOutput: channel,
   })
+  configBySession.set(sessionId, config)
+  return sessionId
+}
+
+/** 克隆已有会话：用其原始配置新建一条全新独立 SSH 连接（独立 PTY） */
+export async function clone(
+  sessionId: string,
+  cols = 80,
+  rows = 24,
+): Promise<string> {
+  const config = configBySession.get(sessionId)
+  if (!config) throw new Error(`会话 ${sessionId.slice(0, 8)} 的连接配置不可用，无法克隆`)
+  return connect(config, cols, rows)
 }
 
 /** 绑定终端输出处理器（回放缓冲后转入实时分发；后绑定的消费者不重复回放历史） */
@@ -83,6 +98,7 @@ export async function resize(sessionId: string, cols: number, rows: number): Pro
 export async function disconnect(sessionId: string): Promise<void> {
   handlers.delete(sessionId)
   pending.delete(sessionId)
+  configBySession.delete(sessionId)
   return invoke<void>('session_disconnect', { sessionId })
 }
 

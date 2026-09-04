@@ -80,11 +80,28 @@ watch(
 )
 
 /** 分屏：在当前选中 pane 位置原位分割（row = 向右，column = 向下） */
-function addPane(dir: 'row' | 'column') {
-  if (paneCount.value >= 4) return
-  const target = findPane(root.value, activePaneId.value) ? activePaneId.value : primaryPaneId.value
+const splitting = ref(false)
+async function addPane(dir: 'row' | 'column') {
+  if (paneCount.value >= 4 || splitting.value) return
+  const targetId = findPane(root.value, activePaneId.value) ? activePaneId.value : primaryPaneId.value
+  const target = findPane(root.value, targetId)
   const pane: PaneNode = { kind: 'pane', id: `p-${Date.now()}`, sessionId: null }
-  root.value = splitAtPane(root.value, target, dir, pane)
+
+  // 默认克隆选中窗格的连接为独立新会话；克隆失败/无会话则保持未绑定（可手动绑定）
+  if (target?.sessionId) {
+    splitting.value = true
+    try {
+      const sid = await sessionService.clone(target.sessionId, 80, 24)
+      pane.sessionId = sid
+      ownSessions.add(sid)
+    } catch (e) {
+      message.error(`克隆会话失败：${e}`)
+    } finally {
+      splitting.value = false
+    }
+  }
+
+  root.value = splitAtPane(root.value, targetId, dir, pane)
   activePaneId.value = pane.id
 }
 
@@ -169,19 +186,19 @@ async function handleReconnect() {
           </NTooltip>
           <NTooltip v-if="paneCount < 4 && tab.sessionId" placement="left">
             <template #trigger>
-              <NButton quaternary circle size="small" @click="addPane('row')">
+              <NButton quaternary circle size="small" :loading="splitting" @click="addPane('row')">
                 <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
               </NButton>
             </template>
-            向右分屏
+            向右分屏（克隆当前选中窗格的连接）
           </NTooltip>
           <NTooltip v-if="paneCount < 4 && tab.sessionId" placement="left">
             <template #trigger>
-              <NButton quaternary circle size="small" @click="addPane('column')">
+              <NButton quaternary circle size="small" :loading="splitting" @click="addPane('column')">
                 <NIcon :component="LayoutRows" />
               </NButton>
             </template>
-            向下分屏
+            向下分屏（克隆当前选中窗格的连接）
           </NTooltip>
           <NTooltip placement="left">
             <template #trigger>
