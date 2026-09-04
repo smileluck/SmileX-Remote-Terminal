@@ -2,10 +2,10 @@
 /**
  * TopBar - 顶部工具栏
  *
- * 品牌标识 + 右侧布局开关（左栏折叠 / 监控看版）。
+ * 品牌标识 + 右侧布局开关（监控看版；折叠按钮已移至左侧活动栏）。
  */
 import { NButton, NIcon, NTooltip } from 'naive-ui'
-import { LayoutSidebarLeftCollapse, ChartAreaLine } from '@vicons/tabler'
+import { ChartAreaLine } from '@vicons/tabler'
 import { useLayoutStore } from '@/stores/layout'
 import BrandMark from '@/components/common/BrandMark.vue'
 
@@ -20,14 +20,6 @@ const layout = useLayoutStore()
     </div>
 
     <div class="top-actions">
-      <NTooltip placement="bottom">
-        <template #trigger>
-          <NButton quaternary circle size="small" @click="layout.toggleSidebar()">
-            <NIcon :component="LayoutSidebarLeftCollapse" />
-          </NButton>
-        </template>
-        折叠/展开会话栏（⌘B）
-      </NTooltip>
       <NTooltip placement="bottom">
         <template #trigger>
           <NButton

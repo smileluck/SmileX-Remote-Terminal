@@ -7,7 +7,7 @@
  * 新建会话 / 远程桌面统一由 SideBar「+」下拉弹窗承担。
  */
 import { NButton, NIcon, NTooltip } from 'naive-ui'
-import { Terminal2, Settings } from '@vicons/tabler'
+import { Terminal2, Settings, LayoutSidebarLeftCollapse } from '@vicons/tabler'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
 
@@ -25,6 +25,20 @@ function openSettings() {
 <template>
   <nav class="rail">
     <div class="rail-group">
+      <NTooltip placement="right">
+        <template #trigger>
+          <NButton
+            quaternary
+            circle
+            class="rail-btn"
+            @click="layout.toggleSidebar()"
+          >
+            <template #icon><NIcon :component="LayoutSidebarLeftCollapse" /></template>
+          </NButton>
+        </template>
+        折叠/展开会话栏（⌘B）
+      </NTooltip>
+
       <NTooltip placement="right">
         <template #trigger>
           <NButton
