@@ -8,7 +8,8 @@
  * 布局（水平左中右三栏）：
  * - 左：ActivityRail（功能导航窄栏）+ SideBar（会话管理，可折叠）
  * - 中：TabBar + MainContent（终端 / 远程桌面 / 设置）
- * - 右：RightPanel（Agent 助手 / 监控看版，可折叠/调宽/切页签）
+ * - 右：RightPanel（Agent 助手 / 监控看板 / 告警规则，可折叠/调宽/切页签；
+ *   收起时保留窄图标栏，右栏的打开与切换只在此处）
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
@@ -192,7 +193,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
                   <TabBar />
                   <MainContent :tab="activeTab" />
                 </div>
-                <RightPanel v-if="layoutStore.monitorVisible" />
+                <RightPanel />
               </div>
               <!-- 全局传输管理（右下角 FAB + 抽屉） -->
               <TransferManager />

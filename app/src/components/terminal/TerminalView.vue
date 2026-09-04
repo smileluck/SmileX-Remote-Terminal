@@ -16,14 +16,11 @@ import {
   Folder,
   ArrowsSplit2,
   LayoutRows,
-  ChartAreaLine,
-  Robot,
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
-import { useLayoutStore } from '@/stores/layout'
 import FilePanel from '@/components/sftp/FilePanel.vue'
 import PaneTerminal from './PaneTerminal.vue'
 import {
@@ -43,14 +40,8 @@ import type { TabItem } from '@/types/session'
 const props = defineProps<{ tab: TabItem }>()
 const profiles = useProfilesStore()
 const monitor = useMonitorStore()
-const layout = useLayoutStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
-
-/** AI 运维助手开关（⌘J 同语义：已在 Agent 页签时收起，否则切过去） */
-function toggleAgent() {
-  layout.toggleRightPanel('agent')
-}
 
 /** SFTP 文件面板开关 */
 const showFiles = ref(false)
@@ -279,34 +270,7 @@ async function handleReconnect() {
             </template>
             向下分屏（克隆当前选中窗格的连接）
           </NTooltip>
-          <NTooltip placement="left">
-            <template #trigger>
-              <NButton
-                quaternary
-                circle
-                size="small"
-                :type="layout.monitorVisible && layout.rightTab === 'monitor' ? 'primary' : 'default'"
-                @click="layout.toggleRightPanel('monitor')"
-              >
-                <NIcon :component="ChartAreaLine" />
-              </NButton>
-            </template>
-            监控看板（⌘M）
-          </NTooltip>
-          <NTooltip placement="left">
-            <template #trigger>
-              <NButton
-                quaternary
-                circle
-                size="small"
-                :type="layout.monitorVisible && layout.rightTab === 'agent' ? 'primary' : 'default'"
-                @click="toggleAgent()"
-              >
-                <NIcon :component="Robot" />
-              </NButton>
-            </template>
-            AI 运维助手（⌘J）
-          </NTooltip>
+          <!-- 监控看板 / AI 运维助手的打开与切换只在右侧栏（窄图标栏 / 页签） -->
       </div>
       <!-- SFTP 文件面板 -->
       <FilePanel
