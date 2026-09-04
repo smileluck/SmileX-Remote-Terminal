@@ -14,8 +14,9 @@ import { useTerminal } from '@/composables/useTerminal'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
 
-const props = defineProps<{ sessionId: string | null; closable: boolean }>()
+const props = defineProps<{ sessionId: string | null; closable: boolean; active?: boolean }>()
 const emit = defineEmits<{
+  (e: 'focus'): void
   (e: 'bind', sid: string): void
   (e: 'close'): void
 }>()
@@ -65,7 +66,7 @@ const pickedSession = ref<string | null>(null)
 </script>
 
 <template>
-  <div class="pane">
+  <div class="pane" :class="{ active }" @mousedown="emit('focus')">
     <div class="pane-head">
       <span class="pane-title">
         <NIcon :component="Terminal2" :size="12" />
@@ -117,6 +118,13 @@ const pickedSession = ref<string | null>(null)
   padding: 2px 8px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+}
+/* 选中窗格高亮（分屏作用目标） */
+.pane.active .pane-head {
+  border-bottom-color: var(--primary);
+}
+.pane.active .pane-title {
+  color: var(--primary);
 }
 .pane-title {
   display: inline-flex;

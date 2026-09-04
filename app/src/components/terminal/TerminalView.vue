@@ -2,10 +2,11 @@
 /**
  * TerminalView - SSH 终端视图（支持分屏）
  *
- * - tab 已带 sessionId（统一连接入口创建）：分屏容器渲染 PaneTerminal（≤4 窗格）
+ * - tab 已带 sessionId（统一连接入口创建）：分屏布局树渲染 PaneTerminal（≤4 窗格）
+ * - 分屏作用于当前选中窗格：在选中 pane 位置原位分割，不重排其他区域
  * - 无 sessionId 的窗格：显示「绑定现有会话 / 新建连接」选择器（见 PaneTerminal）
  * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮（原地重连）
- * - 右上角工具按钮：SFTP 文件面板 / 向右分屏 / 向下分屏
+ * - 右上角工具按钮：SFTP 文件面板 / 分屏 / 监控看板 / AI 运维助手
  */
 import { ref, computed, onUnmounted, watch } from 'vue'
 import { NButton, NIcon, NTooltip, useMessage } from 'naive-ui'
@@ -23,7 +24,16 @@ import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
 import { useLayoutStore } from '@/stores/layout'
 import FilePanel from '@/components/sftp/FilePanel.vue'
-import PaneTerminal from './PaneTerminal.vue'
+import SplitLayout from './SplitLayout.vue'
+import {
+  countPanes,
+  collectPanes,
+  findPane,
+  splitAtPane,
+  removePane,
+  type LayoutNode,
+  type PaneNode,
+} from './splitTree'
 import type { TabItem } from '@/types/session'
 
 const props = defineProps<{ tab: TabItem }>()
@@ -49,77 +59,65 @@ const profile = computed(() =>
   props.tab.profileId ? profiles.profiles.find((p) => p.id === props.tab.profileId) : null,
 )
 
-/* ---------------- 分屏状态 ---------------- */
-interface Pane {
-  id: string
-  sessionId: string | null
-}
-const panes = ref<Pane[]>([{ id: 'p0', sessionId: props.tab.sessionId ?? null }])
-/** 各 pane 的 flex-grow 比例 */
-const ratios = ref<number[]>([1])
-/** 分割方向：row（水平并排）/ column（垂直堆叠） */
-const splitDir = ref<'row' | 'column'>('row')
+/* ---------------- 分屏状态（递归布局树） ---------------- */
+/** 本 tab 独立建立的会话（关闭 pane / 卸载时统一断开；绑定其他 tab 的会话不在此列） */
+const ownSessions = new Set<string>()
+const root = ref<LayoutNode>({ kind: 'pane', id: 'p0', sessionId: props.tab.sessionId ?? null })
+/** 当前选中 pane（分屏作用目标；点击 pane 时更新） */
+const activePaneId = ref('p0')
+/** 主 pane（承载 tab 主会话，重连成功后更新绑定） */
+const primaryPaneId = ref('p0')
+const paneCount = computed(() => countPanes(root.value))
 
 watch(
   () => props.tab.sessionId,
   (sid) => {
-    // 重连成功：第一个 pane 绑定新会话
-    if (sid && panes.value[0]) panes.value[0].sessionId = sid
+    // 重连成功：主 pane 绑定新会话
+    if (!sid) return
+    const pane = findPane(root.value, primaryPaneId.value)
+    if (pane) pane.sessionId = sid
   },
 )
 
+/** 分屏：在当前选中 pane 位置原位分割（row = 向右，column = 向下） */
 function addPane(dir: 'row' | 'column') {
-  if (panes.value.length >= 4) return
-  splitDir.value = dir
-  panes.value.push({ id: `p-${Date.now()}`, sessionId: null })
-  ratios.value.push(1)
+  if (paneCount.value >= 4) return
+  const target = findPane(root.value, activePaneId.value) ? activePaneId.value : primaryPaneId.value
+  const pane: PaneNode = { kind: 'pane', id: `p-${Date.now()}`, sessionId: null }
+  root.value = splitAtPane(root.value, target, dir, pane)
+  activePaneId.value = pane.id
 }
 
-function closePane(index: number) {
-  const pane = panes.value[index]
-  // pane 独立建立的会话（非 tab 主会话）需要断开
-  if (pane.sessionId && pane.sessionId !== props.tab.sessionId) {
-    monitor.stopSampling(pane.sessionId)
-    sessionService.disconnect(pane.sessionId).catch(() => {})
+function closePane(paneId: string) {
+  const pane = findPane(root.value, paneId)
+  if (!pane || paneCount.value <= 1) return
+  disconnectIfOwn(pane.sessionId)
+  const next = removePane(root.value, paneId)
+  if (next) root.value = next
+  const first = collectPanes(root.value)[0]?.id
+  if (first) {
+    if (activePaneId.value === paneId) activePaneId.value = first
+    if (primaryPaneId.value === paneId) primaryPaneId.value = first
   }
-  panes.value.splice(index, 1)
-  ratios.value.splice(index, 1)
 }
 
-function bindPane(index: number, sid: string) {
-  panes.value[index].sessionId = sid
+function bindPane(paneId: string, sid: string) {
+  const pane = findPane(root.value, paneId)
+  if (pane) pane.sessionId = sid
 }
 
-/** 分割条拖拽：调整相邻 pane 比例 */
-function onDividerDown(e: MouseEvent, index: number) {
-  const parent = (e.currentTarget as HTMLElement).parentElement
-  if (!parent) return
-  const total = splitDir.value === 'row' ? parent.clientWidth : parent.clientHeight
-  const startX = splitDir.value === 'row' ? e.clientX : e.clientY
-  const a = ratios.value[index]
-  const b = ratios.value[index + 1]
-  const onMove = (ev: MouseEvent) => {
-    const delta = ((splitDir.value === 'row' ? ev.clientX - startX : ev.clientY - startX) / total) * (a + b)
-    ratios.value[index] = Math.max(0.1, a + delta)
-    ratios.value[index + 1] = Math.max(0.1, b - delta)
+/** 仅断开本 tab 独立建立的会话（其他 tab 的会话不受 pane 关闭影响） */
+function disconnectIfOwn(sessionId: string | null) {
+  if (sessionId && ownSessions.has(sessionId)) {
+    monitor.stopSampling(sessionId)
+    sessionService.disconnect(sessionId).catch(() => {})
+    ownSessions.delete(sessionId)
   }
-  const onUp = () => {
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', onUp)
-  }
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', onUp)
-  e.preventDefault()
 }
 
 /** tab 卸载：清理 pane 独立建立的会话（tab 主会话由 closeTab 负责） */
 onUnmounted(() => {
-  for (const pane of panes.value) {
-    if (pane.sessionId && pane.sessionId !== props.tab.sessionId) {
-      monitor.stopSampling(pane.sessionId)
-      sessionService.disconnect(pane.sessionId).catch(() => {})
-    }
-  }
+  for (const sid of [...ownSessions]) disconnectIfOwn(sid)
 })
 
 /** 重新连接（基于档案，复用当前 tab） */
@@ -143,23 +141,16 @@ async function handleReconnect() {
 <template>
   <div class="terminal-view">
     <div class="terminal-main">
-      <div class="split-area" :class="splitDir">
-        <template v-for="(pane, i) in panes" :key="pane.id">
-          <PaneTerminal
-            class="split-pane"
-            :style="{ flexGrow: ratios[i], flexBasis: 0 }"
-            :session-id="pane.sessionId"
-            :closable="panes.length > 1"
-            @bind="(sid: string) => bindPane(i, sid)"
-            @close="closePane(i)"
-          />
-          <div
-            v-if="i < panes.length - 1"
-            class="split-divider"
-            :class="splitDir"
-            @mousedown="onDividerDown($event, i)"
-          />
-        </template>
+      <div class="split-area">
+        <SplitLayout
+          class="split-root"
+          :node="root"
+          :active-id="activePaneId"
+          :pane-count="paneCount"
+          @pane-focus="(id: string) => (activePaneId = id)"
+          @pane-close="closePane"
+          @pane-bind="bindPane"
+        />
         <!-- 工具按钮：锚定终端区内右上角，避免悬浮遮挡右侧文件面板 -->
         <div class="view-tools">
           <NTooltip v-if="tab.sessionId" placement="left">
@@ -176,7 +167,7 @@ async function handleReconnect() {
             </template>
             文件管理（SFTP）
           </NTooltip>
-          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+          <NTooltip v-if="paneCount < 4 && tab.sessionId" placement="left">
             <template #trigger>
               <NButton quaternary circle size="small" @click="addPane('row')">
                 <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
@@ -184,7 +175,7 @@ async function handleReconnect() {
             </template>
             向右分屏
           </NTooltip>
-          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+          <NTooltip v-if="paneCount < 4 && tab.sessionId" placement="left">
             <template #trigger>
               <NButton quaternary circle size="small" @click="addPane('column')">
                 <NIcon :component="LayoutRows" />
@@ -268,33 +259,10 @@ async function handleReconnect() {
   min-width: 0;
   min-height: 0;
 }
-.split-area.row {
-  flex-direction: row;
-}
-.split-area.column {
-  flex-direction: column;
-}
-.split-pane {
+.split-root {
+  flex: 1;
   min-width: 0;
   min-height: 0;
-}
-.split-divider {
-  flex-shrink: 0;
-  background: var(--border-color);
-  z-index: 4;
-}
-.split-divider.row {
-  width: 4px;
-  cursor: col-resize;
-  margin: 0 1px;
-}
-.split-divider.column {
-  height: 4px;
-  cursor: row-resize;
-  margin: 1px 0;
-}
-.split-divider:hover {
-  background: var(--primary);
 }
 .view-tools {
   position: absolute;
