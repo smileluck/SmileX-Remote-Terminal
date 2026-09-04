@@ -47,10 +47,9 @@ const layout = useLayoutStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
 
-/** AI 运维助手开关（⌘J 同语义：右栏已在 Agent 页签时收起，否则打开并切换） */
+/** AI 运维助手开关（⌘J 同语义：已在 Agent 页签时收起，否则切过去） */
 function toggleAgent() {
-  if (layout.monitorVisible && layout.rightTab === 'agent') layout.toggleMonitor()
-  else layout.openRightPanel('agent')
+  layout.toggleRightPanel('agent')
 }
 
 /** SFTP 文件面板开关 */
@@ -286,8 +285,8 @@ async function handleReconnect() {
                 quaternary
                 circle
                 size="small"
-                :type="layout.monitorVisible ? 'primary' : 'default'"
-                @click="layout.toggleMonitor()"
+                :type="layout.monitorVisible && layout.rightTab === 'monitor' ? 'primary' : 'default'"
+                @click="layout.toggleRightPanel('monitor')"
               >
                 <NIcon :component="ChartAreaLine" />
               </NButton>

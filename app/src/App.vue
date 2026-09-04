@@ -62,15 +62,12 @@ function onKeydown(e: KeyboardEvent) {
     layoutStore.toggleSidebar()
   } else if (key === 'm') {
     e.preventDefault()
-    layoutStore.toggleMonitor()
+    // 已在监控页签时收起，否则切到监控页签
+    layoutStore.toggleRightPanel('monitor')
   } else if (key === 'j') {
     e.preventDefault()
-    // 右栏已在 Agent 页签时收起，否则打开并切到 Agent
-    if (layoutStore.monitorVisible && layoutStore.rightTab === 'agent') {
-      layoutStore.toggleMonitor()
-    } else {
-      layoutStore.openRightPanel('agent')
-    }
+    // 已在 Agent 页签时收起，否则切到 Agent 页签
+    layoutStore.toggleRightPanel('agent')
   } else if (key === 'k') {
     e.preventDefault()
     showPalette.value = !showPalette.value

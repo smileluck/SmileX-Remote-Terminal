@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
- * RightPanel - 右栏容器（Agent 助手 / 监控看版）
+ * RightPanel - 右栏容器（Agent 助手 / 监控看板 / 告警规则）
  *
  * 三栏布局的右栏：
- * - 顶部页签切换：Agent 助手（关联 SSH 会话的运维 Agent）/ 监控
+ * - 顶部页签切换，单页签显示（不同时叠加多个面板）
  * - 可拖拽左边缘调宽（240–560px，持久化到 layout store）
  */
 import { ref, computed } from 'vue'
@@ -18,10 +18,11 @@ const layout = useLayoutStore()
 
 const width = computed(() => `${layout.monitorWidth}px`)
 
-/** 页签定义 */
+/** 页签定义（一次只显示一个面板） */
 const panelTabs: { key: RightPanelTab; label: string }[] = [
   { key: 'agent', label: 'Agent' },
   { key: 'monitor', label: '监控' },
+  { key: 'alerts', label: '告警' },
 ]
 
 /** 拖拽调宽状态 */
@@ -61,16 +62,14 @@ function onDragStart(e: MouseEvent) {
           {{ t.label }}
         </button>
       </div>
-      <button class="close-btn" title="收起面板（⌘M）" @click="layout.toggleMonitor()">
+      <button class="close-btn" title="收起面板" @click="layout.toggleMonitor()">
         <NIcon :component="X" :size="14" />
       </button>
     </header>
     <div class="panel-body" :class="{ agent: layout.rightTab === 'agent' }">
       <ChatPanel v-if="layout.rightTab === 'agent'" />
-      <template v-else>
-        <MonitorDashboard />
-        <AlertRules />
-      </template>
+      <MonitorDashboard v-else-if="layout.rightTab === 'monitor'" />
+      <AlertRules v-else />
     </div>
   </aside>
 </template>

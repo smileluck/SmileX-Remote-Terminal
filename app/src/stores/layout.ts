@@ -3,8 +3,8 @@ import { ref, watch } from 'vue'
 
 const STORAGE_KEY = 'smilex-layout-v1'
 
-/** 右栏面板页签 */
-export type RightPanelTab = 'agent' | 'monitor'
+/** 右栏面板页签（单页签显示，切换制，不同时叠加多个面板） */
+export type RightPanelTab = 'agent' | 'monitor' | 'alerts'
 
 interface LayoutState {
   sidebarCollapsed: boolean
@@ -75,6 +75,16 @@ export const useLayoutStore = defineStore('layout', () => {
     monitorVisible.value = true
   }
 
+  /** 单页签切换语义：已在目标页签时收起右栏，否则切到该页签（⌘M/⌘J 与工具栏按钮共用） */
+  function toggleRightPanel(tab: RightPanelTab) {
+    if (monitorVisible.value && rightTab.value === tab) {
+      monitorVisible.value = false
+    } else {
+      rightTab.value = tab
+      monitorVisible.value = true
+    }
+  }
+
   // 持久化（watch 深度变化写入 localStorage）
   watch(
     [sidebarCollapsed, monitorVisible, monitorWidth, rightTab, filesWidth],
@@ -107,5 +117,6 @@ export const useLayoutStore = defineStore('layout', () => {
     toggleMonitor,
     setRightTab,
     openRightPanel,
+    toggleRightPanel,
   }
 })
