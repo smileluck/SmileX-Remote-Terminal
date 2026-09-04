@@ -135,6 +135,33 @@ pub struct AlertRule {
     pub created_at: i64,
 }
 
+/// Agent 助手会话（Chat 面板一个 Tab 一档）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChat {
+    pub id: String,
+    /// 标题（空串 = 未命名；首条用户消息落库时自动生成）
+    pub title: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Agent 助手会话消息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentChatMessage {
+    /// 消息 ID（前端生成，重启后稳定，run 块执行状态可继续对上）
+    pub id: String,
+    pub chat_id: String,
+    /// 角色：user / assistant / tool
+    pub role: String,
+    /// 内容（assistant 含 `<think>` 段，展示层解析折叠）
+    pub content: String,
+    /// 生成失败标记
+    pub error: bool,
+    pub created_at: i64,
+}
+
 /// SSH 密钥元数据（私钥在 OS Keyring，不落库）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -285,6 +312,32 @@ impl SqliteStorage {
                 fingerprint   TEXT    NOT NULL,
                 created_at    INTEGER NOT NULL
             );
+
+            -- Agent 助手会话（Chat 面板多会话 Tab）
+            -- title 空串 = 未命名（首条用户消息落库时自动生成）
+            CREATE TABLE IF NOT EXISTS agent_chats (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                title         TEXT    NOT NULL DEFAULT '',
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_chats_updated
+                ON agent_chats(updated_at DESC);
+
+            -- Agent 助手会话消息（id 为前端生成的稳定 ID）
+            -- role: user / assistant / tool；error: 生成失败标记
+            CREATE TABLE IF NOT EXISTS agent_chat_messages (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                chat_id       TEXT    NOT NULL,
+                role          TEXT    NOT NULL,
+                content       TEXT    NOT NULL,
+                error         INTEGER NOT NULL DEFAULT 0,
+                created_at    INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_chat_messages_chat
+                ON agent_chat_messages(chat_id, created_at);
             "#,
         )?;
 
@@ -721,6 +774,142 @@ impl SqliteStorage {
         let conn = self.conn.lock().await;
         Ok(conn.execute("DELETE FROM ssh_keys WHERE id = ?1", params![id])? > 0)
     }
+
+    /// 全部 Agent 会话（最近更新在前）
+    pub async fn list_chats(&self) -> Result<Vec<AgentChat>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, created_at, updated_at FROM agent_chats ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AgentChat {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 新建 Agent 会话
+    pub async fn create_chat(&self, chat: &AgentChat) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_chats (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![chat.id, chat.title, chat.created_at, chat.updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// 重命名 Agent 会话
+    pub async fn rename_chat(&self, id: &str, title: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE agent_chats SET title = ?2 WHERE id = ?1",
+            params![id, title],
+        )?;
+        Ok(())
+    }
+
+    /// 删除 Agent 会话（级联删消息，返回是否存在）
+    pub async fn delete_chat(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        let deleted = conn.execute("DELETE FROM agent_chats WHERE id = ?1", params![id])? > 0;
+        if deleted {
+            conn.execute("DELETE FROM agent_chat_messages WHERE chat_id = ?1", params![id])?;
+        }
+        Ok(deleted)
+    }
+
+    /// 某会话全部消息（旧→新，按落库顺序）
+    pub async fn list_chat_messages(&self, chat_id: &str) -> Result<Vec<AgentChatMessage>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, chat_id, role, content, error, created_at FROM agent_chat_messages WHERE chat_id = ?1 ORDER BY rowid ASC",
+        )?;
+        let rows = stmt.query_map(params![chat_id], |row| {
+            Ok(AgentChatMessage {
+                id: row.get(0)?,
+                chat_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                error: row.get::<_, i64>(4)? != 0,
+                created_at: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 追加一条会话消息，并 touch 会话 `updated_at`。
+    ///
+    /// 未命名会话收到首条用户消息时，自动以内容首行（截 20 字）为标题。
+    /// 返回更新后的会话，供前端同步列表排序与标题。
+    pub async fn append_chat_message(&self, msg: &AgentChatMessage, ts: i64) -> Result<AgentChat> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO agent_chat_messages (id, chat_id, role, content, error, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![msg.id, msg.chat_id, msg.role, msg.content, msg.error as i64, msg.created_at],
+        )?;
+
+        // 自动标题：仅未命名会话 + 用户消息
+        let title: Option<String> = if msg.role == "user" {
+            let current: String = conn
+                .query_row(
+                    "SELECT title FROM agent_chats WHERE id = ?1",
+                    params![msg.chat_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or_default();
+            if current.is_empty() {
+                let first_line = msg.content.lines().next().unwrap_or("").trim();
+                let mut t: String = first_line.chars().take(20).collect();
+                if first_line.chars().count() > 20 {
+                    t.push('…');
+                }
+                Some(t)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        match title {
+            Some(t) => conn.execute(
+                "UPDATE agent_chats SET updated_at = ?2, title = ?3 WHERE id = ?1",
+                params![msg.chat_id, ts, t],
+            )?,
+            None => conn.execute(
+                "UPDATE agent_chats SET updated_at = ?2 WHERE id = ?1",
+                params![msg.chat_id, ts],
+            )?,
+        };
+
+        let chat = conn.query_row(
+            "SELECT id, title, created_at, updated_at FROM agent_chats WHERE id = ?1",
+            params![msg.chat_id],
+            |r| {
+                Ok(AgentChat {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    created_at: r.get(2)?,
+                    updated_at: r.get(3)?,
+                })
+            },
+        )?;
+        Ok(chat)
+    }
+
+    /// 清空某会话的消息（保留会话本身）
+    pub async fn clear_chat_messages(&self, chat_id: &str) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM agent_chat_messages WHERE chat_id = ?1",
+            params![chat_id],
+        )?;
+        Ok(())
+    }
 }
 
 /// 把 rusqlite `Row` 映射为 [`AlertRule`]
@@ -962,5 +1151,111 @@ mod tests {
         let _again = SqliteStorage::open(db_path).unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Agent 会话 CRUD + 级联删消息 + 自动标题
+    #[tokio::test]
+    async fn test_agent_chat_crud() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+
+        // 新建两个会话
+        storage
+            .create_chat(&AgentChat {
+                id: "chat-1".into(),
+                title: String::new(),
+                created_at: 100,
+                updated_at: 100,
+            })
+            .await
+            .unwrap();
+        storage
+            .create_chat(&AgentChat {
+                id: "chat-2".into(),
+                title: String::new(),
+                created_at: 200,
+                updated_at: 200,
+            })
+            .await
+            .unwrap();
+
+        // 未命名会话：首条用户消息自动生成标题并 touch updated_at
+        let chat = storage
+            .append_chat_message(
+                &AgentChatMessage {
+                    id: "m-1".into(),
+                    chat_id: "chat-1".into(),
+                    role: "user".into(),
+                    content: "帮我看看 CPU 为什么这么高\n第二行".into(),
+                    error: false,
+                    created_at: 110,
+                },
+                110,
+            )
+            .await
+            .unwrap();
+        assert_eq!(chat.title, "帮我看看 CPU 为什么这么高");
+        assert_eq!(chat.updated_at, 110);
+
+        // 标题超 20 字截断加省略号
+        let chat = storage
+            .append_chat_message(
+                &AgentChatMessage {
+                    id: "m-2".into(),
+                    chat_id: "chat-2".into(),
+                    role: "user".into(),
+                    content: "这是一条非常长的消息标题用来验证截断逻辑是否生效".into(),
+                    error: false,
+                    created_at: 210,
+                },
+                210,
+            )
+            .await
+            .unwrap();
+        assert_eq!(chat.title.chars().count(), 21); // 20 字 + …
+        assert!(chat.title.ends_with('…'));
+
+        // 命名后的会话不再被自动标题覆盖
+        let chat = storage
+            .append_chat_message(
+                &AgentChatMessage {
+                    id: "m-3".into(),
+                    chat_id: "chat-2".into(),
+                    role: "user".into(),
+                    content: "第二条".into(),
+                    error: false,
+                    created_at: 220,
+                },
+                220,
+            )
+            .await
+            .unwrap();
+        assert!(chat.title.ends_with('…'));
+
+        // 消息列表（旧→新）
+        let msgs = storage.list_chat_messages("chat-2").await.unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].id, "m-2");
+        assert_eq!(msgs[1].id, "m-3");
+
+        // 会话列表按 updated_at 倒序
+        let chats = storage.list_chats().await.unwrap();
+        assert_eq!(chats.len(), 2);
+        assert_eq!(chats[0].id, "chat-2");
+        assert_eq!(chats[1].id, "chat-1");
+
+        // 重命名
+        storage.rename_chat("chat-1", "自定义名").await.unwrap();
+        let chats = storage.list_chats().await.unwrap();
+        assert_eq!(chats.iter().find(|c| c.id == "chat-1").unwrap().title, "自定义名");
+
+        // 删除会话级联删消息
+        assert!(storage.delete_chat("chat-2").await.unwrap());
+        assert!(storage.list_chat_messages("chat-2").await.unwrap().is_empty());
+        assert!(!storage.delete_chat("chat-2").await.unwrap());
+
+        // 清空消息保留会话
+        storage.clear_chat_messages("chat-1").await.unwrap();
+        assert!(storage.list_chat_messages("chat-1").await.unwrap().is_empty());
+        assert_eq!(storage.list_chats().await.unwrap().len(), 1);
     }
 }

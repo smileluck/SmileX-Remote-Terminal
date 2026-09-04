@@ -134,6 +134,14 @@ fn main() {
             commands::ai::ai_config_get,
             commands::ai::ai_config_save,
             commands::ai::ai_secret_get,
+            // Agent 助手会话（多会话 Tab）
+            commands::agent_chat::agent_chat_list,
+            commands::agent_chat::agent_chat_create,
+            commands::agent_chat::agent_chat_rename,
+            commands::agent_chat::agent_chat_delete,
+            commands::agent_chat::agent_chat_messages,
+            commands::agent_chat::agent_chat_message_append,
+            commands::agent_chat::agent_chat_clear_messages,
             // LLM 配置档案命令组（阶段 6：多档案管理）
             commands::llm_profile::llm_profile_list,
             commands::llm_profile::llm_profile_get,
