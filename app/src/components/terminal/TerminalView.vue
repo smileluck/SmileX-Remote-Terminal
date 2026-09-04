@@ -7,7 +7,8 @@
  *   树结构只换算为矩形，窗格组件不重建（关闭/分割不清空其他窗格的终端内容）
  * - 无 sessionId 的窗格：显示「绑定现有会话 / 新建连接」选择器（见 PaneTerminal）
  * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮（原地重连）
- * - 右侧工具栏（流式竖排，不悬浮）：SFTP 文件面板 / 分屏 / 监控看板 / AI 运维助手
+ * - 右侧工具栏（流式竖排，不悬浮）：SFTP 文件面板 / 分屏 / 右栏三面板入口
+ *   （Agent / 监控 / 告警，点击在右侧栏打开并切换页签，再点收起）
  */
 import { ref, computed, onUnmounted, watch } from 'vue'
 import { NButton, NIcon, NTooltip, useMessage } from 'naive-ui'
@@ -16,11 +17,15 @@ import {
   Folder,
   ArrowsSplit2,
   LayoutRows,
+  Robot,
+  ChartAreaLine,
+  Bell,
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
+import { useLayoutStore } from '@/stores/layout'
 import FilePanel from '@/components/sftp/FilePanel.vue'
 import PaneTerminal from './PaneTerminal.vue'
 import {
@@ -40,8 +45,16 @@ import type { TabItem } from '@/types/session'
 const props = defineProps<{ tab: TabItem }>()
 const profiles = useProfilesStore()
 const monitor = useMonitorStore()
+const layout = useLayoutStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
+
+/** 右栏面板入口（Agent / 监控 / 告警）：按钮高亮条件与点击切换 */
+const panelEntries = [
+  { key: 'monitor', label: '监控看板（⌘M）', icon: ChartAreaLine },
+  { key: 'agent', label: 'AI 运维助手（⌘J）', icon: Robot },
+  { key: 'alerts', label: '告警规则', icon: Bell },
+] as const
 
 /** SFTP 文件面板开关 */
 const showFiles = ref(false)
@@ -270,7 +283,22 @@ async function handleReconnect() {
             </template>
             向下分屏（克隆当前选中窗格的连接）
           </NTooltip>
-          <!-- 监控看板 / AI 运维助手的打开与切换只在右侧栏（窄图标栏 / 页签） -->
+          <!-- 右栏三面板入口：与文件管理/分屏同列，不再独立成栏 -->
+          <div class="tools-sep" />
+          <NTooltip v-for="entry in panelEntries" :key="entry.key" placement="left">
+            <template #trigger>
+              <NButton
+                quaternary
+                circle
+                size="small"
+                :type="layout.monitorVisible && layout.rightTab === entry.key ? 'primary' : 'default'"
+                @click="layout.toggleRightPanel(entry.key)"
+              >
+                <NIcon :component="entry.icon" />
+              </NButton>
+            </template>
+            {{ entry.label }}
+          </NTooltip>
       </div>
       <!-- SFTP 文件面板 -->
       <FilePanel
@@ -352,6 +380,13 @@ async function handleReconnect() {
   padding: 8px 0;
   border-left: 1px solid var(--border-color);
   background: var(--bg-app);
+}
+/* 分屏按钮与右栏面板入口之间的分组分隔线 */
+.tools-sep {
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color);
 }
 .disconnect-overlay {
   position: absolute;

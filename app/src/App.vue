@@ -8,8 +8,8 @@
  * 布局（水平左中右三栏）：
  * - 左：ActivityRail（功能导航窄栏）+ SideBar（会话管理，可折叠）
  * - 中：TabBar + MainContent（终端 / 远程桌面 / 设置）
- * - 右：RightPanel（Agent 助手 / 监控看板 / 告警规则，可折叠/调宽/切页签；
- *   收起时保留窄图标栏，右栏的打开与切换只在此处）
+ * - 右：RightPanel（Agent 助手 / 监控看板 / 告警规则，单页签切换/调宽；
+ *   收起时整体隐藏，入口在终端工具栏列与 ⌘M/⌘J）
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
