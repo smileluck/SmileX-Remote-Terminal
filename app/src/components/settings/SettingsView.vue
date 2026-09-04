@@ -42,9 +42,11 @@ import KeyManager from '@/components/settings/KeyManager.vue'
 import {
   PROVIDER_OPTIONS,
   createDefaultProfileFields,
+  findAccessMode,
   findProviderOption,
   type LlmProfile,
   type LlmProvider,
+  type LlmAuthMode,
 } from '@/types/settings'
 import * as settingsService from '@/services/settings'
 
@@ -138,24 +140,63 @@ const editingProviderOption = computed(() => {
   return findProviderOption(editing.value.provider)
 })
 
-/** NSelect 的 Provider 选项 */
-const providerOptions = computed(() =>
-  PROVIDER_OPTIONS.map((o) => ({ label: o.label, value: o.value })),
+/** 当前编辑区接入方式选项（按 authMode 匹配，回退首个） */
+const editingAccessMode = computed(() => {
+  if (!editing.value) return PROVIDER_OPTIONS[0].accessModes[0]
+  return findAccessMode(editing.value.provider, editing.value.authMode)
+})
+
+/** 该 Provider 是否区分接入方式（国内厂商：API 按量 / Coding Plan 订阅） */
+const hasAccessModeSwitch = computed(
+  () => editingProviderOption.value.accessModes.length > 1,
 )
 
-/** NSelect 的 Model 选项（含自定义兼容） */
+/** NSelect 的 Provider 选项（按「通用 / 国内厂商」分组） */
+const providerOptions = computed(() => {
+  const groups: Array<'通用' | '国内厂商'> = ['通用', '国内厂商']
+  return groups.map((g) => ({
+    type: 'group' as const,
+    label: g,
+    key: g,
+    children: PROVIDER_OPTIONS.filter((o) => o.group === g).map((o) => ({
+      label: o.label,
+      value: o.value,
+    })),
+  }))
+})
+
+/** NSelect 的接入方式选项（仅多模式 Provider 有） */
+const accessModeOptions = computed(() =>
+  editingProviderOption.value.accessModes
+    .filter((m) => m.value != null)
+    .map((m) => ({ label: m.label, value: m.value as LlmAuthMode })),
+)
+
+/** NSelect 的 Model 选项（含自定义兼容，按当前接入方式的预设） */
 const modelOptions = computed(() => {
   if (!editing.value) return []
-  const presets = editingProviderOption.value.models.map((m) => ({ label: m, value: m }))
+  const presets = editingAccessMode.value.models.map((m) => ({ label: m, value: m }))
   // 当前值不在预设列表时追加（兼容旧数据 / 用户自定义）
   if (
     editing.value.model &&
-    !editingProviderOption.value.models.includes(editing.value.model)
+    !editingAccessMode.value.models.includes(editing.value.model)
   ) {
     presets.push({ label: `${editing.value.model}（自定义）`, value: editing.value.model })
   }
   return presets
 })
+
+/** Base URL 输入框占位（部分接入方式的 URL 需用户补全信息，给模板提示） */
+const baseUrlPlaceholder = computed(
+  () =>
+    editingAccessMode.value.baseUrlPlaceholder ??
+    '留空使用官方默认；或填入代理 / 兼容服务地址',
+)
+
+/** 档案列表 meta 用：provider 值 → 显示标签 */
+function providerLabel(value: string): string {
+  return findProviderOption(value).label
+}
 
 /**
  * 加载档案列表
@@ -360,17 +401,32 @@ async function testConnection() {
 }
 
 /**
- * 切换 Provider 时重置 Model / BaseURL
+ * 切换 Provider 时重置接入方式 / Model / BaseURL
  *
- * 自动选择该 Provider 的首个默认模型；
- * BaseURL 重置为该 Provider 的默认值（空表示官方默认）。
+ * 国内厂商默认取首个接入方式（标准 API）；
+ * BaseURL / 模型列表重置为该方式默认值。
  */
 function onProviderChange(newProvider: LlmProvider) {
   if (!editing.value) return
   const opt = findProviderOption(newProvider)
+  const mode = opt.accessModes[0]
   editing.value.provider = newProvider
-  editing.value.model = opt.models[0] ?? ''
-  editing.value.baseUrl = opt.defaultBaseUrl ?? ''
+  editing.value.authMode = opt.accessModes.length > 1 ? mode.value : null
+  editing.value.model = mode.models[0] ?? ''
+  editing.value.baseUrl = mode.defaultBaseUrl
+}
+
+/**
+ * 切换接入方式（API 按量 / Coding Plan 订阅）
+ *
+ * 两种方式端点与协议不同：重置 BaseURL 与模型为该方式默认值。
+ */
+function onAccessModeChange(newMode: LlmAuthMode) {
+  if (!editing.value) return
+  const mode = findAccessMode(editing.value.provider, newMode)
+  editing.value.authMode = newMode
+  editing.value.model = mode.models[0] ?? ''
+  editing.value.baseUrl = mode.defaultBaseUrl
 }
 
 onMounted(() => {
@@ -493,7 +549,14 @@ onMounted(() => {
                   <NTag v-if="p.isActive" size="tiny" type="success" :bordered="false">默认</NTag>
                 </div>
                 <div class="profile-meta">
-                  <span>{{ p.provider }}</span>
+                  <span>{{ providerLabel(p.provider) }}</span>
+                  <span
+                    v-if="p.authMode"
+                    class="auth-mode-tag"
+                    :class="{ plan: p.authMode === 'coding_plan' }"
+                  >
+                    {{ p.authMode === 'coding_plan' ? 'Coding Plan' : 'API' }}
+                  </span>
                   <span class="separator">·</span>
                   <span>{{ p.model }}</span>
                 </div>
@@ -538,7 +601,19 @@ onMounted(() => {
                     :options="providerOptions"
                     @update:value="onProviderChange"
                   />
-                  <p class="field-hint">{{ editingProviderOption.hint }}</p>
+                  <p v-if="!hasAccessModeSwitch" class="field-hint">
+                    {{ editingAccessMode.hint }}
+                  </p>
+                </NFormItem>
+
+                <!-- 接入方式（国内厂商：API 按量 / Coding Plan 订阅） -->
+                <NFormItem v-if="hasAccessModeSwitch" label="接入方式">
+                  <NSelect
+                    :value="editing.authMode ?? undefined"
+                    :options="accessModeOptions"
+                    @update:value="onAccessModeChange"
+                  />
+                  <p class="field-hint">{{ editingAccessMode.hint }}</p>
                 </NFormItem>
 
                 <!-- Model（级联 + 可自定义输入） -->
@@ -558,7 +633,7 @@ onMounted(() => {
                 <NFormItem label="Base URL（可选）">
                   <NInput
                     v-model:value="editing.baseUrl"
-                    placeholder="留空使用官方默认；或填入代理 / 兼容服务地址"
+                    :placeholder="baseUrlPlaceholder"
                   />
                 </NFormItem>
 
@@ -889,10 +964,29 @@ onMounted(() => {
   font-size: 11px;
   color: var(--text-tertiary);
   margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 .separator {
   margin: 0 4px;
   opacity: 0.6;
+}
+/* 接入方式小标签：API（按量）/ Coding Plan（订阅） */
+.auth-mode-tag {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: var(--radius-sm, 3px);
+  font-size: 10px;
+  line-height: 16px;
+  border: 1px solid var(--border-color);
+  color: var(--text-tertiary);
+}
+.auth-mode-tag.plan {
+  color: var(--primary);
+  border-color: var(--primary-bg);
+  background: var(--primary-bg);
 }
 .empty-hint {
   display: flex;
