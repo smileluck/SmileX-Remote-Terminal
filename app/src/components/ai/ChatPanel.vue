@@ -9,13 +9,14 @@
  *
  * 对话状态在 agent store（全局），切换页签/收起面板不丢对话。
  */
-import { ref, computed, nextTick, watch } from 'vue'
-import { NButton, NInput, NPopconfirm, NIcon, NSelect, NTag, NSwitch, NTooltip } from 'naive-ui'
-import { Send, PlayerStop, Trash, PlugConnected } from '@vicons/tabler'
+import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import { NButton, NInput, NPopconfirm, NIcon, NSelect, NTag, NSwitch, NTooltip, useMessage } from 'naive-ui'
+import { Send, PlayerStop, Trash, PlugConnected, Settings } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
 import { useUiStore } from '@/stores/ui'
+import { useLlmStore } from '@/stores/llm'
 import MessageBubble from './MessageBubble.vue'
 import ContextToggle from './ContextToggle.vue'
 
@@ -23,9 +24,38 @@ const agent = useAgentStore()
 const tabs = useTabsStore()
 const profiles = useProfilesStore()
 const ui = useUiStore()
+const llm = useLlmStore()
+const message = useMessage()
 
 const input = ref('')
 const listRef = ref<HTMLElement | null>(null)
+
+/** 模型下拉选项：配置名 · 模型名 */
+const modelOptions = computed(() =>
+  llm.profiles.map((p) => ({ label: `${p.name} · ${p.model}`, value: p.id })),
+)
+
+/** 切换 LLM 配置（后端排他激活并应用到 ChatProvider，下一轮对话生效） */
+async function handleModelChange(id: string) {
+  const target = llm.profiles.find((p) => p.id === id)
+  try {
+    await llm.switchActive(id)
+    message.success(`已切换到「${target?.name ?? id}」`)
+  } catch (e) {
+    message.error(`切换失败：${String(e)}`)
+  }
+}
+
+/** 打开设置 Tab（单例，与 ActivityRail 行为一致） */
+function openSettings() {
+  const existing = tabs.tabs.find((t) => t.kind === 'settings')
+  if (existing) tabs.setActive(existing.id)
+  else tabs.addTab('settings', '设置')
+}
+
+onMounted(() => {
+  void llm.load()
+})
 
 /** 是否已绑定可用的 SSH 会话 */
 const connected = computed(() => !!agent.sshSessionId)
@@ -83,6 +113,25 @@ watch(
         class="ctx-select"
       />
       <div class="header-spacer" />
+      <NTooltip placement="bottom">
+        <template #trigger>
+          <NSelect
+            v-if="llm.profiles.length > 0"
+            class="model-select"
+            size="tiny"
+            :value="llm.activeId"
+            :options="modelOptions"
+            :loading="llm.switchingId !== null"
+            placeholder="选择模型"
+            @update:value="handleModelChange"
+          />
+          <NButton v-else quaternary size="tiny" class="model-empty" @click="openSettings">
+            <template #icon><NIcon :component="Settings" /></template>
+            配置模型
+          </NButton>
+        </template>
+        Agent 使用的 LLM 配置，切换在下一轮对话生效；档案在「设置 → LLM 配置」管理
+      </NTooltip>
       <ContextToggle v-model="agent.includeContext" />
       <NTooltip placement="bottom">
         <template #trigger>
@@ -172,6 +221,14 @@ watch(
 }
 .ctx-select {
   width: 120px;
+  flex-shrink: 0;
+}
+.model-select {
+  width: 180px;
+  max-width: 40vw;
+  flex-shrink: 0;
+}
+.model-empty {
   flex-shrink: 0;
 }
 .auto-run {
