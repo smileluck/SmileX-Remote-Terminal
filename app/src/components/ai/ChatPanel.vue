@@ -11,7 +11,7 @@
  */
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { NButton, NInput, NPopconfirm, NIcon, NSelect, NTag, NSwitch, NTooltip, useMessage } from 'naive-ui'
-import { Send, PlayerStop, Trash, PlugConnected, Settings } from '@vicons/tabler'
+import { Send, PlayerStop, Trash, PlugConnected, Settings, Plus, X } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
@@ -100,6 +100,37 @@ watch(
 
 <template>
   <div class="chat-panel">
+    <!-- 行 0：会话 Tab（多会话切换，持久化） -->
+    <div class="chat-tabs">
+      <div
+        v-for="c in agent.chats"
+        :key="c.id"
+        class="chat-tab"
+        :class="{ active: c.id === agent.activeChatId }"
+        :title="c.title || '新会话'"
+        @click="agent.switchChat(c.id)"
+      >
+        <span class="chat-tab-title">{{ c.title || '新会话' }}</span>
+        <NPopconfirm
+          v-if="c.id === agent.activeChatId"
+          @positive-click="agent.deleteChat(c.id)"
+        >
+          <template #trigger>
+            <NIcon :component="X" :size="12" class="chat-tab-close" @click.stop />
+          </template>
+          删除该会话及全部消息？
+        </NPopconfirm>
+      </div>
+      <NTooltip placement="bottom">
+        <template #trigger>
+          <NButton quaternary size="tiny" class="chat-tab-add" @click="agent.newChat()">
+            <template #icon><NIcon :component="Plus" /></template>
+          </NButton>
+        </template>
+        新会话
+      </NTooltip>
+    </div>
+
     <header class="chat-header">
       <!-- 行 1：会话信息 + 清空 -->
       <div class="header-row">
@@ -117,11 +148,11 @@ watch(
         <div class="header-spacer" />
         <NPopconfirm @positive-click="agent.clear">
           <template #trigger>
-            <NButton quaternary size="small" title="清空对话">
+            <NButton quaternary size="small" title="清空当前会话消息">
               <template #icon><NIcon :component="Trash" /></template>
             </NButton>
           </template>
-          确定清空所有对话？
+          清空当前会话的全部消息？
         </NPopconfirm>
       </div>
       <!-- 行 2：模型切换 + 上下文/自动执行开关 -->
@@ -183,11 +214,11 @@ watch(
         v-model:value="input"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 6 }"
-        :disabled="agent.loading || !connected"
+        :disabled="agent.busy || !connected"
         :placeholder="connected ? '输入问题（Enter 发送，Shift+Enter 换行）' : '请先连接 SSH 服务器'"
         @keydown="handleKeydown"
       />
-      <NButton v-if="!agent.loading" type="primary" :disabled="!connected" @click="handleSend">
+      <NButton v-if="!agent.loading" type="primary" :disabled="agent.busy || !connected" @click="handleSend">
         <template #icon><NIcon :component="Send" /></template>
         发送
       </NButton>
@@ -207,6 +238,59 @@ watch(
   height: 100%;
   background: var(--bg-app);
   min-height: 0;
+}
+/* 会话 Tab 条：横向滚动，窄面板不挤压 header */
+.chat-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  flex-shrink: 0;
+  min-height: 30px;
+}
+.chat-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+.chat-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 150px;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.chat-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+.chat-tab.active {
+  color: var(--primary);
+  background: var(--primary-bg);
+  border-color: var(--primary-border);
+}
+.chat-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.chat-tab-close {
+  flex-shrink: 0;
+  opacity: 0.55;
+  border-radius: 3px;
+}
+.chat-tab-close:hover {
+  opacity: 1;
+}
+.chat-tab-add {
+  flex-shrink: 0;
 }
 /* 头部固定两行,避免窄面板下 flex-wrap 换行位置随内容漂移 */
 .chat-header {

@@ -19,9 +19,9 @@ export async function chatAbort(): Promise<void> {
   return invoke<void>('ai_chat_abort')
 }
 
-/** 清空对话历史 */
-export async function chatClear(): Promise<void> {
-  return invoke<void>('ai_chat_clear')
+/** 清空指定会话的对话历史 */
+export async function chatClear(sessionId: string): Promise<void> {
+  return invoke<void>('ai_chat_clear', { sessionId })
 }
 
 /** 更新 LLM 配置 */

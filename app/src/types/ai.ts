@@ -21,6 +21,15 @@ export interface RunState {
   output?: string
 }
 
+/** Agent 助手会话（持久化的一档对话，Chat 面板一个 Tab） */
+export interface AgentChat {
+  id: string
+  /** 标题（空串 = 未命名，UI 显示「新会话」；首条用户消息自动生成） */
+  title: string
+  createdAt: number
+  updatedAt: number
+}
+
 /** 对话消息（UI 展示用） */
 export interface ChatMessage {
   /** 消息 ID */
