@@ -38,12 +38,14 @@ import * as sftp from '@/services/sftp'
 import type { SftpEntry } from '@/services/sftp'
 import { useTransferStore } from '@/stores/transfer'
 import { useTabsStore } from '@/stores/tabs'
+import { useLayoutStore } from '@/stores/layout'
 
 const props = defineProps<{ sessionId: string }>()
 const message = useMessage()
 const dialog = useDialog()
 const transferStore = useTransferStore()
 const tabsStore = useTabsStore()
+const layout = useLayoutStore()
 
 const loading = ref(false)
 const entries = ref<SftpEntry[]>([])
@@ -51,6 +53,27 @@ const entries = ref<SftpEntry[]>([])
 const cwd = ref('/')
 /** 拖拽悬停遮罩 */
 const dragOver = ref(false)
+
+/** 左边缘拖拽调宽（200–480px，持久化到 layout store） */
+const resizing = ref(false)
+function onResizeStart(e: MouseEvent) {
+  resizing.value = true
+  const startX = e.clientX
+  const startWidth = layout.filesWidth
+  const onMove = (ev: MouseEvent) => {
+    // 向左拖增大宽度
+    const w = Math.min(480, Math.max(200, startWidth + (startX - ev.clientX)))
+    layout.filesWidth = w
+  }
+  const onUp = () => {
+    resizing.value = false
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+  e.preventDefault()
+}
 
 async function load(path?: string) {
   loading.value = true
@@ -269,7 +292,8 @@ defineExpose({ reload: load })
 </script>
 
 <template>
-  <div class="file-panel">
+  <div class="file-panel" :style="{ width: layout.filesWidth + 'px' }">
+    <div class="resize-handle" :class="{ dragging: resizing }" @mousedown="onResizeStart" />
     <div class="fp-toolbar">
       <div class="fp-crumbs">
         <span class="crumb" @click="load('/')">/</span>
@@ -400,12 +424,25 @@ defineExpose({ reload: load })
 .file-panel {
   display: flex;
   flex-direction: column;
-  width: 240px;
   flex-shrink: 0;
   border-left: 1px solid var(--border-color);
   background: var(--bg-sidebar);
   overflow: hidden;
   position: relative;
+}
+.resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 10;
+}
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: var(--primary);
+  opacity: 0.6;
 }
 .fp-toolbar {
   display: flex;

@@ -11,6 +11,7 @@ interface LayoutState {
   monitorVisible: boolean
   monitorWidth: number
   rightTab: RightPanelTab
+  filesWidth: number
 }
 
 /** localStorage 读取（容错：损坏时回退默认值） */
@@ -20,6 +21,7 @@ function loadState(): LayoutState {
     monitorVisible: true,
     monitorWidth: 320,
     rightTab: 'monitor',
+    filesWidth: 240,
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -49,6 +51,8 @@ export const useLayoutStore = defineStore('layout', () => {
   const monitorWidth = ref(initial.monitorWidth)
   /** 右栏当前页签（Agent 助手 / 监控） */
   const rightTab = ref<RightPanelTab>(initial.rightTab)
+  /** 终端文件面板（SFTP）宽度（px，拖拽调宽） */
+  const filesWidth = ref(initial.filesWidth)
 
   /** 切换左栏折叠 */
   function toggleSidebar() {
@@ -73,7 +77,7 @@ export const useLayoutStore = defineStore('layout', () => {
 
   // 持久化（watch 深度变化写入 localStorage）
   watch(
-    [sidebarCollapsed, monitorVisible, monitorWidth, rightTab],
+    [sidebarCollapsed, monitorVisible, monitorWidth, rightTab, filesWidth],
     () => {
       try {
         localStorage.setItem(
@@ -83,6 +87,7 @@ export const useLayoutStore = defineStore('layout', () => {
             monitorVisible: monitorVisible.value,
             monitorWidth: monitorWidth.value,
             rightTab: rightTab.value,
+            filesWidth: filesWidth.value,
           }),
         )
       } catch {
@@ -97,6 +102,7 @@ export const useLayoutStore = defineStore('layout', () => {
     monitorVisible,
     monitorWidth,
     rightTab,
+    filesWidth,
     toggleSidebar,
     toggleMonitor,
     setRightTab,

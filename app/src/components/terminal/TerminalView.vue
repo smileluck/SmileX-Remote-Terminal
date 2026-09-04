@@ -160,73 +160,73 @@ async function handleReconnect() {
             @mousedown="onDividerDown($event, i)"
           />
         </template>
+        <!-- 工具按钮：锚定终端区内右上角，避免悬浮遮挡右侧文件面板 -->
+        <div class="view-tools">
+          <NTooltip v-if="tab.sessionId" placement="left">
+            <template #trigger>
+              <NButton
+                quaternary
+                circle
+                size="small"
+                :type="showFiles ? 'primary' : 'default'"
+                @click="showFiles = !showFiles"
+              >
+                <NIcon :component="Folder" />
+              </NButton>
+            </template>
+            文件管理（SFTP）
+          </NTooltip>
+          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+            <template #trigger>
+              <NButton quaternary circle size="small" @click="addPane('row')">
+                <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
+              </NButton>
+            </template>
+            向右分屏
+          </NTooltip>
+          <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
+            <template #trigger>
+              <NButton quaternary circle size="small" @click="addPane('column')">
+                <NIcon :component="LayoutRows" />
+              </NButton>
+            </template>
+            向下分屏
+          </NTooltip>
+          <NTooltip placement="left">
+            <template #trigger>
+              <NButton
+                quaternary
+                circle
+                size="small"
+                :type="layout.monitorVisible ? 'primary' : 'default'"
+                @click="layout.toggleMonitor()"
+              >
+                <NIcon :component="ChartAreaLine" />
+              </NButton>
+            </template>
+            监控看板（⌘M）
+          </NTooltip>
+          <NTooltip placement="left">
+            <template #trigger>
+              <NButton
+                quaternary
+                circle
+                size="small"
+                :type="layout.monitorVisible && layout.rightTab === 'agent' ? 'primary' : 'default'"
+                @click="toggleAgent()"
+              >
+                <NIcon :component="Robot" />
+              </NButton>
+            </template>
+            AI 运维助手（⌘J）
+          </NTooltip>
+        </div>
       </div>
       <!-- SFTP 文件面板 -->
       <FilePanel
         v-if="showFiles && tab.sessionId && !tab.disconnected"
         :session-id="tab.sessionId"
       />
-      <!-- 工具按钮 -->
-      <div class="view-tools">
-        <NTooltip v-if="tab.sessionId" placement="left">
-          <template #trigger>
-            <NButton
-              quaternary
-              circle
-              size="small"
-              :type="showFiles ? 'primary' : 'default'"
-              @click="showFiles = !showFiles"
-            >
-              <NIcon :component="Folder" />
-            </NButton>
-          </template>
-          文件管理（SFTP）
-        </NTooltip>
-        <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
-          <template #trigger>
-            <NButton quaternary circle size="small" @click="addPane('row')">
-              <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
-            </NButton>
-          </template>
-          向右分屏
-        </NTooltip>
-        <NTooltip v-if="panes.length < 4 && tab.sessionId" placement="left">
-          <template #trigger>
-            <NButton quaternary circle size="small" @click="addPane('column')">
-              <NIcon :component="LayoutRows" />
-            </NButton>
-          </template>
-          向下分屏
-        </NTooltip>
-        <NTooltip placement="left">
-          <template #trigger>
-            <NButton
-              quaternary
-              circle
-              size="small"
-              :type="layout.monitorVisible ? 'primary' : 'default'"
-              @click="layout.toggleMonitor()"
-            >
-              <NIcon :component="ChartAreaLine" />
-            </NButton>
-          </template>
-          监控看板（⌘M）
-        </NTooltip>
-        <NTooltip placement="left">
-          <template #trigger>
-            <NButton
-              quaternary
-              circle
-              size="small"
-              :type="layout.monitorVisible && layout.rightTab === 'agent' ? 'primary' : 'default'"
-              @click="toggleAgent()"
-            >
-              <NIcon :component="Robot" />
-            </NButton>
-          </template>
-          AI 运维助手（⌘J）
-        </NTooltip>
-      </div>
     </div>
     <!-- 断开遮罩 -->
     <div v-if="tab.disconnected" class="disconnect-overlay">
@@ -262,6 +262,7 @@ async function handleReconnect() {
   min-height: 0;
 }
 .split-area {
+  position: relative;
   flex: 1;
   display: flex;
   min-width: 0;
