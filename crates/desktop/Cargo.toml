@@ -39,6 +39,10 @@ russh = { workspace = true }
 # Tauri（默认 feature 集，避免与 tauri.conf.json 的 allowlist 冲突）
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
+# 原生文件/目录选择对话框（SFTP 上传选文件、下载选目录）
+tauri-plugin-dialog = "2"
+# 「在文件夹中显示」等系统打开能力（传输完成定位文件）
+tauri-plugin-opener = "2"
 
 # 存储
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -63,6 +67,10 @@ dirs = "5"
 
 # 日志
 log = "0.4"
+
+[dev-dependencies]
+# tauri mock 运行时（transfer_e2e 集成测试提供 AppHandle）
+tauri = { version = "2", features = ["test"] }
 
 [features]
 # 默认包含自定义协议

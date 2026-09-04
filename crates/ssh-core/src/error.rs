@@ -31,6 +31,10 @@ pub enum Error {
     #[error("IO 错误: {0}")]
     Io(#[from] std::io::Error),
 
+    /// 操作被取消（用户取消 / 暂停 / 会话断开）
+    #[error("操作已取消")]
+    Canceled,
+
     /// 其他底层错误
     #[error(transparent)]
     Other(#[from] anyhow::Error),

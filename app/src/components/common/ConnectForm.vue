@@ -129,6 +129,16 @@ const rules: FormRules = {
   },
 }
 
+/** 与现有分组忽略大小写同名时沿用已有写法，避免同组因大小写分叉 */
+function normalizeGroupName(input: string): string | undefined {
+  if (!input) return undefined
+  for (const p of profilesStore.profiles) {
+    const g = decodeExtra(p.extra).group?.trim() || ''
+    if (g && g.toLowerCase() === input.toLowerCase()) return g
+  }
+  return input
+}
+
 /** 把表单组装成 SessionProfile */
 function buildProfile(id?: string): SessionProfile {
   const now = Math.floor(Date.now() / 1000)
@@ -143,7 +153,7 @@ function buildProfile(id?: string): SessionProfile {
     extra: encodeExtra({
       private_key_path: form.authType === 'private_key' ? form.privateKeyPath.trim() : undefined,
       ssh_key_id: form.authType === 'private_key_mem' ? form.sshKeyId : undefined,
-      group: form.group.trim() || undefined,
+      group: normalizeGroupName(form.group.trim()),
       accept_first_host_key: form.acceptFirstHostKey,
     }),
     created_at: now,
@@ -215,6 +225,8 @@ async function loadForEdit() {
 onMounted(() => {
   loadForEdit()
   loadKeys()
+  // 分组名归一化依赖已加载的会话列表（侧栏通常已加载，这里兜底）
+  profilesStore.loadAll()
 })
 </script>
 

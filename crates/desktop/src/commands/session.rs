@@ -303,10 +303,16 @@ pub async fn session_resize(
 #[tauri::command]
 pub async fn session_disconnect(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     session_id: String,
 ) -> Result<(), crate::error::AppError> {
     // 停止该会话的监控采样
     state.monitor_sampler.stop(&session_id).await;
+    // 取消该会话所有未完成传输（传输依赖的 SSH 通道即将关闭）
+    state
+        .transfer_manager
+        .cancel_session(Some(&app), &session_id)
+        .await;
     // 清理 channel_id 映射
     state.channel_ids.lock().await.remove(&session_id);
     // 清理 TerminalControl（drop 后读循环 ctrl_rx.recv() 返回 None 退出）

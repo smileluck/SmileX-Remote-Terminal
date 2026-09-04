@@ -45,6 +45,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // 初始化 SQLite（在 setup 中拿到 app_handle 后才能解析路径）
             let db_path = resolve_db_path(&app.handle())?;
@@ -84,11 +86,18 @@ fn main() {
             commands::monitor::monitor_list,
             // SFTP 命令组
             commands::sftp::sftp_list,
-            commands::sftp::sftp_upload,
-            commands::sftp::sftp_download,
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_rename,
+            // SFTP 传输队列（上传/下载/暂停/恢复/取消）
+            commands::transfer::sftp_transfer_upload,
+            commands::transfer::sftp_transfer_download,
+            commands::transfer::sftp_transfer_pause,
+            commands::transfer::sftp_transfer_resume,
+            commands::transfer::sftp_transfer_cancel,
+            commands::transfer::sftp_transfer_retry,
+            commands::transfer::sftp_transfers,
+            commands::transfer::sftp_transfers_clear,
             // 命令片段 & 历史
             commands::snippet::snippet_list,
             commands::snippet::snippet_save,

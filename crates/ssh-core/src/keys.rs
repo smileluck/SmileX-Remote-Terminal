@@ -65,8 +65,6 @@ pub struct GeneratedKey {
 /// - RSA（4096 位，兼容旧服务器）
 /// 私钥为 PKCS#8 PEM（未加密，调用方自行决定是否加 passphrase 层）。
 pub async fn generate(config: &KeyGenConfig) -> Result<GeneratedKey> {
-    use std::io::Write as _;
-
     let key_pair = match config.key_type {
         KeyType::Ed25519 => russh_keys::key::KeyPair::generate_ed25519()
             .ok_or_else(|| crate::error::Error::Key("生成 Ed25519 密钥失败".into()))?,
@@ -106,7 +104,6 @@ pub async fn generate(config: &KeyGenConfig) -> Result<GeneratedKey> {
 
 /// 由 KeyPair 提取 OpenSSH 格式公钥行（`algo base64`）
 fn public_key_line(key_pair: &russh_keys::key::KeyPair) -> Result<String> {
-    use std::io::Write as _;
     let public = key_pair
         .clone_public_key()
         .map_err(|e| crate::error::Error::Key(format!("提取公钥失败: {e}")))?;

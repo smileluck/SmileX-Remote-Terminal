@@ -255,6 +255,11 @@ pub struct SshSession {
     handle: Mutex<client::Handle<HostKeyHandler>>,
     /// 是否已主动断开
     closed: Mutex<bool>,
+    /// 连接配置与已知主机存储的副本（SFTP 大流量轮换重连用）
+    pub(crate) reconnect: (
+        ConnectionConfig,
+        Arc<dyn KnownHostsStore>,
+    ),
 }
 
 impl SshSession {
@@ -292,7 +297,7 @@ impl SshSession {
             host: config.host.clone(),
             port: config.port,
             policy: HostKeyPolicy::from_accept_first(config.accept_first_host_key),
-            store: known_hosts,
+            store: known_hosts.clone(),
             confirm,
         };
 
@@ -377,6 +382,7 @@ impl SshSession {
             addr: addr_str,
             handle: Mutex::new(handle),
             closed: Mutex::new(false),
+            reconnect: (config.clone(), known_hosts.clone()),
         })
     }
 
@@ -496,7 +502,19 @@ impl SshSession {
     /// 在当前连接上打开 SFTP 通道并初始化协议
     ///
     /// 每次调用建立独立通道；调用方（应用层）可按 sessionId 缓存复用。
-    pub async fn open_sftp(&self) -> Result<crate::sftp::SftpClient> {
+    /// 在当前连接上打开 SFTP 通道并初始化协议
+    ///
+    /// 每次调用建立独立通道；调用方（应用层）可按 sessionId 缓存复用。
+    /// 返回的 [`SftpClient`] 持有本会话弱引用与重连上下文，用于累计
+    /// 流量达到阈值后透明轮换到新 SSH 连接（规避 russh 0.45 会话循环
+    /// 在单连接 ~1GiB 传输量后退出的问题）。
+    pub async fn open_sftp(self: &Arc<Self>) -> Result<crate::sftp::SftpClient> {
+        let session = self.open_sftp_channel().await?;
+        Ok(crate::sftp::SftpClient::new(session, Arc::downgrade(self)))
+    }
+
+    /// 打开一条新的 SFTP 通道（通道开 + 子系统请求 + 协议初始化）
+    pub async fn open_sftp_channel(&self) -> Result<russh_sftp::client::SftpSession> {
         let channel = {
             let handle = self.handle.lock().await;
             handle
@@ -504,13 +522,16 @@ impl SshSession {
                 .await
                 .map_err(|e| Error::Terminal(format!("打开 SFTP channel 失败: {e}")))?
         };
-
-        let sftp = russh_sftp::client::SftpSession::new(channel.into_stream())
+        // SftpSession 只负责在流上收发 SFTP 包，子系统请求必须由此处显式发出，
+        // 否则对端不会启动 sftp-server，初始化将一直等到超时
+        channel
+            .request_subsystem(true, "sftp")
             .await
-            .map_err(|e| Error::Terminal(format!("SFTP 协议初始化失败: {e}")))?;
+            .map_err(|e| Error::Terminal(format!("请求 SFTP 子系统失败: {e}")))?;
 
-        tracing::debug!(session_id = %self.id, "SFTP 通道已建立");
-        Ok(crate::sftp::SftpClient::new(sftp))
+        russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| Error::Terminal(format!("SFTP 协议初始化失败: {e}")))
     }
 
     /// 主动断开会话（幂等：多次调用安全）

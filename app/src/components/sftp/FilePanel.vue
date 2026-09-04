@@ -2,17 +2,21 @@
 /**
  * FilePanel - SFTP 文件面板
  *
- * 终端右侧可折叠抽屉：远端目录浏览 / 上传 / 下载 / 新建目录 / 删除 / 重命名。
+ * 终端右侧可折叠抽屉：远端目录浏览 / 上传（对话框 + 拖拽）/ 下载 /
+ * 新建目录 / 递归删除 / 重命名。传输任务入全局队列（传输管理弹窗查看进度）。
  * 由 TerminalView 持有（tab 须带 sessionId）。
  */
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
+  NBadge,
   NButton,
+  NDropdown,
   NIcon,
   NInput,
   NSpin,
   NEmpty,
   NTooltip,
+  useDialog,
   useMessage,
 } from 'naive-ui'
 import {
@@ -25,18 +29,28 @@ import {
   Edit,
   FolderPlus,
   ChevronRight,
+  ArrowsLeftRight,
 } from '@vicons/tabler'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
+
 import * as sftp from '@/services/sftp'
 import type { SftpEntry } from '@/services/sftp'
+import { useTransferStore } from '@/stores/transfer'
+import { useTabsStore } from '@/stores/tabs'
 
 const props = defineProps<{ sessionId: string }>()
 const message = useMessage()
+const dialog = useDialog()
+const transferStore = useTransferStore()
+const tabsStore = useTabsStore()
 
 const loading = ref(false)
 const entries = ref<SftpEntry[]>([])
 /** 当前绝对路径（初始为远端 home，由后端返回的 entry.path 推断） */
 const cwd = ref('/')
-const fileInput = ref<HTMLInputElement | null>(null)
+/** 拖拽悬停遮罩 */
+const dragOver = ref(false)
 
 async function load(path?: string) {
   loading.value = true
@@ -61,6 +75,39 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  // 拖拽上传（webview 级事件，多面板时只响应激活 tab）
+  try {
+    unlistenDrag = await getCurrentWebview().onDragDropEvent((event) => {
+      if (tabsStore.activeTab?.sessionId !== props.sessionId) return
+      const payload = event.payload
+      if (payload.type === 'enter') {
+        if (payload.paths?.length) dragOver.value = true
+      } else if (payload.type === 'over') {
+        // over 变体不带 paths，视为悬停延续（enter 已确认携带文件）
+      } else if (payload.type === 'drop') {
+        dragOver.value = false
+        enqueueUpload(payload.paths ?? [])
+      } else {
+        dragOver.value = false
+      }
+    })
+  } catch {
+    // 非 Tauri 环境（vite 预览）无此 API
+  }
+})
+
+let unlistenDrag: (() => void) | null = null
+onUnmounted(() => unlistenDrag?.())
+
+/** 本会话已完成传输数：变化时自动刷新目录（上传完成后列表更新） */
+const completedCount = computed(
+  () =>
+    transferStore.groups.filter(
+      (g) => g.sessionId === props.sessionId && g.status === 'completed',
+    ).length,
+)
+watch(completedCount, () => {
+  if (completedCount.value > 0) load()
 })
 
 function enter(entry: SftpEntry) {
@@ -74,23 +121,66 @@ function goCrumb(index: number) {
   load(target || '/')
 }
 
-async function handleDownload(entry: SftpEntry) {
+/** 入队上传并反馈 */
+async function enqueueUpload(localPaths: string[]) {
+  if (!localPaths.length) return
   try {
-    const saved = await sftp.download(props.sessionId, entry.path)
-    message.success(`已下载到 ${saved}`)
+    await transferStore.startUpload(props.sessionId, localPaths, cwd.value)
+    message.success(`已加入上传队列（${localPaths.length} 项）`)
+    transferStore.managerVisible = true
   } catch (e) {
     message.error(String(e))
   }
 }
 
-async function handleRemove(entry: SftpEntry) {
+/** 对话框选择文件上传（多选） */
+async function pickFiles() {
   try {
-    await sftp.remove(props.sessionId, entry.path, entry.is_dir)
-    message.success(`已删除 ${entry.name}`)
-    load()
+    const res = await openFileDialog({ multiple: true, title: '选择上传的文件' })
+    enqueueUpload(Array.isArray(res) ? res : res ? [res] : [])
   } catch (e) {
     message.error(String(e))
   }
+}
+
+/** 对话框选择文件夹上传（递归） */
+async function pickFolder() {
+  try {
+    const res = await openFileDialog({ directory: true, title: '选择上传的文件夹' })
+    enqueueUpload(res ? [res] : [])
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+/** 入队下载（文件或递归文件夹） */
+async function handleDownload(entry: SftpEntry) {
+  try {
+    await transferStore.startDownload(props.sessionId, [entry.path])
+    message.success(`已加入下载队列：${entry.name}`)
+    transferStore.managerVisible = true
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+/** 递归删除（危险操作，弹确认） */
+function handleRemove(entry: SftpEntry) {
+  dialog.warning({
+    title: entry.is_dir ? '删除目录' : '删除文件',
+    content: `将删除 ${entry.path}${entry.is_dir ? ' 及其全部内容' : ''}，不可恢复。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await sftp.remove(props.sessionId, entry.path)
+        message.success(`已删除 ${entry.name}`)
+        load()
+      } catch (e) {
+        message.error(String(e))
+      }
+    },
+  })
 }
 
 let renaming: SftpEntry | null = null
@@ -136,20 +226,36 @@ async function confirmMkdir() {
   }
 }
 
-async function handleUpload(ev: Event) {
-  const input = ev.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  try {
-    const buf = new Uint8Array(await file.arrayBuffer())
-    await sftp.upload(props.sessionId, `${cwd.value}/${file.name}`, buf)
-    message.success(`已上传 ${file.name}`)
-    load()
-  } catch (e) {
-    message.error(String(e))
-  } finally {
-    input.value = ''
-  }
+/** 右键菜单（手动定位：单实例挂面板根节点） */
+const menuShow = ref(false)
+const menuX = ref(0)
+const menuY = ref(0)
+let menuTarget: SftpEntry | null = null
+
+function onContextMenu(e: MouseEvent, entry: SftpEntry) {
+  menuTarget = entry
+  menuX.value = e.clientX
+  menuY.value = e.clientY
+  menuShow.value = true
+}
+
+function onMenuSelect(key: string) {
+  menuShow.value = false
+  if (menuTarget) onRowMenu(key, menuTarget)
+}
+
+function rowMenuOptions(entry: SftpEntry) {
+  return [
+    { label: entry.is_dir ? '下载（递归）' : '下载', key: 'download' },
+    { label: '重命名', key: 'rename' },
+    { label: entry.is_dir ? '删除（递归）' : '删除', key: 'remove' },
+  ]
+}
+
+function onRowMenu(key: string, entry: SftpEntry) {
+  if (key === 'download') handleDownload(entry)
+  else if (key === 'rename') startRename(entry)
+  else if (key === 'remove') handleRemove(entry)
 }
 
 function fmtSize(n: number): string {
@@ -191,13 +297,30 @@ defineExpose({ reload: load })
         </NTooltip>
         <NTooltip placement="bottom">
           <template #trigger>
-            <NButton quaternary circle size="tiny" @click="fileInput?.click()">
+            <NButton quaternary circle size="tiny" @click="pickFiles">
               <NIcon :component="Upload" />
             </NButton>
           </template>
           上传文件
         </NTooltip>
-        <input ref="fileInput" type="file" hidden @change="handleUpload" />
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <NButton quaternary circle size="tiny" @click="pickFolder">
+              <NIcon :component="Folder" />
+            </NButton>
+          </template>
+          上传文件夹
+        </NTooltip>
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <NBadge :value="transferStore.activeCount" :max="99" :show="transferStore.activeCount > 0">
+              <NButton quaternary circle size="tiny" @click="transferStore.managerVisible = true">
+                <NIcon :component="ArrowsLeftRight" />
+              </NButton>
+            </NBadge>
+          </template>
+          传输管理
+        </NTooltip>
       </div>
     </div>
 
@@ -220,6 +343,7 @@ defineExpose({ reload: load })
         :key="entry.path"
         class="fp-row"
         @dblclick="enter(entry)"
+        @contextmenu.prevent="(e: MouseEvent) => onContextMenu(e, entry)"
       >
         <NIcon
           :component="entry.is_dir ? Folder : File"
@@ -239,13 +363,7 @@ defineExpose({ reload: load })
           <span class="fp-name" :title="entry.name" @click="enter(entry)">{{ entry.name }}</span>
           <span class="fp-size">{{ entry.is_dir ? '—' : fmtSize(entry.size) }}</span>
           <span class="fp-ops">
-            <NButton
-              v-if="!entry.is_dir"
-              quaternary
-              circle
-              size="tiny"
-              @click.stop="handleDownload(entry)"
-            >
+            <NButton quaternary circle size="tiny" @click.stop="handleDownload(entry)">
               <NIcon :component="Download" />
             </NButton>
             <NButton quaternary circle size="tiny" @click.stop="startRename(entry)">
@@ -257,7 +375,24 @@ defineExpose({ reload: load })
           </span>
         </template>
       </div>
+      <!-- 拖拽上传遮罩 -->
+      <div v-if="dragOver" class="fp-dropzone">
+        <NIcon :component="Upload" :size="28" />
+        <span>松开以上传到 {{ cwd }}</span>
+      </div>
     </NSpin>
+
+    <!-- 右键菜单（跟随光标位置） -->
+    <NDropdown
+      trigger="manual"
+      :show="menuShow"
+      :x="menuX"
+      :y="menuY"
+      placement="bottom-start"
+      :options="menuTarget ? rowMenuOptions(menuTarget) : []"
+      @select="onMenuSelect"
+      @clickoutside="menuShow = false"
+    />
   </div>
 </template>
 
@@ -270,6 +405,7 @@ defineExpose({ reload: load })
   border-left: 1px solid var(--border-color);
   background: var(--bg-sidebar);
   overflow: hidden;
+  position: relative;
 }
 .fp-toolbar {
   display: flex;
@@ -301,9 +437,6 @@ defineExpose({ reload: load })
   color: var(--text-tertiary);
   flex-shrink: 0;
 }
-.crumb-rename {
-  width: 90px;
-}
 .fp-actions {
   display: flex;
   gap: 2px;
@@ -319,6 +452,7 @@ defineExpose({ reload: load })
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
+  position: relative;
 }
 .fp-empty {
   padding: 24px 0;
@@ -366,5 +500,20 @@ defineExpose({ reload: load })
 }
 .fp-row:hover .fp-size {
   display: none;
+}
+.fp-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--primary) 12%, var(--bg-sidebar));
+  border: 2px dashed var(--primary);
+  color: var(--primary);
+  font-size: 13px;
+  pointer-events: none;
 }
 </style>

@@ -34,8 +34,10 @@ import {
   NSpin,
   useMessage,
 } from 'naive-ui'
-import { Plus, Palette, Robot, Key } from '@vicons/tabler'
+import { Plus, Palette, Robot, Key, CloudDownload, Folder as FolderIcon } from '@vicons/tabler'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
+import { useTransferStore } from '@/stores/transfer'
 import KeyManager from '@/components/settings/KeyManager.vue'
 import {
   PROVIDER_OPTIONS,
@@ -56,9 +58,10 @@ function genId(): string {
 
 const message = useMessage()
 const themeStore = useThemeStore()
+const transferStore = useTransferStore()
 
-/** 设置分区：外观 / llm 配置 / ssh 密钥 */
-type Section = 'appearance' | 'llm' | 'keys'
+/** 设置分区：外观 / llm 配置 / ssh 密钥 / 文件传输 */
+type Section = 'appearance' | 'llm' | 'keys' | 'transfer'
 const section = ref<Section>('llm')
 
 /** 分区元信息（左侧导航 + 内容区标题） */
@@ -84,7 +87,24 @@ const SECTIONS: { value: Section; label: string; icon: Component; title: string;
     title: 'SSH 密钥',
     desc: '生成或导入 SSH 密钥用于连接认证，私钥加密存储于本地，前端不展示明文。',
   },
+  {
+    value: 'transfer',
+    label: '文件传输',
+    icon: CloudDownload,
+    title: '文件传输',
+    desc: 'SFTP 上传下载的行为偏好。传输并发、进度与暂停/恢复见右下角传输管理。',
+  },
 ]
+
+/** 选择下载目录（原生对话框） */
+async function pickDownloadDir() {
+  try {
+    const dir = await openFileDialog({ directory: true, title: '选择下载目录' })
+    if (typeof dir === 'string') transferStore.downloadDir = dir
+  } catch (e) {
+    message.error(String(e))
+  }
+}
 
 const currentSection = computed(() => SECTIONS.find((s) => s.value === section.value)!)
 
@@ -417,6 +437,36 @@ onMounted(() => {
         <KeyManager />
       </div>
 
+      <!-- 文件传输：下载目录偏好 -->
+      <div v-else-if="section === 'transfer'" class="section-body">
+        <section class="settings-card transfer-card">
+          <div>
+            <h3 class="settings-card-title">下载目录</h3>
+            <p class="settings-card-desc">
+              SFTP 下载文件的保存位置；同名文件自动加「(1)」后缀，不会覆盖。
+            </p>
+          </div>
+          <div class="dir-picker">
+            <NInput
+              :value="transferStore.downloadDir || '系统下载目录（~/Downloads）'"
+              readonly
+              size="small"
+            >
+              <template #prefix><NIcon :component="FolderIcon" /></template>
+            </NInput>
+            <NButton size="small" @click="pickDownloadDir">选择目录</NButton>
+            <NButton
+              v-if="transferStore.downloadDir"
+              size="small"
+              quaternary
+              @click="transferStore.downloadDir = ''"
+            >
+              恢复默认
+            </NButton>
+          </div>
+        </section>
+      </div>
+
       <!-- LLM 配置 -->
       <template v-else>
         <NSpin v-if="loading && profiles.length === 0" class="loading" />
@@ -670,6 +720,19 @@ onMounted(() => {
 /* 外观：主题预览卡片 */
 .theme-card {
   max-width: 520px;
+}
+
+/* 文件传输：下载目录 */
+.transfer-card {
+  max-width: 560px;
+}
+.dir-picker {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dir-picker .n-input {
+  flex: 1;
 }
 .theme-options {
   display: flex;

@@ -1,10 +1,12 @@
 /**
  * SFTP 命令组封装
  *
- * 对接后端 `sftp_*` commands（远端文件浏览 / 上传 / 下载 / 增删改）。
+ * 对接后端 `sftp_*` / `sftp_transfer_*` commands：
+ * 远端文件浏览 / 递归删除 / 增删改 + 传输队列（上传/下载/暂停/恢复/取消）。
  */
 
 import { invoke } from './invoke'
+import type { TransferGroupInfo } from '@/types/transfer'
 
 /** 远端目录条目 */
 export interface SftpEntry {
@@ -21,36 +23,69 @@ export function list(sessionId: string, path?: string): Promise<SftpEntry[]> {
   return invoke<SftpEntry[]>('sftp_list', { sessionId, path: path ?? null })
 }
 
-/** 上传文件（data 为 Uint8Array/ArrayBuffer） */
-export function upload(
-  sessionId: string,
-  remotePath: string,
-  data: Uint8Array,
-): Promise<void> {
-  // Tauri 2 将 ArrayBuffer 参数自动转为 Vec<u8>
-  return invoke<void>('sftp_upload', {
-    sessionId,
-    remotePath,
-    data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-  })
-}
-
-/** 下载文件到本地 ~/Downloads（返回保存路径） */
-export function download(sessionId: string, remotePath: string): Promise<string> {
-  return invoke<string>('sftp_download', { sessionId, remotePath })
-}
-
 /** 创建目录 */
 export function mkdir(sessionId: string, path: string): Promise<void> {
   return invoke<void>('sftp_mkdir', { sessionId, path })
 }
 
-/** 删除文件或空目录 */
-export function remove(sessionId: string, path: string, isDir: boolean): Promise<void> {
-  return invoke<void>('sftp_remove', { sessionId, path, isDir })
+/** 递归删除文件/目录（符号链接只删链接本身） */
+export function remove(sessionId: string, path: string): Promise<void> {
+  return invoke<void>('sftp_remove', { sessionId, path })
 }
 
 /** 重命名 / 移动 */
 export function rename(sessionId: string, oldPath: string, newPath: string): Promise<void> {
   return invoke<void>('sftp_rename', { sessionId, oldPath, newPath })
+}
+
+/** 上传本地文件/文件夹到远端目录（入队，返回传输组 ID） */
+export function transferUpload(
+  sessionId: string,
+  localPaths: string[],
+  remoteDir: string,
+): Promise<string[]> {
+  return invoke<string[]>('sftp_transfer_upload', { sessionId, localPaths, remoteDir })
+}
+
+/** 下载远端文件/文件夹（入队，返回传输组 ID；saveDir 缺省为系统下载目录） */
+export function transferDownload(
+  sessionId: string,
+  remotePaths: string[],
+  saveDir?: string | null,
+): Promise<string[]> {
+  return invoke<string[]>('sftp_transfer_download', {
+    sessionId,
+    remotePaths,
+    saveDir: saveDir ?? null,
+  })
+}
+
+/** 暂停传输组（保留进度） */
+export function transferPause(groupId: string): Promise<void> {
+  return invoke<void>('sftp_transfer_pause', { groupId })
+}
+
+/** 恢复暂停的传输组（断点续传） */
+export function transferResume(groupId: string): Promise<void> {
+  return invoke<void>('sftp_transfer_resume', { groupId })
+}
+
+/** 取消传输组 */
+export function transferCancel(groupId: string): Promise<void> {
+  return invoke<void>('sftp_transfer_cancel', { groupId })
+}
+
+/** 重试失败/已取消的传输组（断点续传） */
+export function transferRetry(groupId: string): Promise<void> {
+  return invoke<void>('sftp_transfer_retry', { groupId })
+}
+
+/** 传输列表快照（恢复 UI 用） */
+export function listTransfers(sessionId?: string | null): Promise<TransferGroupInfo[]> {
+  return invoke<TransferGroupInfo[]>('sftp_transfers', { sessionId: sessionId ?? null })
+}
+
+/** 清除已完成/失败/已取消的传输记录 */
+export function clearTransfers(sessionId?: string | null): Promise<void> {
+  return invoke<void>('sftp_transfers_clear', { sessionId: sessionId ?? null })
 }

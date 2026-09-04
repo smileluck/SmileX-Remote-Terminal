@@ -8,6 +8,7 @@ description = "SmileX SSH 领域核心：连接管理、PTY 终端、SFTP、端�
 [dependencies]
 # workspace 依赖
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -19,7 +20,7 @@ uuid = { workspace = true }
 # SSH 协议库（纯 Rust，Tokio 异步）
 russh = { workspace = true }
 russh-keys = "0.45"
-russh-sftp = "2.0"
+russh-sftp = "2.4"
 
 # 密码学（密钥算法白名单用）
 ring = "0.17"

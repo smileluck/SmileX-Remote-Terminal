@@ -132,6 +132,64 @@ pub struct AlertFiredPayload {
     pub timestamp_ms: u64,
 }
 
+/// 传输方向（`transfer_event` payload 内嵌，值为 "upload" / "download"）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferKind {
+    Upload,
+    Download,
+}
+
+/// 传输组状态（`transfer_event` payload 内嵌）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferStatus {
+    Queued,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Canceled,
+}
+
+/// `transfer_event` 事件 payload（一次传输组快照）
+///
+/// 前端（stores/transfer.ts）读 camelCase，按 groupId upsert。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferEventPayload {
+    /// 会话 ID
+    pub session_id: String,
+    /// 服务器身份（"user@host:port"，展示用）
+    pub session_label: Option<String>,
+    /// 传输组 ID（一个顶层文件/文件夹一组）
+    pub group_id: String,
+    /// 传输方向
+    pub kind: TransferKind,
+    /// 顶层名称（文件名/文件夹名）
+    pub name: String,
+    /// 是否文件夹
+    pub is_dir: bool,
+    /// 组状态
+    pub status: TransferStatus,
+    /// 已传字节（组聚合）
+    pub bytes_done: u64,
+    /// 总字节（组聚合）
+    pub size_total: u64,
+    /// 当前速度（bytes/s，仅 running 有值）
+    pub speed_bps: u64,
+    /// 已完成文件数
+    pub files_done: u32,
+    /// 文件总数
+    pub file_count: u32,
+    /// 失败原因
+    pub error: Option<String>,
+    /// 下载对应的本地目标路径（「打开文件夹」用）
+    pub local_path: Option<String>,
+    /// 创建时间戳（毫秒）
+    pub created_at_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +258,34 @@ mod tests {
         };
         let v = serde_json::to_value(&metrics).unwrap();
         assert_eq!(v["session_id"], "s1");
+    }
+
+    /// transfer_event 前端读 camelCase（stores/transfer.ts），枚举值为 snake_case
+    #[test]
+    fn transfer_payload_serializes_to_camel_case() {
+        let payload = TransferEventPayload {
+            session_id: "s1".into(),
+            session_label: Some("user@host:22".into()),
+            group_id: "g1".into(),
+            kind: TransferKind::Upload,
+            name: "a.txt".into(),
+            is_dir: false,
+            status: TransferStatus::Running,
+            bytes_done: 10,
+            size_total: 100,
+            speed_bps: 1024,
+            files_done: 0,
+            file_count: 1,
+            error: None,
+            local_path: None,
+            created_at_ms: 1,
+        };
+        let v = serde_json::to_value(&payload).unwrap();
+        assert_eq!(v["sessionId"], "s1");
+        assert_eq!(v["groupId"], "g1");
+        assert_eq!(v["speedBps"], 1024);
+        assert_eq!(v["kind"], "upload");
+        assert_eq!(v["status"], "running");
+        assert!(v.get("session_id").is_none());
     }
 }

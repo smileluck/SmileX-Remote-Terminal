@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 import type { SessionProfile } from '@/types/profile'
+import { decodeExtra, encodeExtra } from '@/types/profile'
 import * as profileService from '@/services/profile'
 
 /**
@@ -52,6 +53,26 @@ export const useProfilesStore = defineStore('profiles', () => {
     return profiles.value.find((p) => p.id === id)
   }
 
+  /**
+   * 批量把会话移动到指定分组（拖拽移动/分组合并/重命名共用）
+   *
+   * @param ids 目标会话 id 列表
+   * @param group 新分组名；空串/undefined 表示移出分组
+   * 已在同组的会话跳过写库；全部写完只刷新一次列表。
+   */
+  async function setGroup(ids: string[], group?: string): Promise<void> {
+    const target = group?.trim() || undefined
+    for (const id of ids) {
+      const p = profiles.value.find((x) => x.id === id)
+      if (!p) continue
+      const extra = decodeExtra(p.extra)
+      if ((extra.group || '').trim() === (target || '')) continue
+      extra.group = target
+      await profileService.save({ ...p, extra: encodeExtra(extra) })
+    }
+    await loadAll()
+  }
+
   return {
     profiles,
     loaded,
@@ -60,5 +81,6 @@ export const useProfilesStore = defineStore('profiles', () => {
     save,
     remove,
     findById,
+    setGroup,
   }
 })

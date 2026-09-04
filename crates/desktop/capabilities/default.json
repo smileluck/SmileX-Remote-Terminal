@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "默认权限：核心事件监听（ai_token / ai_done / session_closed / monitor_metrics 等）与窗口基础能力",
+  "description": "默认权限：核心事件监听（ai_token / ai_done / session_closed / monitor_metrics / transfer_event 等）、原生文件对话框与「在文件夹中显示」",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "opener:default",
+    "opener:allow-reveal-item-in-dir"
+  ]
 }

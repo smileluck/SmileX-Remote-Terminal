@@ -25,6 +25,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
 import { useUiStore } from '@/stores/ui'
 import { useAgentStore } from '@/stores/agent'
+import { useTransferStore } from '@/stores/transfer'
 import TopBar from '@/components/layout/TopBar.vue'
 import SideBar from '@/components/layout/SideBar.vue'
 import MainContent from '@/components/layout/MainContent.vue'
@@ -34,12 +35,16 @@ import RightPanel from '@/components/layout/RightPanel.vue'
 import SessionEvents from '@/components/layout/SessionEvents.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import ConnectDialog from '@/components/common/ConnectDialog.vue'
+import TransferManager from '@/components/sftp/TransferManager.vue'
 
 const tabsStore = useTabsStore()
 const layoutStore = useLayoutStore()
 const uiStore = useUiStore()
 // 实例化 agent store：注册 ai_token/ai_done 监听与 SSH 会话跟随（App 级一次）
 useAgentStore()
+// 实例化 transfer store：注册 transfer_event 监听（App 级一次）
+const transferStore = useTransferStore()
+transferStore.start()
 
 const activeTab = computed(() => tabsStore.activeTab)
 
@@ -190,6 +195,8 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
                 </div>
                 <RightPanel v-if="layoutStore.monitorVisible" />
               </div>
+              <!-- 全局传输管理（右下角 FAB + 抽屉） -->
+              <TransferManager />
             </div>
           </NNotificationProvider>
         </NDialogProvider>
