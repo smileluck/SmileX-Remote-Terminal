@@ -27,7 +27,7 @@ use crate::storage::keyring;
 use crate::storage::sqlite::LlmProfile;
 use crate::AppState;
 use ai_core::provider::history::{Message, Role};
-use ai_core::provider::llm::{LlmProvider, create_client};
+use ai_core::provider::llm::{LlmAuthMode, LlmProvider, create_client};
 use ai_core::LlmProviderConfig;
 
 /// Keyring key 前缀（与 profile id 拼接）
@@ -50,7 +50,27 @@ fn parse_provider(s: &str) -> Result<LlmProvider, crate::error::AppError> {
         "openai" => Ok(LlmProvider::OpenAi),
         "claude" => Ok(LlmProvider::Claude),
         "ollama" => Ok(LlmProvider::Ollama),
+        "zhipu" => Ok(LlmProvider::Zhipu),
+        "deepseek" => Ok(LlmProvider::DeepSeek),
+        "moonshot" => Ok(LlmProvider::Moonshot),
+        "qwen" => Ok(LlmProvider::Qwen),
+        "minimax" => Ok(LlmProvider::Minimax),
         other => Err(crate::error::AppError::llm(format!("未知的 Provider 类型: {other}"))),
+    }
+}
+
+/// 把字符串 auth_mode 名转为 `LlmAuthMode` 枚举
+///
+/// `None` / 空串表示不区分接入方式（按量 API 语义）。
+fn parse_auth_mode(s: Option<&str>) -> Result<Option<LlmAuthMode>, crate::error::AppError> {
+    match s {
+        None => Ok(None),
+        Some("") => Ok(None),
+        Some("api") => Ok(Some(LlmAuthMode::Api)),
+        Some("coding_plan") => Ok(Some(LlmAuthMode::CodingPlan)),
+        Some(other) => Err(crate::error::AppError::llm(format!(
+            "未知的接入方式: {other}（应为 api / coding_plan）"
+        ))),
     }
 }
 
@@ -61,6 +81,7 @@ fn build_config(profile: &LlmProfile, api_key: Option<String>) -> Result<LlmProv
         model: profile.model.clone(),
         base_url: profile.base_url.clone(),
         api_key,
+        auth_mode: parse_auth_mode(profile.auth_mode.as_deref())?,
         stream: profile.stream,
     })
 }
@@ -384,6 +405,7 @@ async fn migrate_legacy_config(state: &AppState) {
         provider: format!("{:?}", config.provider).to_lowercase(),
         model: config.model.clone(),
         base_url: config.base_url.clone(),
+        auth_mode: None,
         stream: config.stream,
         is_active: true,
         created_at: now,

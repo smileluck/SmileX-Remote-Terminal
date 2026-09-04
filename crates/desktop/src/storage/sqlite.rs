@@ -61,8 +61,11 @@ pub struct SessionProfile {
 
 /// LLM 配置档案（多档案管理，阶段 6）
 ///
-/// 字段 provider/model/base_url/stream 与 `ai_core::LlmProviderConfig` 同构，
+/// 字段 provider/model/base_url/auth_mode/stream 与 `ai_core::LlmProviderConfig` 同构，
 /// 额外有 id/name/is_active 用于档案管理。
+///
+/// `auth_mode` 区分接入方式：`api`（按量 API）/ `coding_plan`（Coding Plan 订阅），
+/// 仅国内厂商预设使用（旧数据为 NULL，按量处理）。
 ///
 /// **敏感字段（API Key）不落库**，单独存 Keyring（key: `llm_profile:{id}:api_key`）。
 ///
@@ -74,12 +77,15 @@ pub struct LlmProfile {
     pub id: String,
     /// 显示名称（用户可读，如 "OpenAI 工作" / "DeepSeek 个人"）
     pub name: String,
-    /// Provider 类型（小写：`openai` / `claude` / `ollama`）
+    /// Provider 预设（小写：`openai` / `claude` / `ollama` / `zhipu` 等）
     pub provider: String,
     /// 模型名（如 `gpt-4o`）
     pub model: String,
     /// Base URL（可选，留空用 Provider 默认）
     pub base_url: Option<String>,
+    /// 接入方式（`api` / `coding_plan`；NULL 表示不区分，按量处理）
+    #[serde(default)]
+    pub auth_mode: Option<String>,
     /// 是否流式输出（0/1）
     pub stream: bool,
     /// 是否为当前激活档案（同一时间仅一个）
@@ -219,6 +225,7 @@ impl SqliteStorage {
 
             -- 多 LLM 配置档案（阶段 6）
             -- 支持保存多个 Provider 配置并快速切换激活
+            -- auth_mode 区分接入方式：api（按量）/ coding_plan（订阅，Anthropic 兼容端点）
             -- API Key 单独存 Keyring（key: llm_profile:{id}:api_key）
             CREATE TABLE IF NOT EXISTS llm_profiles (
                 id            TEXT    PRIMARY KEY NOT NULL,
@@ -226,6 +233,7 @@ impl SqliteStorage {
                 provider      TEXT    NOT NULL,
                 model         TEXT    NOT NULL,
                 base_url      TEXT,
+                auth_mode     TEXT,
                 stream        INTEGER NOT NULL DEFAULT 1,
                 is_active     INTEGER NOT NULL DEFAULT 0,
                 created_at    INTEGER NOT NULL,
@@ -279,6 +287,28 @@ impl SqliteStorage {
             );
             "#,
         )?;
+
+        // 旧库升级：CREATE TABLE IF NOT EXISTS 不会为已存在的表补充新列，
+        // 需显式 ALTER（幂等：列已存在时跳过）
+        Self::ensure_column(
+            conn,
+            "llm_profiles",
+            "auth_mode",
+            "ALTER TABLE llm_profiles ADD COLUMN auth_mode TEXT",
+        )?;
+        Ok(())
+    }
+
+    /// 确保表中存在指定列，不存在则执行 DDL（幂等，用于旧库升级）
+    fn ensure_column(conn: &Connection, table: &str, column: &str, ddl: &str) -> Result<()> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        while let Some(col) = rows.next() {
+            if col?.eq_ignore_ascii_case(column) {
+                return Ok(());
+            }
+        }
+        conn.execute_batch(ddl).context("SQLite 表结构迁移失败")?;
         Ok(())
     }
 
@@ -434,16 +464,17 @@ impl SqliteStorage {
         tx.execute(
             r#"
             INSERT INTO llm_profiles
-                (id, name, provider, model, base_url, stream, is_active, created_at, updated_at)
+                (id, name, provider, model, base_url, auth_mode, stream, is_active, created_at, updated_at)
             VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO UPDATE SET
                 name       = excluded.name,
                 provider   = excluded.provider,
                 model      = excluded.model,
                 base_url   = excluded.base_url,
+                auth_mode  = excluded.auth_mode,
                 stream     = excluded.stream,
-                is_active  = CASE WHEN ?10 = 1 THEN 1 ELSE llm_profiles.is_active END,
+                is_active  = CASE WHEN ?11 = 1 THEN 1 ELSE llm_profiles.is_active END,
                 updated_at = excluded.updated_at
             "#,
             params![
@@ -452,6 +483,7 @@ impl SqliteStorage {
                 profile.provider,
                 profile.model,
                 profile.base_url,
+                profile.auth_mode,
                 profile.stream as i64,
                 profile.is_active as i64,
                 profile.created_at,
@@ -468,7 +500,7 @@ impl SqliteStorage {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, provider, model, base_url, stream, is_active, created_at, updated_at
+            SELECT id, name, provider, model, base_url, auth_mode, stream, is_active, created_at, updated_at
             FROM llm_profiles
             ORDER BY created_at ASC, name ASC
             "#,
@@ -486,7 +518,7 @@ impl SqliteStorage {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, provider, model, base_url, stream, is_active, created_at, updated_at
+            SELECT id, name, provider, model, base_url, auth_mode, stream, is_active, created_at, updated_at
             FROM llm_profiles
             WHERE id = ?1
             "#,
@@ -541,7 +573,7 @@ impl SqliteStorage {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, name, provider, model, base_url, stream, is_active, created_at, updated_at
+            SELECT id, name, provider, model, base_url, auth_mode, stream, is_active, created_at, updated_at
             FROM llm_profiles
             WHERE is_active = 1
             LIMIT 1
@@ -724,7 +756,7 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionProfile> {
 /// 把 rusqlite `Row` 映射为 [`LlmProfile`]
 ///
 /// 字段顺序与 SELECT 列对齐：
-/// `id, name, provider, model, base_url, stream, is_active, created_at, updated_at`
+/// `id, name, provider, model, base_url, auth_mode, stream, is_active, created_at, updated_at`
 fn row_to_llm_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<LlmProfile> {
     Ok(LlmProfile {
         id: row.get(0)?,
@@ -732,10 +764,11 @@ fn row_to_llm_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<LlmProfile> {
         provider: row.get(2)?,
         model: row.get(3)?,
         base_url: row.get(4)?,
-        stream: row.get::<_, i64>(5)? != 0,
-        is_active: row.get::<_, i64>(6)? != 0,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        auth_mode: row.get(5)?,
+        stream: row.get::<_, i64>(6)? != 0,
+        is_active: row.get::<_, i64>(7)? != 0,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
     })
 }
 
@@ -843,5 +876,91 @@ mod tests {
         assert!(storage.delete_profile("uuid-1").await.unwrap());
         assert!(storage.get_profile("uuid-1").await.unwrap().is_none());
         assert!(!storage.delete_profile("uuid-1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_llm_profile_auth_mode_roundtrip() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+        let p = LlmProfile {
+            id: "llm-1".into(),
+            name: "智谱 Coding Plan".into(),
+            provider: "zhipu".into(),
+            model: "glm-4.6".into(),
+            base_url: Some("https://open.bigmodel.cn/api/anthropic".into()),
+            auth_mode: Some("coding_plan".into()),
+            stream: true,
+            is_active: false,
+            created_at: 1000,
+            updated_at: 1000,
+        };
+        storage.save_llm_profile(&p).await.unwrap();
+        let got = storage.get_llm_profile("llm-1").await.unwrap().unwrap();
+        assert_eq!(got.auth_mode.as_deref(), Some("coding_plan"));
+
+        // 更新为按量 API
+        let mut p2 = p.clone();
+        p2.auth_mode = Some("api".into());
+        storage.save_llm_profile(&p2).await.unwrap();
+        let got2 = storage.get_llm_profile("llm-1").await.unwrap().unwrap();
+        assert_eq!(got2.auth_mode.as_deref(), Some("api"));
+
+        // 旧数据 NULL → None
+        let mut p3 = p.clone();
+        p3.id = "llm-legacy".into();
+        p3.auth_mode = None;
+        storage.save_llm_profile(&p3).await.unwrap();
+        let got3 = storage.get_llm_profile("llm-legacy").await.unwrap().unwrap();
+        assert_eq!(got3.auth_mode, None);
+    }
+
+    /// 旧库（llm_profiles 无 auth_mode 列）打开时自动 ALTER 补列，
+    /// 已有数据保留且 auth_mode 读出为 None
+    #[tokio::test]
+    async fn test_migrate_legacy_llm_profiles_table() {
+        let dir = std::env::temp_dir().join(format!("srt-test-migrate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("legacy.db");
+
+        {
+            // 建旧 schema 库并写入一条旧记录
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE llm_profiles (
+                    id            TEXT    PRIMARY KEY NOT NULL,
+                    name          TEXT    NOT NULL,
+                    provider      TEXT    NOT NULL,
+                    model         TEXT    NOT NULL,
+                    base_url      TEXT,
+                    stream        INTEGER NOT NULL DEFAULT 1,
+                    is_active     INTEGER NOT NULL DEFAULT 0,
+                    created_at    INTEGER NOT NULL,
+                    updated_at    INTEGER NOT NULL
+                );
+                INSERT INTO llm_profiles (id, name, provider, model, base_url, stream, is_active, created_at, updated_at)
+                VALUES ('old-1', '旧配置', 'openai', 'gpt-4o', NULL, 1, 1, 100, 100);
+                "#,
+            )
+            .unwrap();
+        }
+
+        // 正常打开触发 init_schema 的列迁移
+        let storage = SqliteStorage::open(db_path.clone()).unwrap();
+        let got = storage.get_llm_profile("old-1").await.unwrap().unwrap();
+        assert_eq!(got.name, "旧配置");
+        assert_eq!(got.auth_mode, None);
+
+        // 迁移后新字段可写
+        let mut updated = got.clone();
+        updated.auth_mode = Some("api".into());
+        storage.save_llm_profile(&updated).await.unwrap();
+        let got2 = storage.get_llm_profile("old-1").await.unwrap().unwrap();
+        assert_eq!(got2.auth_mode.as_deref(), Some("api"));
+
+        // 幂等：重复 open 不报错
+        drop(storage);
+        let _again = SqliteStorage::open(db_path).unwrap();
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
