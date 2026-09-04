@@ -20,7 +20,7 @@
  * - tabs store（连接成功后 addTab）
  */
 import { computed, nextTick, onMounted, ref, type Component } from 'vue'
-import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, useMessage } from 'naive-ui'
+import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NDropdown, useMessage } from 'naive-ui'
 import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
@@ -51,6 +51,17 @@ const kindIcon: Record<string, Component> = {
 
 /** 正在连接的 profile id（禁用按钮防抖） */
 const connectingId = ref<string | null>(null)
+
+/** 新建下拉选项（SSH 会话 / 远程桌面连接，统一弹窗新增） */
+const addOptions = [
+  { label: '新建 SSH 会话', key: 'ssh' },
+  { label: '新建远程桌面连接', key: 'desktop' },
+]
+
+function onAddSelect(key: string) {
+  if (key === 'ssh') ui.openConnectDialog()
+  else ui.openDesktopConnectDialog()
+}
 
 /** 搜索关键字（名称 / host / 用户名 / 分组 子串过滤） */
 const search = ref('')
@@ -304,9 +315,11 @@ onMounted(() => {
   <aside class="side-bar">
     <header class="section-header">
       <span class="section-title">会话</span>
-      <NButton quaternary size="tiny" circle title="新建会话" @click="ui.openConnectDialog()">
-        <NIcon :component="Plus" />
-      </NButton>
+      <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
+        <NButton quaternary size="tiny" circle title="新建">
+          <NIcon :component="Plus" />
+        </NButton>
+      </NDropdown>
     </header>
 
     <div class="search-slot">

@@ -1,22 +1,15 @@
 <script setup lang="ts">
 /**
- * ActivityRail - 左侧活动栏（Termius 风）
+ * ActivityRail - 左侧活动栏
  *
- * 56px 窄竖栏，承载快捷入口：
- * - 新建 SSH：打开全局连接弹窗（唯一新建入口）
- * - 新建 RDP：开远程桌面 tab（内含连接表单）
- * - AI 助手：打开右栏 Agent 页签
- * - 底部设置入口（单例 tab）
+ * 新建会话 / 远程桌面统一由 SideBar「+」下拉弹窗承担；
+ * 本栏仅保留底部设置入口（单例 tab）。
  */
 import { NButton, NIcon, NTooltip } from 'naive-ui'
-import { Terminal2, DeviceDesktop, Robot, Settings } from '@vicons/tabler'
+import { Settings } from '@vicons/tabler'
 import { useTabsStore } from '@/stores/tabs'
-import { useUiStore } from '@/stores/ui'
-import { useLayoutStore } from '@/stores/layout'
 
 const tabs = useTabsStore()
-const ui = useUiStore()
-const layout = useLayoutStore()
 
 /** 打开设置 Tab（单例：已存在则激活，否则新建） */
 function openSettings() {
@@ -28,40 +21,7 @@ function openSettings() {
 
 <template>
   <nav class="rail">
-    <div class="rail-group">
-      <NTooltip placement="right">
-        <template #trigger>
-          <NButton quaternary circle class="rail-btn" @click="ui.openConnectDialog()">
-            <template #icon><NIcon :component="Terminal2" /></template>
-          </NButton>
-        </template>
-        新建 SSH 连接
-      </NTooltip>
-
-      <NTooltip placement="right">
-        <template #trigger>
-          <NButton quaternary circle class="rail-btn" @click="tabs.addTab('rdp', '新远程桌面')">
-            <template #icon><NIcon :component="DeviceDesktop" /></template>
-          </NButton>
-        </template>
-        新建远程桌面
-      </NTooltip>
-
-      <NTooltip placement="right">
-        <template #trigger>
-          <NButton
-            quaternary
-            circle
-            class="rail-btn"
-            :class="{ active: layout.monitorVisible && layout.rightTab === 'agent' }"
-            @click="layout.openRightPanel('agent')"
-          >
-            <template #icon><NIcon :component="Robot" /></template>
-          </NButton>
-        </template>
-        AI 运维助手
-      </NTooltip>
-    </div>
+    <div class="rail-group"></div>
 
     <div class="rail-group">
       <NTooltip placement="right">

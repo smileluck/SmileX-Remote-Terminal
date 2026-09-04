@@ -35,6 +35,7 @@ import RightPanel from '@/components/layout/RightPanel.vue'
 import SessionEvents from '@/components/layout/SessionEvents.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import ConnectDialog from '@/components/common/ConnectDialog.vue'
+import DesktopConnectDialog from '@/components/common/DesktopConnectDialog.vue'
 import TransferManager from '@/components/sftp/TransferManager.vue'
 
 const tabsStore = useTabsStore()
@@ -185,6 +186,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
               <SessionEvents />
               <CommandPalette v-if="showPalette" @close="showPalette = false" />
               <ConnectDialog />
+              <DesktopConnectDialog />
               <TopBar />
               <div class="app-body">
                 <ActivityRail />

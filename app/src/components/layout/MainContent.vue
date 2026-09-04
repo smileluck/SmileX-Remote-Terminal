@@ -56,7 +56,7 @@ const sshTabs = computed(() => tabs.tabs.filter((t) => t.kind === 'ssh'))
             <template #icon><NIcon :component="Terminal2" /></template>
             新建 SSH
           </NButton>
-          <NButton size="large" @click="tabs.addTab('rdp', '新远程桌面')">
+          <NButton size="large" @click="ui.openDesktopConnectDialog()">
             <template #icon><NIcon :component="DeviceDesktop" /></template>
             远程桌面
           </NButton>

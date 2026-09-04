@@ -2,10 +2,11 @@
 /**
  * DesktopView - 远程桌面视图
  *
- * 承载 Canvas 渲染 + 连接配置表单（首次）。
- * rdp/host 的唯一连接入口（ConnectForm 暂仅支持 SSH，待 rdp/host 功能落地后统一）。
+ * 承载 Canvas 渲染 + 连接配置表单（回退）。
+ * 新建连接统一走 DesktopConnectDialog 弹窗：tab 携带 desktopConfig，
+ * 挂载时自动发起连接；失败回退到内嵌表单（回填配置可重试）。
  */
-import { ref, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import {
   NButton,
   NInput,
@@ -14,6 +15,7 @@ import {
   NFormItem,
   NTag,
   NIcon,
+  NSpin,
   useMessage,
 } from 'naive-ui'
 import { DeviceDesktop } from '@vicons/tabler'
@@ -28,8 +30,10 @@ const message = useMessage()
 const isDev = import.meta.env.DEV
 const { canvasRef, error, frameCount, connect, disconnect } = useDesktop()
 
-/** tab 已带 sessionId 则不显示快速表单 */
-const showForm = ref(!props.tab.sessionId)
+/** tab 已带 sessionId 或将自动连接（携带 desktopConfig）则不显示快速表单 */
+const showForm = ref(!props.tab.sessionId && !props.tab.desktopConfig)
+/** 弹窗新建后的自动连接进行中 */
+const connecting = ref(false)
 const config = ref<DesktopConfig>({
   kind: props.tab.kind === 'host' ? 'host' : 'rdp',
   host: '127.0.0.1',
@@ -39,6 +43,25 @@ const config = ref<DesktopConfig>({
   width: 1920,
   height: 1080,
   colorDepth: 32,
+})
+
+/** 弹窗新建的 tab：挂载后用携带的配置自动连接 */
+onMounted(async () => {
+  const cfg = props.tab.desktopConfig
+  if (!cfg || props.tab.sessionId) return
+  connecting.value = true
+  try {
+    await connect(cfg)
+    tabs.updateTab(props.tab.id, { title: cfg.host, sessionId: 'connected' })
+  } catch (e) {
+    // 回退到内嵌表单：回填配置便于修改重试
+    Object.assign(config.value, cfg)
+    showForm.value = true
+    tabs.updateTab(props.tab.id, { error: String(e) })
+    message.error(String(e))
+  } finally {
+    connecting.value = false
+  }
 })
 
 async function handleConnect() {
@@ -59,7 +82,11 @@ onUnmounted(() => {
 
 <template>
   <div class="desktop-view">
-    <div v-if="showForm" class="connect-form">
+    <div v-if="connecting" class="auto-connecting">
+      <NSpin size="large" />
+      <p class="connecting-text">正在连接 {{ tab.desktopConfig?.host }}…</p>
+    </div>
+    <div v-else-if="showForm" class="connect-form">
       <h3 class="form-title">
         <NIcon :component="DeviceDesktop" />
         远程桌面（{{ config.kind === 'rdp' ? 'RDP' : 'macOS' }}）
@@ -104,6 +131,18 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   background: #0d1117;
+}
+.auto-connecting {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.connecting-text {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 .canvas-wrap {
   flex: 1;

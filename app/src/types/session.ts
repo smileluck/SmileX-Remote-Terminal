@@ -17,6 +17,8 @@ export interface TabItem {
   sessionId?: string
   /** 关联的会话配置 ID（用于重连） */
   profileId?: string
+  /** 远程桌面连接配置（弹窗新建时携带，DesktopView 挂载后自动连接） */
+  desktopConfig?: DesktopConfig
   /** 是否正在连接 */
   connecting?: boolean
   /** 错误信息 */
