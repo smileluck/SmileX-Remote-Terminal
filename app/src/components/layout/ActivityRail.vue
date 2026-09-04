@@ -2,14 +2,17 @@
 /**
  * ActivityRail - 左侧活动栏
  *
- * 新建会话 / 远程桌面统一由 SideBar「+」下拉弹窗承担；
- * 本栏仅保留底部设置入口（单例 tab）。
+ * - 顶部「会话」Tab：展开/收起侧边栏（会话列表）
+ * - 底部设置入口（单例 tab）
+ * 新建会话 / 远程桌面统一由 SideBar「+」下拉弹窗承担。
  */
 import { NButton, NIcon, NTooltip } from 'naive-ui'
-import { Settings } from '@vicons/tabler'
+import { Terminal2, Settings } from '@vicons/tabler'
 import { useTabsStore } from '@/stores/tabs'
+import { useLayoutStore } from '@/stores/layout'
 
 const tabs = useTabsStore()
+const layout = useLayoutStore()
 
 /** 打开设置 Tab（单例：已存在则激活，否则新建） */
 function openSettings() {
@@ -21,7 +24,22 @@ function openSettings() {
 
 <template>
   <nav class="rail">
-    <div class="rail-group"></div>
+    <div class="rail-group">
+      <NTooltip placement="right">
+        <template #trigger>
+          <NButton
+            quaternary
+            circle
+            class="rail-btn"
+            :class="{ active: !layout.sidebarCollapsed }"
+            @click="layout.toggleSidebar()"
+          >
+            <template #icon><NIcon :component="Terminal2" /></template>
+          </NButton>
+        </template>
+        会话
+      </NTooltip>
+    </div>
 
     <div class="rail-group">
       <NTooltip placement="right">
