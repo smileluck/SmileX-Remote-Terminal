@@ -15,6 +15,7 @@ import {
   ArrowsSplit2,
   LayoutRows,
   ChartAreaLine,
+  Robot,
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
@@ -31,6 +32,12 @@ const monitor = useMonitorStore()
 const layout = useLayoutStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
+
+/** AI 运维助手开关（⌘J 同语义：右栏已在 Agent 页签时收起，否则打开并切换） */
+function toggleAgent() {
+  if (layout.monitorVisible && layout.rightTab === 'agent') layout.toggleMonitor()
+  else layout.openRightPanel('agent')
+}
 
 /** SFTP 文件面板开关 */
 const showFiles = ref(false)
@@ -204,6 +211,20 @@ async function handleReconnect() {
             </NButton>
           </template>
           监控看板（⌘M）
+        </NTooltip>
+        <NTooltip placement="left">
+          <template #trigger>
+            <NButton
+              quaternary
+              circle
+              size="small"
+              :type="layout.monitorVisible && layout.rightTab === 'agent' ? 'primary' : 'default'"
+              @click="toggleAgent()"
+            >
+              <NIcon :component="Robot" />
+            </NButton>
+          </template>
+          AI 运维助手（⌘J）
         </NTooltip>
       </div>
     </div>
