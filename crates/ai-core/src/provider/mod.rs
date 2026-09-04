@@ -50,12 +50,12 @@ pub trait AgentProvider: Send + Sync {
 ///
 /// 由前端设置页传入，API Key 由应用层从 OS Keyring 取。
 ///
-/// serde `rename_all = "camelCase"`：JSON 字段使用 camelCase（`baseUrl` / `apiKey`），
+/// serde `rename_all = "camelCase"`：JSON 字段使用 camelCase（`baseUrl` / `apiKey` / `authMode`），
 /// 与 JavaScript/Vue 社区惯例一致。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmProviderConfig {
-    /// Provider 类型
+    /// Provider 类型（厂商预设）
     pub provider: llm::LlmProvider,
     /// 模型名（如 "gpt-4o" / "claude-3-5-sonnet" / "qwen2.5:7b"）
     pub model: String,
@@ -63,6 +63,12 @@ pub struct LlmProviderConfig {
     pub base_url: Option<String>,
     /// API Key
     pub api_key: Option<String>,
+    /// 接入方式：按量 API（`api`）或 Coding Plan 订阅（`coding_plan`）
+    ///
+    /// 仅国内厂商预设使用；Claude/Ollama/OpenAI 恒为 `None`。
+    /// 决定 [`llm::resolve_protocol`] 的协议选择。
+    #[serde(default)]
+    pub auth_mode: Option<llm::LlmAuthMode>,
     /// 是否流式
     #[serde(default = "default_true")]
     pub stream: bool,

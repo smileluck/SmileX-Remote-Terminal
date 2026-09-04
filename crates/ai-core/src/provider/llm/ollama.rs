@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::provider::history::Message;
-use crate::provider::llm::{LlmClient, LlmProvider};
+use crate::provider::llm::{LlmClient, LlmProtocol};
 use crate::LlmProviderConfig;
 
 /// Ollama 客户端
@@ -42,8 +42,8 @@ impl OllamaClient {
 
 #[async_trait]
 impl LlmClient for OllamaClient {
-    fn provider(&self) -> LlmProvider {
-        LlmProvider::Ollama
+    fn protocol(&self) -> LlmProtocol {
+        LlmProtocol::Ollama
     }
 
     async fn chat_stream(

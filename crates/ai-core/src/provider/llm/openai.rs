@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::provider::history::Message;
-use crate::provider::llm::{LlmClient, LlmProvider};
+use crate::provider::llm::{LlmClient, LlmProtocol};
 use crate::LlmProviderConfig;
 
 /// OpenAI 兼容客户端
@@ -46,8 +46,8 @@ impl OpenAiClient {
 
 #[async_trait]
 impl LlmClient for OpenAiClient {
-    fn provider(&self) -> LlmProvider {
-        LlmProvider::OpenAi
+    fn protocol(&self) -> LlmProtocol {
+        LlmProtocol::OpenAiCompatible
     }
 
     async fn chat_stream(
