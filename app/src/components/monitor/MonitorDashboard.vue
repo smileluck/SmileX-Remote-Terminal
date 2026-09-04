@@ -15,6 +15,7 @@ import GeneralTab from './tabs/GeneralTab.vue'
 import CpuTab from './tabs/CpuTab.vue'
 import MemoryTab from './tabs/MemoryTab.vue'
 import DiskTab from './tabs/DiskTab.vue'
+import GpuTab from './tabs/GpuTab.vue'
 
 const monitor = useMonitorStore()
 const tabs = useTabsStore()
@@ -69,6 +70,9 @@ const activeTab = ref('general')
         </NTabPane>
         <NTabPane name="disk" tab="磁盘">
           <DiskTab />
+        </NTabPane>
+        <NTabPane name="gpu" tab="GPU">
+          <GpuTab />
         </NTabPane>
       </NTabs>
     </template>
