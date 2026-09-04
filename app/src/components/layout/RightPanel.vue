@@ -2,7 +2,8 @@
 /**
  * RightPanel - 右栏容器（Agent 助手 / 监控看板 / 告警规则）
  *
- * 三栏布局的右栏（收起时整体隐藏；打开/切换入口在终端工具栏列，与其他面板互斥）：
+ * 三栏布局的右栏（仅在打开会话时显示，设置页/空首页隐藏；
+ * 收起时整体隐藏；打开/切换入口在终端工具栏列，与其他面板互斥）：
  * - 单面板显示，顶部标题 + 收起按钮（页签切换在工具栏完成）
  * - 可拖拽左边缘调宽（240–560px，持久化到 layout store）
  */
@@ -10,11 +11,19 @@ import { ref, computed } from 'vue'
 import { NIcon } from 'naive-ui'
 import { X } from '@vicons/tabler'
 import { useLayoutStore, type RightPanelTab } from '@/stores/layout'
+import { useTabsStore } from '@/stores/tabs'
 import MonitorDashboard from '@/components/monitor/MonitorDashboard.vue'
 import AlertRules from '@/components/monitor/AlertRules.vue'
 import ChatPanel from '@/components/ai/ChatPanel.vue'
 
 const layout = useLayoutStore()
+const tabs = useTabsStore()
+
+/** 仅在打开会话（SSH/远程桌面）时显示；设置页与空首页不出现 */
+const sessionActive = computed(() => {
+  const t = tabs.activeTab
+  return !!t && t.kind !== 'settings'
+})
 
 const width = computed(() => `${layout.monitorWidth}px`)
 
@@ -49,7 +58,7 @@ function onDragStart(e: MouseEvent) {
 </script>
 
 <template>
-  <aside v-if="layout.monitorVisible" class="right-panel" :style="{ width }">
+  <aside v-if="layout.monitorVisible && sessionActive" class="right-panel" :style="{ width }">
     <div class="resize-handle" :class="{ dragging }" @mousedown="onDragStart" />
     <header class="panel-header">
       <span class="panel-title">{{ title }}</span>

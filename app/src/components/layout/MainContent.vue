@@ -10,11 +10,10 @@
  */
 import { computed } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
-import { Terminal2, DeviceDesktop, Robot } from '@vicons/tabler'
+import { Terminal2, DeviceDesktop } from '@vicons/tabler'
 import type { TabItem } from '@/types/session'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
-import { useLayoutStore } from '@/stores/layout'
 import BrandMark from '@/components/common/BrandMark.vue'
 import TerminalView from '@/components/terminal/TerminalView.vue'
 import DesktopView from '@/components/desktop/DesktopView.vue'
@@ -23,7 +22,6 @@ import SettingsView from '@/components/settings/SettingsView.vue'
 defineProps<{ tab: TabItem | null }>()
 const tabs = useTabsStore()
 const ui = useUiStore()
-const layout = useLayoutStore()
 
 /** 所有 SSH tab：常驻渲染、按需显示，保证每个 tab 的终端实例与分屏状态完全独立 */
 const sshTabs = computed(() => tabs.tabs.filter((t) => t.kind === 'ssh'))
@@ -59,10 +57,6 @@ const sshTabs = computed(() => tabs.tabs.filter((t) => t.kind === 'ssh'))
           <NButton size="large" @click="ui.openDesktopConnectDialog()">
             <template #icon><NIcon :component="DeviceDesktop" /></template>
             远程桌面
-          </NButton>
-          <NButton size="large" @click="layout.openRightPanel('agent')">
-            <template #icon><NIcon :component="Robot" /></template>
-            AI 助手
           </NButton>
         </div>
       </div>
