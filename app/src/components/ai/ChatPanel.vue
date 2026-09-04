@@ -101,55 +101,62 @@ watch(
 <template>
   <div class="chat-panel">
     <header class="chat-header">
-      <NTag v-if="connected" size="small" type="success" :bordered="false" class="server-tag">
-        {{ serverLabel }}
-      </NTag>
-      <NSelect
-        v-if="connected && sshOptions.length > 1"
-        v-model:value="agent.sshSessionId"
-        size="tiny"
-        :options="sshOptions"
-        placeholder="选择会话"
-        class="ctx-select"
-      />
-      <div class="header-spacer" />
-      <NTooltip placement="bottom">
-        <template #trigger>
-          <NSelect
-            v-if="llm.profiles.length > 0"
-            class="model-select"
-            size="tiny"
-            :value="llm.activeId"
-            :options="modelOptions"
-            :loading="llm.switchingId !== null"
-            placeholder="选择模型"
-            @update:value="handleModelChange"
-          />
-          <NButton v-else quaternary size="tiny" class="model-empty" @click="openSettings">
-            <template #icon><NIcon :component="Settings" /></template>
-            配置模型
-          </NButton>
-        </template>
-        Agent 使用的 LLM 配置，切换在下一轮对话生效；档案在「设置 → LLM 配置」管理
-      </NTooltip>
-      <ContextToggle v-model="agent.includeContext" />
-      <NTooltip placement="bottom">
-        <template #trigger>
-          <div class="auto-run">
-            <NSwitch v-model:value="agent.autoRun" size="small" />
-            <span class="auto-run-label">自动执行</span>
-          </div>
-        </template>
-        开启后 AI 生成的命令将直接在终端窗口执行并回传输出分析（危险命令仍需手动确认）
-      </NTooltip>
-      <NPopconfirm @positive-click="agent.clear">
-        <template #trigger>
-          <NButton quaternary size="small" title="清空对话">
-            <template #icon><NIcon :component="Trash" /></template>
-          </NButton>
-        </template>
-        确定清空所有对话？
-      </NPopconfirm>
+      <!-- 行 1：会话信息 + 清空 -->
+      <div class="header-row">
+        <NTag v-if="connected" size="small" type="success" :bordered="false" class="server-tag">
+          {{ serverLabel }}
+        </NTag>
+        <NSelect
+          v-if="connected && sshOptions.length > 1"
+          v-model:value="agent.sshSessionId"
+          size="tiny"
+          :options="sshOptions"
+          placeholder="选择会话"
+          class="ctx-select"
+        />
+        <div class="header-spacer" />
+        <NPopconfirm @positive-click="agent.clear">
+          <template #trigger>
+            <NButton quaternary size="small" title="清空对话">
+              <template #icon><NIcon :component="Trash" /></template>
+            </NButton>
+          </template>
+          确定清空所有对话？
+        </NPopconfirm>
+      </div>
+      <!-- 行 2：模型切换 + 上下文/自动执行开关 -->
+      <div class="header-row">
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <NSelect
+              v-if="llm.profiles.length > 0"
+              class="model-select"
+              size="tiny"
+              :value="llm.activeId"
+              :options="modelOptions"
+              :loading="llm.switchingId !== null"
+              placeholder="选择模型"
+              :consistent-menu-width="false"
+              @update:value="handleModelChange"
+            />
+            <NButton v-else quaternary size="tiny" class="model-empty" @click="openSettings">
+              <template #icon><NIcon :component="Settings" /></template>
+              配置模型
+            </NButton>
+          </template>
+          Agent 使用的 LLM 配置，切换在下一轮对话生效；档案在「设置 → LLM 配置」管理
+        </NTooltip>
+        <ContextToggle v-model="agent.includeContext" />
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <div class="auto-run">
+              <NSwitch v-model:value="agent.autoRun" size="small" />
+              <span class="auto-run-label">自动执行</span>
+            </div>
+          </template>
+          开启后 AI 生成的命令将直接在终端窗口执行并回传输出分析（危险命令仍需手动确认）
+        </NTooltip>
+      </div>
     </header>
 
     <!-- 未连接：引导先建立 SSH 连接 -->
@@ -201,20 +208,31 @@ watch(
   background: var(--bg-app);
   min-height: 0;
 }
+/* 头部固定两行,避免窄面板下 flex-wrap 换行位置随内容漂移 */
 .chat-header {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-color);
-  gap: 10px;
   flex-shrink: 0;
+}
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  row-gap: 4px;
+  min-width: 0;
+  /* 正常宽度单行;面板拖到极窄时兜底换行而非溢出裁切 */
   flex-wrap: wrap;
 }
 .header-spacer {
   flex: 1;
 }
 .server-tag {
-  max-width: 160px;
+  max-width: 150px;
+  flex-shrink: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-mono, ui-monospace, monospace);
@@ -223,10 +241,11 @@ watch(
   width: 120px;
   flex-shrink: 0;
 }
+/* 模型下拉占满行内剩余空间,给两个开关留稳定位置 */
 .model-select {
-  width: 180px;
-  max-width: 40vw;
-  flex-shrink: 0;
+  flex: 1 1 110px;
+  min-width: 96px;
+  max-width: 240px;
 }
 .model-empty {
   flex-shrink: 0;
