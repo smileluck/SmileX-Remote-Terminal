@@ -2,8 +2,8 @@
 /**
  * RightPanel - 右栏容器（Agent 助手 / 监控看板 / 告警规则）
  *
- * 三栏布局的右栏（收起时整体隐藏，打开/切换入口在终端工具栏列）：
- * - 顶部页签切换，单页签显示（不同时叠加多个面板）
+ * 三栏布局的右栏（收起时整体隐藏；打开/切换入口在终端工具栏列，与其他面板互斥）：
+ * - 单面板显示，顶部标题 + 收起按钮（页签切换在工具栏完成）
  * - 可拖拽左边缘调宽（240–560px，持久化到 layout store）
  */
 import { ref, computed } from 'vue'
@@ -18,12 +18,13 @@ const layout = useLayoutStore()
 
 const width = computed(() => `${layout.monitorWidth}px`)
 
-/** 页签定义（一次只显示一个面板） */
-const panelTabs: { key: RightPanelTab; label: string }[] = [
-  { key: 'agent', label: 'Agent' },
-  { key: 'monitor', label: '监控' },
-  { key: 'alerts', label: '告警' },
-]
+/** 当前面板标题（切换入口在终端工具栏，此处仅展示） */
+const panelTitles: Record<RightPanelTab, string> = {
+  agent: 'AI 运维助手',
+  monitor: '监控看板',
+  alerts: '告警规则',
+}
+const title = computed(() => panelTitles[layout.rightTab])
 
 /** 拖拽调宽状态 */
 const dragging = ref(false)
@@ -51,17 +52,7 @@ function onDragStart(e: MouseEvent) {
   <aside v-if="layout.monitorVisible" class="right-panel" :style="{ width }">
     <div class="resize-handle" :class="{ dragging }" @mousedown="onDragStart" />
     <header class="panel-header">
-      <div class="tab-switch">
-        <button
-          v-for="t in panelTabs"
-          :key="t.key"
-          class="tab-btn"
-          :class="{ active: layout.rightTab === t.key }"
-          @click="layout.setRightTab(t.key)"
-        >
-          {{ t.label }}
-        </button>
-      </div>
+      <span class="panel-title">{{ title }}</span>
       <button class="close-btn" title="收起面板" @click="layout.toggleMonitor()">
         <NIcon :component="X" :size="14" />
       </button>
@@ -106,30 +97,11 @@ function onDragStart(e: MouseEvent) {
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
-.tab-switch {
-  display: flex;
-  gap: 2px;
-  background: var(--bg-elevated);
-  border-radius: 6px;
-  padding: 2px;
-}
-.tab-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
+.panel-title {
   font-size: 12px;
-  padding: 3px 14px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: color 0.12s, background-color 0.12s;
-}
-.tab-btn:hover {
-  color: var(--text-primary);
-}
-.tab-btn.active {
-  background: var(--bg-panel);
-  color: var(--text-primary);
   font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.2px;
 }
 .close-btn {
   display: flex;

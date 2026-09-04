@@ -53,6 +53,8 @@ export const useLayoutStore = defineStore('layout', () => {
   const rightTab = ref<RightPanelTab>(initial.rightTab)
   /** 终端文件面板（SFTP）宽度（px，拖拽调宽） */
   const filesWidth = ref(initial.filesWidth)
+  /** 终端文件面板（SFTP）是否打开（与右栏三面板互斥；不持久化） */
+  const filesVisible = ref(false)
 
   /** 切换左栏折叠 */
   function toggleSidebar() {
@@ -73,6 +75,7 @@ export const useLayoutStore = defineStore('layout', () => {
   function openRightPanel(tab?: RightPanelTab) {
     if (tab) rightTab.value = tab
     monitorVisible.value = true
+    filesVisible.value = false
   }
 
   /** 单页签切换语义：已在目标页签时收起右栏，否则切到该页签（⌘M/⌘J 与工具栏按钮共用） */
@@ -82,6 +85,17 @@ export const useLayoutStore = defineStore('layout', () => {
     } else {
       rightTab.value = tab
       monitorVisible.value = true
+      filesVisible.value = false
+    }
+  }
+
+  /** 切换文件面板（与右栏三面板互斥：打开时收起右栏） */
+  function toggleFiles() {
+    if (filesVisible.value) {
+      filesVisible.value = false
+    } else {
+      filesVisible.value = true
+      monitorVisible.value = false
     }
   }
 
@@ -113,10 +127,12 @@ export const useLayoutStore = defineStore('layout', () => {
     monitorWidth,
     rightTab,
     filesWidth,
+    filesVisible,
     toggleSidebar,
     toggleMonitor,
     setRightTab,
     openRightPanel,
     toggleRightPanel,
+    toggleFiles,
   }
 })

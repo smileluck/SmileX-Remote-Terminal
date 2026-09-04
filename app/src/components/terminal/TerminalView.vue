@@ -7,8 +7,8 @@
  *   树结构只换算为矩形，窗格组件不重建（关闭/分割不清空其他窗格的终端内容）
  * - 无 sessionId 的窗格：显示「绑定现有会话 / 新建连接」选择器（见 PaneTerminal）
  * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮（原地重连）
- * - 右侧工具栏（流式竖排，不悬浮）：SFTP 文件面板 / 分屏 / 右栏三面板入口
- *   （Agent / 监控 / 告警，点击在右侧栏打开并切换页签，再点收起）
+ * - 右侧工具栏（流式竖排，不悬浮）：分屏 + 四面板入口（文件管理 / 监控 /
+ *   Agent / 告警），四面板互斥切换（同一时间只开一个，再点同一个收起）
  */
 import { ref, computed, onUnmounted, watch } from 'vue'
 import { NButton, NIcon, NTooltip, useMessage } from 'naive-ui'
@@ -56,8 +56,6 @@ const panelEntries = [
   { key: 'alerts', label: '告警规则', icon: Bell },
 ] as const
 
-/** SFTP 文件面板开关 */
-const showFiles = ref(false)
 /** 重连中 */
 const reconnecting = ref(false)
 
@@ -253,20 +251,6 @@ async function handleReconnect() {
       </div>
       <!-- 工具栏：常规流式竖排（终端区与文件面板之间），不悬浮遮挡任何内容 -->
       <div class="view-tools">
-          <NTooltip v-if="tab.sessionId" placement="left">
-            <template #trigger>
-              <NButton
-                quaternary
-                circle
-                size="small"
-                :type="showFiles ? 'primary' : 'default'"
-                @click="showFiles = !showFiles"
-              >
-                <NIcon :component="Folder" />
-              </NButton>
-            </template>
-            文件管理（SFTP）
-          </NTooltip>
           <NTooltip v-if="paneCount < 4 && tab.sessionId" placement="left">
             <template #trigger>
               <NButton quaternary circle size="small" :loading="splitting" @click="addPane('row')">
@@ -283,8 +267,21 @@ async function handleReconnect() {
             </template>
             向下分屏（克隆当前选中窗格的连接）
           </NTooltip>
-          <!-- 右栏三面板入口：与文件管理/分屏同列，不再独立成栏 -->
-          <div class="tools-sep" />
+          <!-- 四面板入口：文件管理 / 监控 / Agent / 告警，互斥切换 -->
+          <NTooltip v-if="tab.sessionId" placement="left">
+            <template #trigger>
+              <NButton
+                quaternary
+                circle
+                size="small"
+                :type="layout.filesVisible ? 'primary' : 'default'"
+                @click="layout.toggleFiles()"
+              >
+                <NIcon :component="Folder" />
+              </NButton>
+            </template>
+            文件管理（SFTP）
+          </NTooltip>
           <NTooltip v-for="entry in panelEntries" :key="entry.key" placement="left">
             <template #trigger>
               <NButton
@@ -302,7 +299,7 @@ async function handleReconnect() {
       </div>
       <!-- SFTP 文件面板 -->
       <FilePanel
-        v-if="showFiles && tab.sessionId && !tab.disconnected"
+        v-if="layout.filesVisible && tab.sessionId && !tab.disconnected"
         :session-id="tab.sessionId"
       />
     </div>
@@ -380,13 +377,6 @@ async function handleReconnect() {
   padding: 8px 0;
   border-left: 1px solid var(--border-color);
   background: var(--bg-app);
-}
-/* 分屏按钮与右栏面板入口之间的分组分隔线 */
-.tools-sep {
-  width: 20px;
-  height: 1px;
-  margin: 4px 0;
-  background: var(--border-color);
 }
 .disconnect-overlay {
   position: absolute;
