@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 
 import * as aiService from '@/services/ai'
 import * as sessionService from '@/services/session'
+import * as termExec from '@/services/termExec'
 import { listen } from '@/services/invoke'
 import { stripThink } from '@/utils/think'
 import { useTabsStore } from '@/stores/tabs'
@@ -36,7 +37,8 @@ const MAX_AUTO_CHAIN = 8
  * - 对话状态全局化：右栏页签切换/收起不丢对话（ai_token/ai_done 监听只注册一次）
  * - 绑定目标 SSH 会话：默认跟随激活的 SSH tab，失效时回退到任一活跃会话
  * - 命令执行协议：LLM 回复中的 ```run 块经用户确认（或自动模式）后
- *   通过 session_exec 在绑定的服务器上执行，结果回传对话继续分析
+ *   写入绑定的终端窗口会话执行（对用户可见、保留会话状态），
+ *   从会话回显捕获输出回传对话继续分析；写入失败回退独立 exec 通道
  */
 export const useAgentStore = defineStore('agent', () => {
   const tabs = useTabsStore()
@@ -201,7 +203,14 @@ export const useAgentStore = defineStore('agent', () => {
     }
     runStates.value = { ...runStates.value, [key]: { status: 'running' } }
     try {
-      let out = await sessionService.exec(sshSessionId.value, command)
+      // 命令写入绑定的终端窗口会话（对用户可见、保留 cwd/env 状态），
+      // 从会话回显捕获输出；写入失败（会话异常）回退独立 exec 通道
+      let out: string
+      try {
+        out = await termExec.execInTerminal(sshSessionId.value, command)
+      } catch {
+        out = await sessionService.exec(sshSessionId.value, command)
+      }
       if (out.length > MAX_EXEC_OUTPUT) {
         out = out.slice(0, MAX_EXEC_OUTPUT) + '\n…（输出过长，已截断）'
       }

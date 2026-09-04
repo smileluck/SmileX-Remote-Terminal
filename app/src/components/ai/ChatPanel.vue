@@ -140,7 +140,7 @@ watch(
             <span class="auto-run-label">自动执行</span>
           </div>
         </template>
-        开启后 AI 生成的命令将直接在服务器执行（危险命令仍需手动确认）
+        开启后 AI 生成的命令将直接在终端窗口执行并回传输出分析（危险命令仍需手动确认）
       </NTooltip>
       <NPopconfirm @positive-click="agent.clear">
         <template #trigger>
