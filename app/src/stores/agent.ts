@@ -4,6 +4,7 @@ import { ref, watch } from 'vue'
 import * as aiService from '@/services/ai'
 import * as sessionService from '@/services/session'
 import { listen } from '@/services/invoke'
+import { stripThink } from '@/utils/think'
 import { useTabsStore } from '@/stores/tabs'
 import type { ChatMessage, AiContext, AiTokenPayload, AiDonePayload, RunState } from '@/types/ai'
 
@@ -219,7 +220,8 @@ export const useAgentStore = defineStore('agent', () => {
       error.value = `自动执行已达上限（${MAX_AUTO_CHAIN} 条），剩余命令请手动执行`
       return
     }
-    const cmds = [...message.content.matchAll(RUN_RE)].map((m) => m[1].trim())
+    // 思考段内的内容不参与命令解析
+    const cmds = [...stripThink(message.content).matchAll(RUN_RE)].map((m) => m[1].trim())
     for (let i = 0; i < cmds.length; i++) {
       if (runStates.value[`${message.id}#${i}`]) continue
       if (isDangerous(cmds[i])) continue

@@ -12,6 +12,7 @@ import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import type { ChatMessage } from '@/types/ai'
+import { splitThink } from '@/utils/think'
 import RunBlock from './RunBlock.vue'
 
 const props = defineProps<{ message: ChatMessage }>()
@@ -38,29 +39,42 @@ const md = new MarkdownIt({
 const RUN_RE = /```run\s*\n([\s\S]*?)```/g
 
 interface Segment {
-  type: 'md' | 'run'
+  type: 'md' | 'run' | 'think'
   text: string
   /** run 段在消息内的序号（与 agent store runStates key 对应） */
   index: number
+  /** think 段是否闭合（流式生成中末段未闭合） */
+  closed?: boolean
 }
 
-/** 把 assistant 消息拆成 markdown 段与 run 命令块（保持顺序） */
+/** 把 assistant 消息拆成 think 折叠段、markdown 段与 run 命令块（保持顺序） */
 const segments = computed<Segment[]>(() => {
   if (props.message.role !== 'assistant') return []
   const content = props.message.content || ''
   const list: Segment[] = []
-  let last = 0
   let runIdx = 0
-  for (const m of content.matchAll(RUN_RE)) {
-    const idx = m.index ?? 0
-    if (idx > last) list.push({ type: 'md', text: content.slice(last, idx), index: -1 })
-    list.push({ type: 'run', text: m[1].trim(), index: runIdx })
-    runIdx++
-    last = idx + m[0].length
+  for (const part of splitThink(content)) {
+    if (part.type === 'think') {
+      list.push({ type: 'think', text: part.text, index: -1, closed: part.closed })
+      continue
+    }
+    let last = 0
+    for (const m of part.text.matchAll(RUN_RE)) {
+      const idx = m.index ?? 0
+      if (idx > last) list.push({ type: 'md', text: part.text.slice(last, idx), index: -1 })
+      list.push({ type: 'run', text: m[1].trim(), index: runIdx })
+      runIdx++
+      last = idx + m[0].length
+    }
+    if (last < part.text.length) list.push({ type: 'md', text: part.text.slice(last), index: -1 })
   }
-  if (last < content.length) list.push({ type: 'md', text: content.slice(last), index: -1 })
   return list
 })
+
+/** think 折叠块标题：生成中未闭合显示「思考中…」 */
+function thinkLabel(seg: Segment): string {
+  return !seg.closed && props.message.pending ? '思考中…' : '思考过程'
+}
 
 function renderMd(text: string): string {
   return md.render(text)
@@ -77,7 +91,11 @@ function renderMd(text: string): string {
       <!-- assistant：markdown + run 命令卡片 -->
       <template v-else-if="message.role === 'assistant'">
         <template v-for="(seg, i) in segments" :key="i">
-          <div v-if="seg.type === 'md' && seg.text.trim()" class="md" v-html="renderMd(seg.text)"></div>
+          <details v-if="seg.type === 'think'" class="think">
+            <summary>{{ thinkLabel(seg) }}</summary>
+            <div class="think-body">{{ seg.text }}</div>
+          </details>
+          <div v-else-if="seg.type === 'md' && seg.text.trim()" class="md" v-html="renderMd(seg.text)"></div>
           <RunBlock
             v-else-if="seg.type === 'run'"
             :message-id="message.id"
@@ -132,6 +150,30 @@ function renderMd(text: string): string {
 }
 .bubble.pending .md {
   opacity: 0.95;
+}
+/* 思考过程折叠块 */
+.think {
+  margin: 4px 0;
+  border-left: 2px solid var(--border-color);
+  padding-left: 8px;
+}
+.think summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+.think[open] summary {
+  margin-bottom: 4px;
+}
+.think-body {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
 }
 .tool-out {
   margin: 0;
