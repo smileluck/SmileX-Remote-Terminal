@@ -6,7 +6,7 @@
  * - 分屏作用于当前选中窗格：在选中 pane 位置原位分割，不重排其他区域
  * - 无 sessionId 的窗格：显示「绑定现有会话 / 新建连接」选择器（见 PaneTerminal）
  * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮（原地重连）
- * - 右上角工具按钮：SFTP 文件面板 / 分屏 / 监控看板 / AI 运维助手
+ * - 右侧工具栏（流式竖排，不悬浮）：SFTP 文件面板 / 分屏 / 监控看板 / AI 运维助手
  */
 import { ref, computed, onUnmounted, watch } from 'vue'
 import { NButton, NIcon, NTooltip, useMessage } from 'naive-ui'
@@ -168,8 +168,9 @@ async function handleReconnect() {
           @pane-close="closePane"
           @pane-bind="bindPane"
         />
-        <!-- 工具按钮：锚定终端区内右上角，避免悬浮遮挡右侧文件面板 -->
-        <div class="view-tools">
+      </div>
+      <!-- 工具栏：常规流式竖排（终端区与文件面板之间），不悬浮遮挡任何内容 -->
+      <div class="view-tools">
           <NTooltip v-if="tab.sessionId" placement="left">
             <template #trigger>
               <NButton
@@ -228,7 +229,6 @@ async function handleReconnect() {
             </template>
             AI 运维助手（⌘J）
           </NTooltip>
-        </div>
       </div>
       <!-- SFTP 文件面板 -->
       <FilePanel
@@ -282,13 +282,15 @@ async function handleReconnect() {
   min-height: 0;
 }
 .view-tools {
-  position: absolute;
-  right: 10px;
-  top: 8px;
-  z-index: 5;
+  flex-shrink: 0;
+  width: 38px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-app);
 }
 .disconnect-overlay {
   position: absolute;
