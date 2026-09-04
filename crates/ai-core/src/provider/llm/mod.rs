@@ -68,6 +68,47 @@ pub enum LlmProtocol {
     Ollama,
 }
 
+/// 思考内容包装器
+///
+/// 不同模型的推理过程走不同字段（OpenAI 兼容的 `reasoning_content`、
+/// Anthropic 的 `thinking_delta`、Ollama 的 `thinking`），统一包装为
+/// `<think>…</think>` 标记混入正文 token 流，展示层据此折叠思考过程。
+#[derive(Default)]
+pub struct ThinkWrap {
+    /// 当前是否处于思考段内
+    in_think: bool,
+}
+
+impl ThinkWrap {
+    /// 包装一个增量 token；`is_thinking` 标记其来自推理字段
+    ///
+    /// 进入/退出思考段时自动插入开/闭标记。
+    pub fn wrap(&mut self, token: &str, is_thinking: bool) -> String {
+        if is_thinking {
+            if self.in_think {
+                return token.to_string();
+            }
+            self.in_think = true;
+            format!("<think>\n{token}")
+        } else if self.in_think {
+            self.in_think = false;
+            format!("\n</think>\n\n{token}")
+        } else {
+            token.to_string()
+        }
+    }
+
+    /// 流结束时补闭合标记（仍在思考段内才需要）
+    pub fn close(&mut self) -> Option<String> {
+        if self.in_think {
+            self.in_think = false;
+            Some("\n</think>".to_string())
+        } else {
+            None
+        }
+    }
+}
+
 /// 按厂商预设 + 接入方式推导传输协议
 ///
 /// - Claude 官方 → Anthropic 原生协议

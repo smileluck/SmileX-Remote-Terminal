@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::provider::history::Message;
-use crate::provider::llm::{LlmClient, LlmProtocol};
+use crate::provider::llm::{LlmClient, LlmProtocol, ThinkWrap};
 use crate::LlmProviderConfig;
 
 /// Ollama 客户端
@@ -78,10 +78,12 @@ impl LlmClient for OllamaClient {
             return Err(Error::LlmApi(format!("Ollama HTTP {status}: {text}")));
         }
 
-        // Ollama 流式：每行一个 JSON 对象，message.content 字段为增量
+        // Ollama 流式：每行一个 JSON 对象，message.content 字段为增量；
+        // 思考模型（qwen3/deepseek-r1 等）的推理过程在 message.thinking 字段
         use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
         let mut buf = String::new();
+        let mut think = ThinkWrap::default();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| Error::LlmApi(format!("Ollama 读流失败: {e}")))?;
@@ -94,21 +96,41 @@ impl LlmClient for OllamaClient {
                     continue;
                 }
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                    // 思考增量优先（与正文增量互斥出现）
                     if let Some(content) = v
+                        .get("message")
+                        .and_then(|m| m.get("thinking"))
+                        .and_then(|c| c.as_str())
+                        .filter(|c| !c.is_empty())
+                    {
+                        let wrapped = think.wrap(content, true);
+                        if !wrapped.is_empty() {
+                            on_token(wrapped);
+                        }
+                    } else if let Some(content) = v
                         .get("message")
                         .and_then(|m| m.get("content"))
                         .and_then(|c| c.as_str())
+                        .filter(|c| !c.is_empty())
                     {
-                        if !content.is_empty() {
-                            on_token(content.to_string());
+                        let wrapped = think.wrap(content, false);
+                        if !wrapped.is_empty() {
+                            on_token(wrapped);
                         }
                     }
                     // done 字段标识结束
                     if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+                        if let Some(close) = think.close() {
+                            on_token(close);
+                        }
                         return Ok(());
                     }
                 }
             }
+        }
+
+        if let Some(close) = think.close() {
+            on_token(close);
         }
 
         Ok(())

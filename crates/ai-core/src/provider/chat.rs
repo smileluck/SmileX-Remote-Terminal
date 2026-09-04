@@ -17,6 +17,40 @@ use crate::LlmProviderConfig;
 /// 默认保留对话轮数
 const DEFAULT_MAX_ROUNDS: usize = 10;
 
+/// 剥离内容中的 `<think>…</think>` / `<thinking>…</thinking>` 段
+///
+/// 推理模型的思考过程只用于展示（流式推送前端折叠渲染），
+/// 不入对话历史，避免污染下一轮上下文（也符合 DeepSeek 等对
+/// reasoning 内容不应回传的要求）。未闭合的思考段（生成被中断）
+/// 一并丢弃。模型也常原生输出这些标记，统一在此清理。
+fn strip_think(content: &str) -> String {
+    fn find_open(s: &str) -> Option<(&str, usize)> {
+        // 返回 (开标记, 开标记结束位置)；先出现的优先
+        let a = s.find("<think>").map(|i| ("<think>", i + 7));
+        let b = s.find("<thinking>").map(|i| ("<thinking>", i + 10));
+        match (a, b) {
+            (Some(a), Some(b)) => Some(if a.1 <= b.1 { a } else { b }),
+            (a, None) => a,
+            (None, b) => b,
+        }
+    }
+
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some((open, open_end)) = find_open(rest) {
+        out.push_str(&rest[..open_end - open.len()]);
+        let after = &rest[open_end..];
+        let close = if open == "<think>" { "</think>" } else { "</thinking>" };
+        match after.find(close) {
+            Some(i) => rest = &after[i + close.len()..],
+            // 未闭合：其余内容整体属于思考段，丢弃
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Chat 模式提供者
 pub struct ChatProvider {
     /// LLM 客户端（懒初始化，配置变更时重建）
@@ -109,7 +143,7 @@ impl AgentProvider for ChatProvider {
 
         // 检查是否被取消
         if *self.cancelled.lock().await {
-            let partial = assistant_content.lock().unwrap().clone();
+            let partial = strip_think(&assistant_content.lock().unwrap().clone());
             if !partial.is_empty() {
                 self.history.lock().unwrap().push(Message::assistant(partial));
             }
@@ -118,7 +152,7 @@ impl AgentProvider for ChatProvider {
 
         match result {
             Ok(()) => {
-                let content = assistant_content.lock().unwrap().clone();
+                let content = strip_think(&assistant_content.lock().unwrap().clone());
                 self.history.lock().unwrap().push(Message::assistant(content));
                 Ok(())
             }
@@ -134,5 +168,26 @@ impl AgentProvider for ChatProvider {
     async fn clear(&self) -> Result<()> {
         self.history.lock().unwrap().clear();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_think;
+
+    #[test]
+    fn test_strip_think() {
+        // 常规闭合段
+        assert_eq!(strip_think("<think>\n推导\n</think>\n\n答案"), "\n\n答案");
+        // thinking 变体
+        assert_eq!(strip_think("<thinking>a</thinking>b"), "b");
+        // 多段
+        assert_eq!(strip_think("a<think>1</think>b<think>2</think>c"), "abc");
+        // 未闭合：整体丢弃
+        assert_eq!(strip_think("答案<think>被打断的思考"), "答案");
+        // 无 think 标记原样返回
+        assert_eq!(strip_think("普通回答"), "普通回答");
+        // 原生闭合标签在正文中间
+        assert_eq!(strip_think("<think>x</think>```run\nls\n```"), "```run\nls\n```");
     }
 }

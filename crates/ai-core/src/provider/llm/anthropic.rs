@@ -12,7 +12,7 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 use crate::provider::history::{Message, Role};
-use crate::provider::llm::{LlmClient, LlmProtocol};
+use crate::provider::llm::{LlmClient, LlmProtocol, ThinkWrap};
 use crate::LlmProviderConfig;
 
 /// Anthropic Messages API 要求必填 max_tokens
@@ -120,32 +120,55 @@ fn split_system(messages: &[Message]) -> (Option<String>, Vec<(Role, String)>) {
 /// SSE `data:` 载荷的解析结果
 #[derive(Debug, PartialEq, Eq)]
 enum SseDelta {
-    /// 增量文本（content_block_delta 的 delta.text）
+    /// 正文增量（content_block_delta / text_delta 的 delta.text）
     Text(String),
+    /// 思考增量（thinking_delta 的 delta.thinking），展示时折叠
+    Thinking(String),
     /// 消息结束（message_stop）
     Stop,
+    /// 流中错误（type:"error" 事件）
+    Fail(String),
     /// 无关事件，跳过
     Ignore,
 }
 
-/// 解析单条 SSE data JSON，提取增量文本 / 结束标记
+/// 解析单条 SSE data JSON，提取增量文本 / 结束标记 / 错误
 fn parse_sse_data(data: &str) -> SseDelta {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
         return SseDelta::Ignore;
     };
     match v.get("type").and_then(|t| t.as_str()) {
         Some("content_block_delta") => {
-            // text_delta 事件的结构为 {"delta": {"type": "text_delta", "text": "..."}}
-            match v
+            // text_delta: {"delta": {"type": "text_delta", "text": "..."}}
+            if let Some(text) = v
                 .get("delta")
                 .and_then(|d| d.get("text"))
                 .and_then(|t| t.as_str())
             {
-                Some(text) if !text.is_empty() => SseDelta::Text(text.to_string()),
-                _ => SseDelta::Ignore,
+                if !text.is_empty() {
+                    return SseDelta::Text(text.to_string());
+                }
             }
+            // thinking_delta（扩展思考），折叠展示
+            if let Some(t) = v
+                .get("delta")
+                .and_then(|d| d.get("thinking"))
+                .and_then(|t| t.as_str())
+            {
+                if !t.is_empty() {
+                    return SseDelta::Thinking(t.to_string());
+                }
+            }
+            SseDelta::Ignore
         }
         Some("message_stop") => SseDelta::Stop,
+        Some("error") => {
+            let msg = v
+                .pointer("/error/message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("流式响应错误");
+            SseDelta::Fail(msg.to_string())
+        }
         _ => SseDelta::Ignore,
     }
 }
@@ -193,10 +216,11 @@ impl LlmClient for AnthropicClient {
             return Err(Error::LlmApi(format!("HTTP {status}: {text}")));
         }
 
-        // 解析 SSE 流：按行读取，提取 data: 中 content_block_delta 的文本
+        // 解析 SSE 流：按行读取，提取 data: 中的增量文本
         use futures_util::StreamExt;
         let mut stream = response.bytes_stream();
         let mut buf = String::new();
+        let mut think = ThinkWrap::default();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| Error::LlmApi(format!("读取流失败: {e}")))?;
@@ -215,11 +239,32 @@ impl LlmClient for AnthropicClient {
                 let data = line.trim_start_matches("data:").trim();
 
                 match parse_sse_data(data) {
-                    SseDelta::Text(text) => on_token(text),
-                    SseDelta::Stop => return Ok(()),
+                    SseDelta::Text(text) => {
+                        let wrapped = think.wrap(&text, false);
+                        if !wrapped.is_empty() {
+                            on_token(wrapped);
+                        }
+                    }
+                    SseDelta::Thinking(t) => {
+                        let wrapped = think.wrap(&t, true);
+                        if !wrapped.is_empty() {
+                            on_token(wrapped);
+                        }
+                    }
+                    SseDelta::Stop => {
+                        if let Some(close) = think.close() {
+                            on_token(close);
+                        }
+                        return Ok(());
+                    }
+                    SseDelta::Fail(msg) => return Err(Error::LlmApi(msg)),
                     SseDelta::Ignore => {}
                 }
             }
+        }
+
+        if let Some(close) = think.close() {
+            on_token(close);
         }
 
         Ok(())
@@ -276,19 +321,24 @@ mod tests {
             parse_sse_data(r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}"#),
             SseDelta::Text("你好".to_string())
         );
+        // thinking_delta 提取为思考增量
+        assert_eq!(
+            parse_sse_data(r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"推导中"}}"#),
+            SseDelta::Thinking("推导中".to_string())
+        );
         // message_stop 结束
         assert_eq!(
             parse_sse_data(r#"{"type":"message_stop"}"#),
             SseDelta::Stop
         );
+        // 流中错误事件
+        assert_eq!(
+            parse_sse_data(r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            SseDelta::Fail("Overloaded".to_string())
+        );
         // 其他事件忽略
         assert_eq!(
             parse_sse_data(r#"{"type":"message_start","message":{}}"#),
-            SseDelta::Ignore
-        );
-        // thinking_delta（无 text 字段）忽略
-        assert_eq!(
-            parse_sse_data(r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"..."}}"#),
             SseDelta::Ignore
         );
         // 空 text / 非法 JSON 忽略
@@ -297,5 +347,24 @@ mod tests {
             SseDelta::Ignore
         );
         assert_eq!(parse_sse_data("not json"), SseDelta::Ignore);
+    }
+
+    #[test]
+    fn test_think_wrap() {
+        use crate::provider::llm::ThinkWrap;
+        let mut w = ThinkWrap::default();
+        // 思考增量开启 think 段
+        assert_eq!(w.wrap("推", true), "<think>\n推");
+        assert_eq!(w.wrap("导", true), "导");
+        // 正文增量闭合 think 段
+        assert_eq!(w.wrap("答", false), "\n</think>\n\n答");
+        assert_eq!(w.wrap("案", false), "案");
+        // 已闭合后再结束无需补
+        assert_eq!(w.close(), None);
+
+        // 未闭合时流结束补闭标记
+        let mut w = ThinkWrap::default();
+        assert_eq!(w.wrap("思考", true), "<think>\n思考");
+        assert_eq!(w.close().as_deref(), Some("\n</think>"));
     }
 }
