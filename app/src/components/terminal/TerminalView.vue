@@ -59,6 +59,14 @@ const profile = computed(() =>
   props.tab.profileId ? profiles.profiles.find((p) => p.id === props.tab.profileId) : null,
 )
 
+/** 分屏窗格绑定会话时写入的首行提示（主窗格有远端提示符，返回 undefined） */
+const initialLineFor = (paneId: string): string | undefined => {
+  if (paneId === primaryPaneId.value) return undefined
+  const p = profile.value
+  const label = p ? `${p.username}@${p.host}` : props.tab.title
+  return `${label}:/$ `
+}
+
 /* ---------------- 分屏状态（递归布局树） ---------------- */
 /** 本 tab 独立建立的会话（关闭 pane / 卸载时统一断开；绑定其他 tab 的会话不在此列） */
 const ownSessions = new Set<string>()
@@ -164,6 +172,7 @@ async function handleReconnect() {
           :node="root"
           :active-id="activePaneId"
           :pane-count="paneCount"
+          :initial-line-for="initialLineFor"
           @pane-focus="(id: string) => (activePaneId = id)"
           @pane-close="closePane"
           @pane-bind="bindPane"

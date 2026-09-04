@@ -16,6 +16,8 @@ const props = defineProps<{
   activeId: string
   /** pane 总数（>1 才允许关闭） */
   paneCount: number
+  /** 按 pane id 计算首行提示（主窗格返回 undefined，分屏窗格返回 `user@host:/$ `） */
+  initialLineFor?: (paneId: string) => string | undefined
 }>()
 
 const emit = defineEmits<{
@@ -75,6 +77,7 @@ function emitPaneBind(sid: string) {
     :session-id="node.sessionId"
     :active="node.id === activeId"
     :closable="paneCount > 1"
+    :initial-line="initialLineFor?.(node.id)"
     @focus="emitPaneFocus"
     @close="emitPaneClose"
     @bind="emitPaneBind"
@@ -88,6 +91,7 @@ function emitPaneBind(sid: string) {
         :node="child"
         :active-id="activeId"
         :pane-count="paneCount"
+        :initial-line-for="initialLineFor"
         @pane-focus="(id: string) => emit('pane-focus', id)"
         @pane-close="(id: string) => emit('pane-close', id)"
         @pane-bind="(id: string, sid: string) => emit('pane-bind', id, sid)"

@@ -14,7 +14,13 @@ import { useTerminal } from '@/composables/useTerminal'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
 
-const props = defineProps<{ sessionId: string | null; closable: boolean; active?: boolean }>()
+const props = defineProps<{
+  sessionId: string | null
+  closable: boolean
+  active?: boolean
+  /** 绑定会话时写入的首行提示（如 `minio@nas01:/$ `，分屏窗格用，避免空白） */
+  initialLine?: string
+}>()
 const emit = defineEmits<{
   (e: 'focus'): void
   (e: 'bind', sid: string): void
@@ -27,6 +33,14 @@ const { term, sessionId: ownSession, init, bind, fit } = useTerminal()
 
 const containerRef = ref<HTMLDivElement | null>(null)
 
+/** 首行提示只写一次（挂载即绑定 / 后经选择器绑定两条路径共用） */
+let initialWritten = false
+function writeInitialLine() {
+  if (initialWritten || !props.initialLine || !term.value) return
+  initialWritten = true
+  term.value.writeln(props.initialLine)
+}
+
 /** 挂载时初始化 xterm 并绑定（tab 已带会话） */
 watch(
   () => containerRef.value,
@@ -36,6 +50,7 @@ watch(
       await nextTick()
       fit()
       if (props.sessionId && props.sessionId !== ownSession.value) {
+        writeInitialLine()
         bind(props.sessionId)
       }
     }
@@ -46,7 +61,10 @@ watch(
 watch(
   () => props.sessionId,
   (sid) => {
-    if (sid && sid !== ownSession.value && term.value) bind(sid)
+    if (sid && sid !== ownSession.value && term.value) {
+      writeInitialLine()
+      bind(sid)
+    }
   },
 )
 
