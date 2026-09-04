@@ -76,6 +76,23 @@ pub struct MonitorDisk {
     pub used_percent: f64,
 }
 
+/// 单 GPU 信息（`monitor_metrics` 内嵌，显存单位 MiB）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorGpu {
+    /// GPU 序号
+    pub index: u32,
+    /// 名称（如 "NVIDIA GeForce RTX 4090"）
+    pub name: String,
+    /// 利用率（0–100）
+    pub util_percent: f64,
+    /// 显存已用（MiB）
+    pub mem_used_mb: f64,
+    /// 显存总量（MiB）
+    pub mem_total_mb: f64,
+    /// 温度（℃；读取失败为 None）
+    pub temp_c: Option<f64>,
+}
+
 /// `monitor_metrics` 事件 payload（一次采样结果）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonitorMetricsPayload {
@@ -99,6 +116,12 @@ pub struct MonitorMetricsPayload {
     pub swap_used_bytes: u64,
     /// 1 分钟负载
     pub load1: f64,
+    /// 5 分钟负载
+    #[serde(default)]
+    pub load5: f64,
+    /// 15 分钟负载
+    #[serde(default)]
+    pub load15: f64,
     /// 主机运行时长（秒）
     pub uptime_s: u64,
     /// 下行速率（bytes/s）
@@ -107,6 +130,9 @@ pub struct MonitorMetricsPayload {
     pub net_tx_bps: f64,
     /// 磁盘列表
     pub disks: Vec<MonitorDisk>,
+    /// GPU 列表（远端无 nvidia-smi 时为空）
+    #[serde(default)]
+    pub gpus: Vec<MonitorGpu>,
     /// 采集错误（预留：用于推送采样失败通知）
     pub error: Option<String>,
 }
@@ -250,14 +276,29 @@ mod tests {
             swap_total_bytes: 0,
             swap_used_bytes: 0,
             load1: 0.0,
+            load5: 0.0,
+            load15: 0.0,
             uptime_s: 1,
             net_rx_bps: 0.0,
             net_tx_bps: 0.0,
             disks: vec![],
+            gpus: vec![MonitorGpu {
+                index: 0,
+                name: "NVIDIA Test".into(),
+                util_percent: 10.0,
+                mem_used_mb: 1.0,
+                mem_total_mb: 2.0,
+                temp_c: Some(40.0),
+            }],
             error: None,
         };
         let v = serde_json::to_value(&metrics).unwrap();
         assert_eq!(v["session_id"], "s1");
+        assert_eq!(v["load5"], 0.0);
+        assert_eq!(v["load15"], 0.0);
+        assert_eq!(v["gpus"][0]["util_percent"], 10.0);
+        assert_eq!(v["gpus"][0]["mem_used_mb"], 1.0);
+        assert_eq!(v["gpus"][0]["temp_c"], 40.0);
     }
 
     /// transfer_event 前端读 camelCase（stores/transfer.ts），枚举值为 snake_case

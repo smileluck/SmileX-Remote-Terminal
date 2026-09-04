@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use ssh_core::connection::SessionManager as SshSessionManager;
 
-use crate::events::{AlertFiredPayload, MonitorDisk, MonitorMetricsPayload};
+use crate::events::{AlertFiredPayload, MonitorDisk, MonitorGpu, MonitorMetricsPayload};
 use crate::monitor::metrics::{self, RawMetrics};
 use crate::storage::sqlite::{AlertRule, SqliteStorage};
 
@@ -191,6 +191,8 @@ impl MonitorSampler {
                     swap_total_bytes: raw.mem.swap_total,
                     swap_used_bytes: raw.mem.swap_total.saturating_sub(raw.mem.swap_free),
                     load1: raw.load1,
+                    load5: raw.load5,
+                    load15: raw.load15,
                     uptime_s: raw.uptime_s,
                     net_rx_bps,
                     net_tx_bps,
@@ -202,6 +204,18 @@ impl MonitorSampler {
                             total_kb: d.total_kb,
                             used_kb: d.used_kb,
                             used_percent: d.used_percent(),
+                        })
+                        .collect(),
+                    gpus: raw
+                        .gpus
+                        .iter()
+                        .map(|g| MonitorGpu {
+                            index: g.index,
+                            name: g.name.clone(),
+                            util_percent: g.util_percent,
+                            mem_used_mb: g.mem_used_mb,
+                            mem_total_mb: g.mem_total_mb,
+                            temp_c: g.temp_c,
                         })
                         .collect(),
                     error: None,

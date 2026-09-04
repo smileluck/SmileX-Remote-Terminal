@@ -95,6 +95,18 @@ impl DiskInfo {
     }
 }
 
+/// 单 GPU 信息（nvidia-smi 采集，显存单位 MiB）
+#[derive(Debug, Clone, Default)]
+pub struct GpuInfo {
+    pub index: u32,
+    pub name: String,
+    pub util_percent: f64,
+    pub mem_used_mb: f64,
+    pub mem_total_mb: f64,
+    /// 温度（℃；读取失败为 None）
+    pub temp_c: Option<f64>,
+}
+
 /// 一次采样的原始指标（未做差值换算）
 #[derive(Debug, Clone, Default)]
 pub struct RawMetrics {
@@ -105,8 +117,14 @@ pub struct RawMetrics {
     pub net: Vec<NetDev>,
     /// 1 分钟负载
     pub load1: f64,
+    /// 5 分钟负载
+    pub load5: f64,
+    /// 15 分钟负载
+    pub load15: f64,
     pub uptime_s: u64,
     pub disks: Vec<DiskInfo>,
+    /// GPU 列表（远端无 nvidia-smi 时为空）
+    pub gpus: Vec<GpuInfo>,
 }
 
 impl RawMetrics {
@@ -128,6 +146,7 @@ impl RawMetrics {
 /// ==LOAD==
 /// ==UPTIME==
 /// ==DISK==
+/// ==GPU==
 /// ```
 pub const COLLECT_SCRIPT: &str = r#"sh -c '
 echo "==CPU=="
@@ -160,6 +179,10 @@ if [ -r /proc/uptime ]; then
 fi
 echo "==DISK=="
 df -kP 2>/dev/null | tail -n +2
+echo "==GPU=="
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null
+fi
 '"#;
 
 /// 解析采集脚本输出为 [`RawMetrics`]（无法识别的行静默跳过）
@@ -189,6 +212,7 @@ pub fn parse_output(out: &str) -> RawMetrics {
                 }
             }
             "DISK" => parse_disk_line(line, &mut m),
+            "GPU" => parse_gpu_line(line, &mut m),
             _ => {}
         }
     }
@@ -280,15 +304,28 @@ fn parse_net_line(line: &str, m: &mut RawMetrics) {
     }
 }
 
-/// Linux loadavg：`0.52 0.58 0.59 1/389 12345`；macOS uptime 含 "load averages:"
+/// Linux loadavg：`0.52 0.58 0.59 1/389 12345`；uptime 输出含 "load average(s):"
+/// 取负载段前 3 个可解析浮点，依次为 1/5/15 分钟负载
+/// （uptime 其余字段如 "up 9 days" 中的纯数字不得计入，故先截掉前缀）
 fn parse_load_line(line: &str, m: &mut RawMetrics) {
-    for tok in line.split_whitespace() {
-        let t = tok.trim_end_matches(',');
-        if let Ok(v) = t.parse::<f64>() {
-            m.load1 = v;
-            return;
+    let seg = line
+        .split_once("load average")
+        .map(|(_, rest)| rest)
+        .unwrap_or(line);
+    let mut loads = [0.0f64; 3];
+    let mut n = 0;
+    for tok in seg.split_whitespace() {
+        if let Ok(v) = tok.trim_end_matches(',').parse::<f64>() {
+            loads[n] = v;
+            n += 1;
+            if n == 3 {
+                break;
+            }
         }
     }
+    m.load1 = loads[0];
+    m.load5 = loads[1];
+    m.load15 = loads[2];
 }
 
 /// `df -kP`：`/dev/sda1 82041632 32800444 45058612 43% /`
@@ -303,6 +340,35 @@ fn parse_disk_line(line: &str, m: &mut RawMetrics) {
             });
         }
     }
+}
+
+/// nvidia-smi CSV 行：`0, NVIDIA GeForce RTX 4090, 35, 1234, 24564, 45`
+/// （index, name, 利用率%, 显存已用 MiB, 显存总量 MiB, 温度℃；name 可能含逗号）
+fn parse_gpu_line(line: &str, m: &mut RawMetrics) {
+    let parts: Vec<&str> = line.split(',').collect();
+    if parts.len() < 6 {
+        return;
+    }
+    let name = parts[1..parts.len() - 4].join(",").trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    let f = |i: usize| -> f64 {
+        parts[i]
+            .trim()
+            .trim_end_matches('%')
+            .parse::<f64>()
+            .unwrap_or(0.0)
+    };
+    let last = parts.len() - 1;
+    m.gpus.push(GpuInfo {
+        index: parts[0].trim().parse().unwrap_or(0),
+        name,
+        util_percent: f(last - 3),
+        mem_used_mb: f(last - 2),
+        mem_total_mb: f(last - 1),
+        temp_c: parts[last].trim().parse::<f64>().ok(),
+    });
 }
 
 fn kb(s: Option<&&str>) -> u64 {
@@ -346,6 +412,8 @@ SwapFree:        1048576 kB
 123456.78
 ==DISK==
 /dev/sda1 82041632 32800444 45058612 43% /
+==GPU==
+0, NVIDIA GeForce RTX 4090, 35, 1234, 24564, 45
 ";
         let m = parse_output(out);
         assert_eq!(m.cpu.user, 100);
@@ -358,10 +426,47 @@ SwapFree:        1048576 kB
         assert_eq!(m.net[0].rx_bytes, 1000);
         assert_eq!(m.net[0].tx_bytes, 500);
         assert_eq!(m.load1, 0.52);
+        assert_eq!(m.load5, 0.58);
+        assert_eq!(m.load15, 0.59);
         assert_eq!(m.uptime_s, 123456);
         assert_eq!(m.disks.len(), 1);
         assert_eq!(m.disks[0].mount, "/");
         assert!((m.disks[0].used_percent() - 39.98).abs() < 0.1);
+        assert_eq!(m.gpus.len(), 1);
+        assert_eq!(m.gpus[0].index, 0);
+        assert_eq!(m.gpus[0].name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(m.gpus[0].util_percent, 35.0);
+        assert_eq!(m.gpus[0].mem_used_mb, 1234.0);
+        assert_eq!(m.gpus[0].mem_total_mb, 24564.0);
+        assert_eq!(m.gpus[0].temp_c, Some(45.0));
+    }
+
+    #[test]
+    fn parse_uptime_loads() {
+        // macOS uptime：前缀里的 "9" / "6" 不得计入负载
+        let mut m = RawMetrics::default();
+        parse_load_line("10:54  up 9 days,  6 users, load averages: 1.40 2.09 2.41", &mut m);
+        assert_eq!(m.load1, 1.40);
+        assert_eq!(m.load5, 2.09);
+        assert_eq!(m.load15, 2.41);
+        // Linux uptime：带逗号分隔
+        let mut m = RawMetrics::default();
+        parse_load_line(" 23:41:02 up 12 days, load average: 0.10, 0.15, 0.20", &mut m);
+        assert_eq!(m.load1, 0.10);
+        assert_eq!(m.load5, 0.15);
+        assert_eq!(m.load15, 0.20);
+    }
+
+    #[test]
+    fn parse_gpu_name_with_comma() {
+        let mut m = RawMetrics::default();
+        parse_gpu_line("1, GPU A, B, 0, 100, 200, [N/A]", &mut m);
+        assert_eq!(m.gpus.len(), 1);
+        assert_eq!(m.gpus[0].name, "GPU A, B");
+        assert_eq!(m.gpus[0].util_percent, 0.0);
+        assert_eq!(m.gpus[0].mem_used_mb, 100.0);
+        assert_eq!(m.gpus[0].mem_total_mb, 200.0);
+        assert_eq!(m.gpus[0].temp_c, None);
     }
 
     #[test]
