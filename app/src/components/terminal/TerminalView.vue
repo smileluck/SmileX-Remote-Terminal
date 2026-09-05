@@ -7,11 +7,12 @@
  *   树结构只换算为矩形，窗格组件不重建（关闭/分割不清空其他窗格的终端内容）
  * - 无 sessionId 的窗格：显示「绑定现有会话 / 新建连接」选择器（见 PaneTerminal）
  * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮（原地重连）
- * - 右侧工具栏（流式竖排，不悬浮）：分屏 + 四面板入口（文件管理 / 监控 /
- *   Agent / 告警），四面板互斥切换（同一时间只开一个，再点同一个收起）
+ * - 右侧工具栏（流式竖排，不悬浮）：分屏单入口（点击弹二级菜单选
+ *   分割方向）+ 四面板入口（文件管理 / 监控 / Agent / 告警），
+ *   四面板互斥切换（同一时间只开一个，再点同一个收起）
  */
-import { ref, computed, onUnmounted, watch } from 'vue'
-import { NButton, NIcon, NTooltip, useMessage } from 'naive-ui'
+import { ref, computed, onUnmounted, watch, h, type Component } from 'vue'
+import { NButton, NDropdown, NIcon, NTooltip, useMessage } from 'naive-ui'
 import {
   Refresh,
   Folder,
@@ -55,6 +56,15 @@ const panelEntries = [
   { key: 'agent', label: 'AI 运维助手（⌘J）', icon: Robot },
   { key: 'alerts', label: '告警规则', icon: Bell },
 ] as const
+
+/** 分屏下拉选项（二级选择分割方向） */
+function renderIcon(icon: Component, style?: string) {
+  return () => h(NIcon, null, { default: () => h(icon, style ? { style } : undefined) })
+}
+const splitOptions = [
+  { label: '向右分屏', key: 'row', icon: renderIcon(ArrowsSplit2, 'transform: rotate(90deg)') },
+  { label: '向下分屏', key: 'column', icon: renderIcon(LayoutRows) },
+]
 
 /** 重连中 */
 const reconnecting = ref(false)
@@ -251,22 +261,18 @@ async function handleReconnect() {
       </div>
       <!-- 工具栏：常规流式竖排（终端区与文件面板之间），不悬浮遮挡任何内容 -->
       <div class="view-tools">
-          <NTooltip v-if="paneCount < 4 && tab.sessionId" placement="left">
-            <template #trigger>
-              <NButton quaternary circle size="small" :loading="splitting" @click="addPane('row')">
-                <NIcon :component="ArrowsSplit2" style="transform: rotate(90deg)" />
-              </NButton>
-            </template>
-            向右分屏（克隆当前选中窗格的连接）
-          </NTooltip>
-          <NTooltip v-if="paneCount < 4 && tab.sessionId" placement="left">
-            <template #trigger>
-              <NButton quaternary circle size="small" :loading="splitting" @click="addPane('column')">
-                <NIcon :component="LayoutRows" />
-              </NButton>
-            </template>
-            向下分屏（克隆当前选中窗格的连接）
-          </NTooltip>
+          <!-- 分屏：单入口，二级菜单选择分割方向 -->
+          <NDropdown
+            v-if="paneCount < 4 && tab.sessionId"
+            trigger="click"
+            placement="bottom-end"
+            :options="splitOptions"
+            @select="(key: string | number) => addPane(key as 'row' | 'column')"
+          >
+            <NButton quaternary circle size="small" :loading="splitting">
+              <NIcon :component="ArrowsSplit2" />
+            </NButton>
+          </NDropdown>
           <!-- 四面板入口：文件管理 / 监控 / Agent / 告警，互斥切换 -->
           <NTooltip v-if="tab.sessionId" placement="left">
             <template #trigger>
