@@ -6,7 +6,8 @@
  * - 手动点击「执行」→ 危险命令先二次确认 → 命令写入绑定的终端窗口
  *   会话执行（用户可在终端看到全过程），回显自动捕获为输出
  * - 自动执行模式下由 agent store 直接触发，危险命令仍跳过留给手动确认
- * - 执行状态与输出回显（agent store runStates）
+ * - 执行状态（agent store runStates）；输出由后续 tool 消息统一展示，
+ *   此处不重复渲染
  */
 import { computed } from 'vue'
 import { NButton, NIcon, useDialog, useMessage } from 'naive-ui'
@@ -71,7 +72,6 @@ async function run() {
     </div>
     <code class="run-cmd">{{ command }}</code>
     <div v-if="danger" class="run-warn">⚠ 高风险命令，执行前请确认影响</div>
-    <pre v-if="state?.output" class="run-out">{{ state.output }}</pre>
   </div>
 </template>
 
@@ -112,18 +112,5 @@ async function run() {
   margin-top: 6px;
   font-size: 11px;
   color: var(--warning);
-}
-.run-out {
-  margin: 8px 0 0;
-  padding: 8px 10px;
-  background: #0d1117;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-family: ui-monospace, Consolas, 'Courier New', monospace;
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow-y: auto;
 }
 </style>
