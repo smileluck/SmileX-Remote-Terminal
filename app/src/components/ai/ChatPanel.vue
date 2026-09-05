@@ -7,11 +7,12 @@
  * - 已连接：上下文（终端输出/监控/服务器身份）与命令执行均作用于绑定的服务器；
  *   AI 回复中的命令块可经确认（或自动模式）执行，结果回传继续分析
  *
- * 对话状态在 agent store（全局），切换页签/收起面板不丢对话。
+ * 对话自动按会话持久化：顶部为历史会话列表（点击切换，可删除），
+ * 「新会话」另起一段对话，当前对话保留在历史中。
  */
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { NButton, NInput, NPopconfirm, NIcon, NSelect, NTag, NSwitch, NTooltip, useMessage } from 'naive-ui'
-import { Send, PlayerStop, Trash, PlugConnected, Settings, Plus, X } from '@vicons/tabler'
+import { Send, PlayerStop, PlugConnected, Settings, MessagePlus, X } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
@@ -100,7 +101,7 @@ watch(
 
 <template>
   <div class="chat-panel">
-    <!-- 行 0：会话 Tab（多会话切换，持久化） -->
+    <!-- 行 0：历史会话列表（自动留存，点击切换） -->
     <div class="chat-tabs">
       <div
         v-for="c in agent.chats"
@@ -118,21 +119,13 @@ watch(
           <template #trigger>
             <NIcon :component="X" :size="12" class="chat-tab-close" @click.stop />
           </template>
-          删除该会话及全部消息？
+          删除该历史会话及全部消息？
         </NPopconfirm>
       </div>
-      <NTooltip placement="bottom">
-        <template #trigger>
-          <NButton quaternary size="tiny" class="chat-tab-add" @click="agent.newChat()">
-            <template #icon><NIcon :component="Plus" /></template>
-          </NButton>
-        </template>
-        新会话
-      </NTooltip>
     </div>
 
     <header class="chat-header">
-      <!-- 行 1：会话信息 + 清空 -->
+      <!-- 行 1：会话信息 + 新会话 -->
       <div class="header-row">
         <NTag v-if="connected" size="small" type="success" :bordered="false" class="server-tag">
           {{ serverLabel }}
@@ -146,14 +139,14 @@ watch(
           class="ctx-select"
         />
         <div class="header-spacer" />
-        <NPopconfirm @positive-click="agent.clear">
+        <NTooltip placement="bottom">
           <template #trigger>
-            <NButton quaternary size="small" title="清空当前会话消息">
-              <template #icon><NIcon :component="Trash" /></template>
+            <NButton quaternary size="small" title="新会话" @click="agent.newChat()">
+              <template #icon><NIcon :component="MessagePlus" /></template>
             </NButton>
           </template>
-          清空当前会话的全部消息？
-        </NPopconfirm>
+          开始新会话（当前对话保留在历史列表）
+        </NTooltip>
       </div>
       <!-- 行 2：模型切换 + 上下文/自动执行开关 -->
       <div class="header-row">
@@ -288,9 +281,6 @@ watch(
 }
 .chat-tab-close:hover {
   opacity: 1;
-}
-.chat-tab-add {
-  flex-shrink: 0;
 }
 /* 头部固定两行,避免窄面板下 flex-wrap 换行位置随内容漂移 */
 .chat-header {

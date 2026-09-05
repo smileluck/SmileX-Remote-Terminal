@@ -51,10 +51,12 @@ function genId(prefix: string): string {
 /**
  * Agent 助手 store（全局单例）
  *
- * - 多会话 Tab：会话与消息持久化到 SQLite，重启可恢复；
- *   后端 LLM 上下文按会话隔离，切回旧会话自动从库恢复
+ * - 历史会话：对话自动按会话持久化到 SQLite，重启可恢复；
+ *   后端 LLM 上下文按会话隔离，切回历史会话自动从库恢复。
+ *   单会话推进：新会话仅经「新会话」动作创建（首条消息也会兜底创建），
+ *   无多开入口
  * - 事件路由：后端 sessionId 即会话 id，ai_token/ai_done 按其分发到
- *   对应会话的消息数组，生成中切换 Tab 流式不丢
+ *   对应会话的消息数组，生成中切换会话流式不丢
  * - 绑定目标 SSH 会话：默认跟随激活的 SSH tab，失效时回退到任一活跃会话
  * - 命令执行协议：LLM 回复中的 ```run 块经用户确认（或自动模式）后
  *   写入绑定的终端窗口会话执行（对用户可见、保留会话状态），
@@ -154,7 +156,7 @@ export const useAgentStore = defineStore('agent', () => {
   }
   void init()
 
-  /** 新建会话并激活，返回会话 id（当前会话尚无消息时直接复用，避免堆积空会话） */
+  /** 开始新会话并激活（当前对话保留在历史；当前会话尚无消息时直接复用） */
   async function newChat(): Promise<string> {
     const current = activeChatId.value
     if (current && (messagesByChat.value[current]?.length ?? 0) === 0) return current
@@ -169,6 +171,7 @@ export const useAgentStore = defineStore('agent', () => {
     }
     messagesByChat.value[id] = []
     activeChatId.value = id
+    error.value = null
     return id
   }
 
@@ -420,21 +423,6 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  /** 清空当前会话的消息（会话本身保留） */
-  async function clear() {
-    const chatId = activeChatId.value
-    if (!chatId) return
-    const list = msgListOf(chatId)
-    list.splice(0, list.length)
-    runStates.value = {}
-    error.value = null
-    autoChain = 0
-    await Promise.allSettled([
-      agentChatService.chatClearMessages(chatId),
-      aiService.chatClear(chatId),
-    ])
-  }
-
   return {
     chats,
     activeChatId,
@@ -453,6 +441,5 @@ export const useAgentStore = defineStore('agent', () => {
     send,
     executeRun,
     abort,
-    clear,
   }
 })
