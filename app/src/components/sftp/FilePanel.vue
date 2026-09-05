@@ -3,12 +3,12 @@
  * FilePanel - SFTP 文件面板
  *
  * 终端右侧可折叠抽屉：远端目录浏览 / 上传（对话框 + 拖拽）/ 下载 /
- * 新建目录 / 递归删除 / 重命名。传输任务入全局队列（传输管理弹窗查看进度）。
+ * 新建目录 / 递归删除 / 重命名。传输任务入全局队列，
+ * 进度与继续/暂停/取消/重试在面板底部传输区直接查看操作。
  * 由 TerminalView 持有（tab 须带 sessionId）。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
-  NBadge,
   NButton,
   NDropdown,
   NIcon,
@@ -29,7 +29,6 @@ import {
   Edit,
   FolderPlus,
   ChevronRight,
-  ArrowsLeftRight,
 } from '@vicons/tabler'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -39,6 +38,7 @@ import type { SftpEntry } from '@/services/sftp'
 import { useTransferStore } from '@/stores/transfer'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
+import TransferList from './TransferList.vue'
 
 const props = defineProps<{ sessionId: string }>()
 const message = useMessage()
@@ -150,7 +150,6 @@ async function enqueueUpload(localPaths: string[]) {
   try {
     await transferStore.startUpload(props.sessionId, localPaths, cwd.value)
     message.success(`已加入上传队列（${localPaths.length} 项）`)
-    transferStore.managerVisible = true
   } catch (e) {
     message.error(String(e))
   }
@@ -181,7 +180,6 @@ async function handleDownload(entry: SftpEntry) {
   try {
     await transferStore.startDownload(props.sessionId, [entry.path])
     message.success(`已加入下载队列：${entry.name}`)
-    transferStore.managerVisible = true
   } catch (e) {
     message.error(String(e))
   }
@@ -335,16 +333,6 @@ defineExpose({ reload: load })
           </template>
           上传文件夹
         </NTooltip>
-        <NTooltip placement="bottom">
-          <template #trigger>
-            <NBadge :value="transferStore.activeCount" :max="99" :show="transferStore.activeCount > 0">
-              <NButton quaternary circle size="tiny" @click="transferStore.managerVisible = true">
-                <NIcon :component="ArrowsLeftRight" />
-              </NButton>
-            </NBadge>
-          </template>
-          传输管理
-        </NTooltip>
       </div>
     </div>
 
@@ -405,6 +393,17 @@ defineExpose({ reload: load })
         <span>松开以上传到 {{ cwd }}</span>
       </div>
     </NSpin>
+
+    <!-- 传输区：文件列表下方，仅有任务时显示（暂停/失败可一键继续） -->
+    <div v-if="transferStore.groups.length" class="fp-transfers">
+      <div class="fp-transfers-head">
+        <span class="fp-transfers-title">传输 · {{ transferStore.groups.length }}</span>
+        <NButton size="tiny" quaternary @click="transferStore.clearFinished()">清除已完成</NButton>
+      </div>
+      <div class="fp-transfers-body">
+        <TransferList :show-toolbar="false" />
+      </div>
+    </div>
 
     <!-- 右键菜单（跟随光标位置） -->
     <NDropdown
@@ -552,5 +551,31 @@ defineExpose({ reload: load })
   color: var(--primary);
   font-size: 13px;
   pointer-events: none;
+}
+/* 底部传输区：限高滚动，不挤压文件列表 */
+.fp-transfers {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  border-top: 1px solid var(--border-color);
+}
+.fp-transfers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.fp-transfers-title {
+  font-weight: 600;
+}
+.fp-transfers-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px;
 }
 </style>
