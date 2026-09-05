@@ -3,7 +3,7 @@
  * SideBar - 侧边栏（会话面板）
  *
  * Termius 风卡片化会话列表：
- * - 顶部 header（「会话」标题 + 新建按钮，打开全局连接弹窗）
+ * - 顶部 header（「会话」标题 + 折叠按钮 + 新建按钮，打开全局连接弹窗）
  * - 卡片：kind 图标 + 名称 + user@host:port + 相对时间 + 悬浮 编辑/删除
  * - 点击卡片走统一连接流程（已连接弹「切换/新开」，断线原地重连）
  *
@@ -20,11 +20,12 @@
  * - tabs store（连接成功后 addTab）
  */
 import { computed, nextTick, onMounted, ref, type Component } from 'vue'
-import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NDropdown, useMessage } from 'naive-ui'
-import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight } from '@vicons/tabler'
+import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NDropdown, NTooltip, useMessage } from 'naive-ui'
+import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight, LayoutSidebarLeftCollapse } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
+import { useLayoutStore } from '@/stores/layout'
 import { useConnectFlow } from '@/composables/useConnectFlow'
 import { decodeExtra } from '@/types/profile'
 import type { SessionProfile } from '@/types/profile'
@@ -32,6 +33,7 @@ import type { SessionProfile } from '@/types/profile'
 const profilesStore = useProfilesStore()
 const tabsStore = useTabsStore()
 const ui = useUiStore()
+const layout = useLayoutStore()
 const { connect } = useConnectFlow()
 const message = useMessage()
 
@@ -315,11 +317,21 @@ onMounted(() => {
   <aside class="side-bar">
     <header class="section-header">
       <span class="section-title">会话</span>
-      <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
-        <NButton quaternary size="tiny" circle title="新建">
-          <NIcon :component="Plus" />
-        </NButton>
-      </NDropdown>
+      <div class="header-actions">
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <NButton quaternary size="tiny" circle title="折叠会话栏" @click="layout.toggleSidebar()">
+              <NIcon :component="LayoutSidebarLeftCollapse" />
+            </NButton>
+          </template>
+          折叠会话栏（⌘B）
+        </NTooltip>
+        <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
+          <NButton quaternary size="tiny" circle title="新建">
+            <NIcon :component="Plus" />
+          </NButton>
+        </NDropdown>
+      </div>
     </header>
 
     <div class="search-slot">
@@ -477,6 +489,11 @@ onMounted(() => {
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 1px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .list-scroll {
   flex: 1;
