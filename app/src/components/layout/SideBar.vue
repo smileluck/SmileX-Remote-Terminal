@@ -3,7 +3,7 @@
  * SideBar - 侧边栏（会话面板）
  *
  * Termius 风卡片化会话列表：
- * - 顶部 header（「会话」标题 + 折叠按钮 + 新建按钮，打开全局连接弹窗）
+ * - 顶部 header（「会话」标题 + 折叠按钮）；搜索栏右侧「+」下拉新建（打开全局连接弹窗）
  * - 卡片：kind 图标 + 名称 + user@host:port + 相对时间 + 悬浮 编辑/删除
  * - 点击卡片走统一连接流程（已连接弹「切换/新开」，断线原地重连）
  *
@@ -317,27 +317,25 @@ onMounted(() => {
   <aside class="side-bar">
     <header class="section-header">
       <span class="section-title">会话</span>
-      <div class="header-actions">
-        <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
-          <NButton quaternary size="tiny" circle title="新建">
-            <NIcon :component="Plus" />
+      <NTooltip placement="bottom">
+        <template #trigger>
+          <NButton quaternary size="tiny" circle title="折叠会话栏" @click="layout.toggleSidebar()">
+            <NIcon :component="LayoutSidebarLeftCollapse" />
           </NButton>
-        </NDropdown>
-        <NTooltip placement="bottom">
-          <template #trigger>
-            <NButton quaternary size="tiny" circle title="折叠会话栏" @click="layout.toggleSidebar()">
-              <NIcon :component="LayoutSidebarLeftCollapse" />
-            </NButton>
-          </template>
-          折叠会话栏（⌘B）
-        </NTooltip>
-      </div>
+        </template>
+        折叠会话栏（⌘B）
+      </NTooltip>
     </header>
 
     <div class="search-slot">
       <NInput v-model:value="search" size="small" placeholder="搜索会话 / 主机 / 分组" clearable>
         <template #prefix><NIcon :component="Search" /></template>
       </NInput>
+      <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
+        <NButton quaternary size="small" circle title="新建">
+          <NIcon :component="Plus" />
+        </NButton>
+      </NDropdown>
     </div>
 
     <div class="list-scroll">
@@ -345,7 +343,7 @@ onMounted(() => {
       <div v-if="profilesStore.profiles.length === 0" class="empty">
         <NEmpty size="small" description="暂无会话">
           <template #extra>
-            <span class="empty-hint">点击上方 + 新建</span>
+            <span class="empty-hint">点击搜索框右侧 + 新建</span>
           </template>
         </NEmpty>
       </div>
@@ -490,20 +488,22 @@ onMounted(() => {
   text-transform: uppercase;
   letter-spacing: 1px;
 }
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
 .list-scroll {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
 }
 .search-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+}
+.search-slot :deep(.n-input) {
+  flex: 1;
+  min-width: 0;
 }
 .group {
   display: flex;
