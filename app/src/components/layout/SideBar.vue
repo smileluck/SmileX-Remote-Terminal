@@ -318,6 +318,11 @@ onMounted(() => {
     <header class="section-header">
       <span class="section-title">会话</span>
       <div class="header-actions">
+        <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
+          <NButton quaternary size="tiny" circle title="新建">
+            <NIcon :component="Plus" />
+          </NButton>
+        </NDropdown>
         <NTooltip placement="bottom">
           <template #trigger>
             <NButton quaternary size="tiny" circle title="折叠会话栏" @click="layout.toggleSidebar()">
@@ -326,11 +331,6 @@ onMounted(() => {
           </template>
           折叠会话栏（⌘B）
         </NTooltip>
-        <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
-          <NButton quaternary size="tiny" circle title="新建">
-            <NIcon :component="Plus" />
-          </NButton>
-        </NDropdown>
       </div>
     </header>
 
