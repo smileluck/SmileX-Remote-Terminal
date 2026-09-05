@@ -7,12 +7,12 @@
  * - 已连接：上下文（终端输出/监控/服务器身份）与命令执行均作用于绑定的服务器；
  *   AI 回复中的命令块可经确认（或自动模式）执行，结果回传继续分析
  *
- * 对话自动按会话持久化：顶部为历史会话列表（点击切换，可删除），
+ * 对话自动按会话持久化：经「历史会话」弹窗查看与切换（可删除），
  * 「新会话」另起一段对话，当前对话保留在历史中。
  */
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
-import { NButton, NInput, NPopconfirm, NIcon, NSelect, NTag, NSwitch, NTooltip, useMessage } from 'naive-ui'
-import { Send, PlayerStop, PlugConnected, Settings, MessagePlus, X } from '@vicons/tabler'
+import { NButton, NInput, NIcon, NSelect, NTag, NSwitch, NTooltip, useMessage } from 'naive-ui'
+import { Send, PlayerStop, PlugConnected, Settings, MessagePlus, History } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
@@ -20,6 +20,7 @@ import { useUiStore } from '@/stores/ui'
 import { useLlmStore } from '@/stores/llm'
 import MessageBubble from './MessageBubble.vue'
 import ContextToggle from './ContextToggle.vue'
+import ChatHistoryDialog from './ChatHistoryDialog.vue'
 
 const agent = useAgentStore()
 const tabs = useTabsStore()
@@ -30,6 +31,13 @@ const message = useMessage()
 
 const input = ref('')
 const listRef = ref<HTMLElement | null>(null)
+const historyVisible = ref(false)
+
+/** 当前会话标题（Tab 条移除后头部唯一可见的会话标识） */
+const activeTitle = computed(() => {
+  if (!agent.activeChatId) return ''
+  return agent.chats.find((c) => c.id === agent.activeChatId)?.title || '新会话'
+})
 
 /** 模型下拉选项：配置名 · 模型名 */
 const modelOptions = computed(() =>
@@ -101,31 +109,8 @@ watch(
 
 <template>
   <div class="chat-panel">
-    <!-- 行 0：历史会话列表（自动留存，点击切换） -->
-    <div class="chat-tabs">
-      <div
-        v-for="c in agent.chats"
-        :key="c.id"
-        class="chat-tab"
-        :class="{ active: c.id === agent.activeChatId }"
-        :title="c.title || '新会话'"
-        @click="agent.switchChat(c.id)"
-      >
-        <span class="chat-tab-title">{{ c.title || '新会话' }}</span>
-        <NPopconfirm
-          v-if="c.id === agent.activeChatId"
-          @positive-click="agent.deleteChat(c.id)"
-        >
-          <template #trigger>
-            <NIcon :component="X" :size="12" class="chat-tab-close" @click.stop />
-          </template>
-          删除该历史会话及全部消息？
-        </NPopconfirm>
-      </div>
-    </div>
-
     <header class="chat-header">
-      <!-- 行 1：会话信息 + 新会话 -->
+      <!-- 行 1：会话信息 + 历史会话/新会话 -->
       <div class="header-row">
         <NTag v-if="connected" size="small" type="success" :bordered="false" class="server-tag">
           {{ serverLabel }}
@@ -138,7 +123,23 @@ watch(
           placeholder="选择会话"
           class="ctx-select"
         />
+        <span
+          v-if="activeTitle"
+          class="chat-title"
+          :title="`当前会话：${activeTitle}`"
+          @click="historyVisible = true"
+        >
+          {{ activeTitle }}
+        </span>
         <div class="header-spacer" />
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <NButton quaternary size="small" title="历史会话" @click="historyVisible = true">
+              <template #icon><NIcon :component="History" /></template>
+            </NButton>
+          </template>
+          查看历史会话
+        </NTooltip>
         <NTooltip placement="bottom">
           <template #trigger>
             <NButton quaternary size="small" title="新会话" @click="agent.newChat()">
@@ -220,6 +221,8 @@ watch(
         停止
       </NButton>
     </div>
+
+    <ChatHistoryDialog v-model:show="historyVisible" />
   </div>
 </template>
 
@@ -232,55 +235,23 @@ watch(
   background: var(--bg-app);
   min-height: 0;
 }
-/* 会话 Tab 条：横向滚动，窄面板不挤压 header */
-.chat-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 8px 0;
-  overflow-x: auto;
-  flex-shrink: 0;
-  min-height: 30px;
-}
-.chat-tabs::-webkit-scrollbar {
-  height: 4px;
-}
-.chat-tab {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
+/* 当前会话标题：Tab 条移除后头部的会话标识，点击打开历史弹窗 */
+.chat-title {
   font-size: 12px;
   color: var(--text-secondary);
   cursor: pointer;
-  white-space: nowrap;
-  max-width: 150px;
-  flex-shrink: 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-.chat-tab:hover {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-}
-.chat-tab.active {
-  color: var(--primary);
-  background: var(--primary-bg);
-  border-color: var(--primary-border);
-}
-.chat-tab-title {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   min-width: 0;
+  flex-shrink: 1;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.chat-tab-close {
-  flex-shrink: 0;
-  opacity: 0.55;
-  border-radius: 3px;
-}
-.chat-tab-close:hover {
-  opacity: 1;
+.chat-title:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 /* 头部固定两行,避免窄面板下 flex-wrap 换行位置随内容漂移 */
 .chat-header {
