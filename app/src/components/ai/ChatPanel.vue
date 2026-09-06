@@ -110,8 +110,8 @@ watch(
 <template>
   <div class="chat-panel">
     <header class="chat-header">
-      <!-- 行 1：会话信息 + 历史会话/新会话 -->
-      <div class="header-row">
+      <!-- 行 1：会话信息 + 历史会话/新会话（保持单行，标题溢出省略） -->
+      <div class="header-row header-row-main">
         <NTag v-if="connected" size="small" type="success" :bordered="false" class="server-tag">
           {{ serverLabel }}
         </NTag>
@@ -134,7 +134,7 @@ watch(
         <div class="header-spacer" />
         <NTooltip placement="bottom">
           <template #trigger>
-            <NButton quaternary size="small" title="历史会话" @click="historyVisible = true">
+            <NButton quaternary size="small" class="header-btn" title="历史会话" @click="historyVisible = true">
               <template #icon><NIcon :component="History" /></template>
             </NButton>
           </template>
@@ -142,7 +142,7 @@ watch(
         </NTooltip>
         <NTooltip placement="bottom">
           <template #trigger>
-            <NButton quaternary size="small" title="新会话" @click="agent.newChat()">
+            <NButton quaternary size="small" class="header-btn" title="新会话" @click="agent.newChat()">
               <template #icon><NIcon :component="MessagePlus" /></template>
             </NButton>
           </template>
@@ -273,6 +273,13 @@ watch(
 }
 .header-spacer {
   flex: 1;
+}
+/* 行 1 保持单行：窄面板时压缩 server-tag / 标题，按钮不换行 */
+.header-row-main {
+  flex-wrap: nowrap;
+}
+.header-btn {
+  flex-shrink: 0;
 }
 .server-tag {
   max-width: 150px;
