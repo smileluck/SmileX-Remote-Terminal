@@ -20,7 +20,7 @@
  * - tabs store（连接成功后 addTab）
  */
 import { computed, nextTick, onMounted, ref, type Component } from 'vue'
-import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NDropdown, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NDropdown, NTooltip, useDialog, useMessage } from 'naive-ui'
 import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight, LayoutSidebarLeftCollapse } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
@@ -36,6 +36,7 @@ const ui = useUiStore()
 const layout = useLayoutStore()
 const { connect } = useConnectFlow()
 const message = useMessage()
+const dialog = useDialog()
 
 /** profile.id → 是否有已连接（未断开）的 tab */
 function isConnected(profileId: string): boolean {
@@ -202,9 +203,24 @@ async function onGroupDrop(e: DragEvent, g: GroupBucket) {
     // 已在目标分组则不动作（避免无意义的写库与提示）
     const p = profilesStore.findById(sessionId)
     if (p && groupKey(groupOf(p)) === g.key) return
-    await moveSessions([sessionId], g)
+    const targetName = g.name || '未分组'
+    dialog.warning({
+      title: '移动会话',
+      content: `将「${p?.name ?? sessionId}」移动到「${targetName}」？`,
+      positiveText: '移动',
+      negativeText: '取消',
+      onPositiveClick: () => moveSessions([sessionId], g),
+    })
   } else if (sourceKey && sourceKey !== g.key) {
-    await mergeGroups(sourceKey, g)
+    const sourceName = groupedProfiles.value.find((b) => b.key === sourceKey)?.name || sourceKey
+    const targetName = g.name || '未分组'
+    dialog.warning({
+      title: '合并分组',
+      content: `将分组「${sourceName}」的全部会话合并到「${targetName}」？`,
+      positiveText: '合并',
+      negativeText: '取消',
+      onPositiveClick: () => mergeGroups(sourceKey, g),
+    })
   }
 }
 
