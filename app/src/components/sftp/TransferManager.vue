@@ -77,15 +77,15 @@ function fmtSpeed(bps: number): string {
 </script>
 
 <template>
-  <!-- 平时不占位：仅传输中/有未读成功提示时出现，且文件面板可见时隐藏 -->
+  <!-- 平时不占位：仅传输中/有未读成功提示时出现，且文件面板可见时隐藏；速率标签在左、悬浮球贴右边缘 -->
   <div v-if="fabVisible" class="tm-fab" @click="openManager">
+    <span v-if="store.totalSpeedBps > 0" class="tm-fab-speed">{{ fmtSpeed(store.totalSpeedBps) }}</span>
     <NBadge :value="store.activeCount" :max="99" :show="store.activeCount > 0">
       <NButton circle size="large" type="primary" secondary>
         <NIcon :component="ArrowsLeftRight" :size="20" />
       </NButton>
     </NBadge>
     <span v-if="hasUnseenCompleted" class="tm-fab-dot" />
-    <span v-if="store.totalSpeedBps > 0" class="tm-fab-speed">{{ fmtSpeed(store.totalSpeedBps) }}</span>
   </div>
 
   <NDrawer v-model:show="store.managerVisible" placement="right" :width="440" :z-index="300">
