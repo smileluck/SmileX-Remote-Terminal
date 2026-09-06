@@ -3,7 +3,8 @@
  * MessageBubble - 单条消息
  *
  * - user：右对齐纯文本
- * - assistant：左对齐 Markdown 渲染；```run 块渲染为可执行命令卡片（RunBlock）
+ * - assistant：左对齐 Markdown 渲染；```run 块渲染为可执行命令卡片（RunBlock），
+ *   ```bash/```sh 等 shell 代码块渲染为可复制/可执行的 CodeBlock
  * - tool：命令执行结果，终端风格回显
  * 深色主题，代码高亮使用 github-dark。
  */
@@ -14,6 +15,7 @@ import 'highlight.js/styles/github-dark.css'
 import type { ChatMessage } from '@/types/ai'
 import { splitThink } from '@/utils/think'
 import RunBlock from './RunBlock.vue'
+import CodeBlock from './CodeBlock.vue'
 
 const props = defineProps<{ message: ChatMessage }>()
 
@@ -35,19 +37,21 @@ const md = new MarkdownIt({
   },
 })
 
-/** ```run 块标记（agent 命令执行协议，流式生成中只匹配已闭合的块） */
-const RUN_RE = /```run\s*\n([\s\S]*?)```/g
+/** 围栏块标记：run = agent 命令执行协议；bash/sh/shell/zsh = 可复制的 shell 代码块（流式生成中只匹配已闭合的块） */
+const BLOCK_RE = /```(run|bash|sh|shell|zsh)\s*\n([\s\S]*?)```/g
 
 interface Segment {
-  type: 'md' | 'run' | 'think'
+  type: 'md' | 'run' | 'code' | 'think'
   text: string
   /** run 段在消息内的序号（与 agent store runStates key 对应） */
   index: number
+  /** code 段的围栏语言 */
+  lang?: string
   /** think 段是否闭合（流式生成中末段未闭合） */
   closed?: boolean
 }
 
-/** 把 assistant 消息拆成 think 折叠段、markdown 段与 run 命令块（保持顺序） */
+/** 把 assistant 消息拆成 think 折叠段、markdown 段、run 命令块与 shell 代码块（保持顺序） */
 const segments = computed<Segment[]>(() => {
   if (props.message.role !== 'assistant') return []
   const content = props.message.content || ''
@@ -59,11 +63,15 @@ const segments = computed<Segment[]>(() => {
       continue
     }
     let last = 0
-    for (const m of part.text.matchAll(RUN_RE)) {
+    for (const m of part.text.matchAll(BLOCK_RE)) {
       const idx = m.index ?? 0
       if (idx > last) list.push({ type: 'md', text: part.text.slice(last, idx), index: -1 })
-      list.push({ type: 'run', text: m[1].trim(), index: runIdx })
-      runIdx++
+      if (m[1] === 'run') {
+        list.push({ type: 'run', text: m[2].trim(), index: runIdx })
+        runIdx++
+      } else {
+        list.push({ type: 'code', text: m[2].replace(/\n$/, ''), lang: m[1], index: -1 })
+      }
       last = idx + m[0].length
     }
     if (last < part.text.length) list.push({ type: 'md', text: part.text.slice(last), index: -1 })
@@ -100,6 +108,12 @@ function renderMd(text: string): string {
             v-else-if="seg.type === 'run'"
             :message-id="message.id"
             :index="seg.index"
+            :command="seg.text"
+            :disabled="message.pending"
+          />
+          <CodeBlock
+            v-else-if="seg.type === 'code'"
+            :lang="seg.lang ?? ''"
             :command="seg.text"
             :disabled="message.pending"
           />

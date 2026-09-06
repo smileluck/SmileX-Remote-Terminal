@@ -11,7 +11,7 @@
  */
 import { computed } from 'vue'
 import { NButton, NIcon, useDialog, useMessage } from 'naive-ui'
-import { PlayerPlay } from '@vicons/tabler'
+import { Copy, PlayerPlay } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 
 const props = defineProps<{
@@ -30,6 +30,15 @@ const message = useMessage()
 const key = computed(() => `${props.messageId}#${props.index}`)
 const state = computed(() => agent.runStates[key.value])
 const danger = computed(() => agent.isDangerous(props.command))
+
+async function copyCommand() {
+  try {
+    await navigator.clipboard.writeText(props.command)
+    message.success('命令已复制')
+  } catch {
+    message.error('复制失败')
+  }
+}
 
 async function run() {
   if (!agent.sshSessionId) {
@@ -56,19 +65,24 @@ async function run() {
   <div class="run-block" :class="{ danger }">
     <div class="run-head">
       <span class="run-title">$ 终端命令</span>
-      <NButton
-        size="tiny"
-        :type="state?.status === 'error' ? 'error' : 'primary'"
-        :loading="state?.status === 'running'"
-        :disabled="disabled || state?.status === 'done' || state?.status === 'running'"
-        secondary
-        @click="run"
-      >
-        <template v-if="state?.status !== 'done' && state?.status !== 'running'" #icon>
-          <NIcon :component="PlayerPlay" :size="12" />
-        </template>
-        {{ state?.status === 'done' ? '已执行' : state?.status === 'error' ? '重试' : '执行' }}
-      </NButton>
+      <div class="run-actions">
+        <NButton size="tiny" quaternary title="复制命令" @click="copyCommand">
+          <template #icon><NIcon :component="Copy" :size="12" /></template>
+        </NButton>
+        <NButton
+          size="tiny"
+          :type="state?.status === 'error' ? 'error' : 'primary'"
+          :loading="state?.status === 'running'"
+          :disabled="disabled || state?.status === 'done' || state?.status === 'running'"
+          secondary
+          @click="run"
+        >
+          <template v-if="state?.status !== 'done' && state?.status !== 'running'" #icon>
+            <NIcon :component="PlayerPlay" :size="12" />
+          </template>
+          {{ state?.status === 'done' ? '已执行' : state?.status === 'error' ? '重试' : '执行' }}
+        </NButton>
+      </div>
     </div>
     <code class="run-cmd">{{ command }}</code>
     <div v-if="danger" class="run-warn">⚠ 高风险命令，执行前请确认影响</div>
@@ -94,6 +108,12 @@ async function run() {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
+}
+.run-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 .run-title {
   font-size: 11px;
