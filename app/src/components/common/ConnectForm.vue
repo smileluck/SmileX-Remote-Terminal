@@ -139,11 +139,14 @@ function normalizeGroupName(input: string): string | undefined {
   return input
 }
 
+/** 新建模式下缓存首次生成的 id，保存失败重试时复用，避免重复插入 */
+const createdId = ref<string>()
+
 /** 把表单组装成 SessionProfile */
 function buildProfile(id?: string): SessionProfile {
   const now = Math.floor(Date.now() / 1000)
   return {
-    id: id || crypto.randomUUID(),
+    id: id || (createdId.value ??= crypto.randomUUID()),
     name: form.name.trim(),
     kind: 'ssh',
     host: form.host.trim(),
