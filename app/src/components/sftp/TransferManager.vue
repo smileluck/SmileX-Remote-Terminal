@@ -99,7 +99,7 @@ function fmtSpeed(bps: number): string {
 .tm-fab {
   position: fixed;
   right: 20px;
-  bottom: 20px;
+  top: 12px;
   z-index: 200;
   display: flex;
   align-items: center;

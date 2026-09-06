@@ -195,7 +195,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
                 </div>
                 <RightPanel />
               </div>
-              <!-- 全局传输管理（右下角 FAB + 抽屉） -->
+              <!-- 全局传输管理（右上角 FAB + 抽屉） -->
               <TransferManager />
             </div>
           </NNotificationProvider>
