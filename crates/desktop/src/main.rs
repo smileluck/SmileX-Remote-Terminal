@@ -74,6 +74,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             // SSH 命令组
             commands::session::session_connect,
+            commands::session::session_test,
             commands::session::session_input,
             commands::session::session_resize,
             commands::session::session_disconnect,

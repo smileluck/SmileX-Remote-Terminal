@@ -24,6 +24,89 @@ use crate::{AppState, TerminalStats};
 use ssh_core::connection::ConnectionConfig;
 use ssh_core::known_hosts::KnownHostsStore;
 
+/// 构造未知主机交互式确认回调：emit `hostkey_confirm` → 前端弹窗
+/// → 前端 invoke `host_key_respond` → oneshot 唤醒握手流程（60s 超时）
+fn host_key_confirm<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    awaits: &Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+) -> ssh_core::connection::HostKeyConfirm {
+    let confirm_app = app.clone();
+    let confirm_awaits = awaits.clone();
+    Arc::new(move |challenge: ssh_core::connection::HostKeyChallenge| {
+        let app = confirm_app.clone();
+        let awaits = confirm_awaits.clone();
+        Box::pin(async move {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+            awaits.lock().await.insert(request_id.clone(), tx);
+
+            let payload = serde_json::json!({
+                "request_id": request_id,
+                "host": challenge.host,
+                "port": challenge.port,
+                "key_type": challenge.key_type,
+                "fingerprint": challenge.fingerprint,
+            });
+            tracing::info!(
+                host = %challenge.host,
+                port = challenge.port,
+                request_id = %request_id,
+                "等待用户确认 host key"
+            );
+            if app.emit("hostkey_confirm", payload).is_err() {
+                awaits.lock().await.remove(&request_id);
+                return false;
+            }
+
+            // 60s 未应答视为拒绝，避免握手无限挂起
+            let accepted = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                rx,
+            )
+            .await
+            .map(|r| r.unwrap_or(false))
+            .unwrap_or(false);
+            awaits.lock().await.remove(&request_id);
+            accepted
+        })
+    })
+}
+
+/// 测试 SSH 连接（连接 → 认证 → 立即断开），成功返回耗时毫秒数
+///
+/// 供新建/编辑会话表单的「连接测试」按钮使用：
+/// 不打开 PTY、不注册 channel/统计，认证成功即断开，仅验证可达性与凭据正确性。
+/// host key 校验与 `session_connect` 一致（未知主机同样走前端确认弹窗）。
+#[tauri::command]
+pub async fn session_test<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    config: ConnectionConfig,
+) -> Result<u64, crate::error::AppError> {
+    let known_hosts: Arc<dyn KnownHostsStore> = state.storage.clone();
+    let confirm = host_key_confirm(&app, &state.host_key_awaits);
+
+    let started = std::time::Instant::now();
+    let session = state
+        .ssh_manager
+        .connect(&config, known_hosts, Some(confirm))
+        .await
+        .map_err(|e| crate::error::AppError::session(format!("{e}")))?;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+    let session_id = session.id.clone();
+    if let Err(e) = state.ssh_manager.disconnect(&session_id).await {
+        tracing::warn!(session_id = %session_id, error = %e, "测试连接断开失败（忽略）");
+    }
+    tracing::info!(
+        host = %config.host,
+        port = config.port,
+        elapsed_ms,
+        "SSH 连接测试成功"
+    );
+    Ok(elapsed_ms)
+}
+
 /// 在指定会话的独立通道上执行一次性命令，返回 stdout
 ///
 /// 用于命令补全（compgen）等非交互场景，不影响 PTY 数据流。
@@ -70,50 +153,9 @@ pub async fn session_connect<R: tauri::Runtime>(
     //    clone Arc 廉价，后续在 HostKeyHandler::check_server_key 中查询/保存
     let known_hosts: Arc<dyn KnownHostsStore> = state.storage.clone();
 
-    // 0.5) 注入未知主机交互式确认回调：emit `hostkey_confirm` → 前端弹窗
-    //      → 前端 invoke `host_key_respond` → oneshot 唤醒握手流程（60s 超时）
-    let confirm_app = app.clone();
-    let confirm_awaits = state.host_key_awaits.clone();
-    let confirm: Option<ssh_core::connection::HostKeyConfirm> = Some(Arc::new(
-        move |challenge: ssh_core::connection::HostKeyChallenge| {
-            let app = confirm_app.clone();
-            let awaits = confirm_awaits.clone();
-            Box::pin(async move {
-                let request_id = uuid::Uuid::new_v4().to_string();
-                let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-                awaits.lock().await.insert(request_id.clone(), tx);
-
-                let payload = serde_json::json!({
-                    "request_id": request_id,
-                    "host": challenge.host,
-                    "port": challenge.port,
-                    "key_type": challenge.key_type,
-                    "fingerprint": challenge.fingerprint,
-                });
-                tracing::info!(
-                    host = %challenge.host,
-                    port = challenge.port,
-                    request_id = %request_id,
-                    "等待用户确认 host key"
-                );
-                if app.emit("hostkey_confirm", payload).is_err() {
-                    awaits.lock().await.remove(&request_id);
-                    return false;
-                }
-
-                // 60s 未应答视为拒绝，避免握手无限挂起
-                let accepted = tokio::time::timeout(
-                    std::time::Duration::from_secs(60),
-                    rx,
-                )
-                .await
-                .map(|r| r.unwrap_or(false))
-                .unwrap_or(false);
-                awaits.lock().await.remove(&request_id);
-                accepted
-            })
-        },
-    ));
+    // 0.5) 注入未知主机交互式确认回调
+    let confirm: Option<ssh_core::connection::HostKeyConfirm> =
+        Some(host_key_confirm(&app, &state.host_key_awaits));
 
     // 1) 建立 SSH 连接（含 host key 校验）
     let session = state

@@ -34,9 +34,11 @@ import {
 } from 'naive-ui'
 import { useProfilesStore } from '@/stores/profiles'
 import * as sshKeys from '@/services/sshKeys'
+import * as sessionService from '@/services/session'
 import { decodeExtra, encodeExtra } from '@/types/profile'
 import type { SessionProfile, AuthType } from '@/types/profile'
 import { useConnectFlow } from '@/composables/useConnectFlow'
+import { buildConfig } from '@/composables/useSshConnect'
 
 const props = defineProps<{
   /** 编辑模式：传入 profile id；新建模式：不传 */
@@ -81,6 +83,8 @@ async function loadKeys() {
 
 /** 是否正在保存/连接 */
 const busy = ref(false)
+/** 是否正在连接测试 */
+const testing = ref(false)
 /** NForm 实例引用 */
 const formRef = ref<FormInst | null>(null)
 /** 是否编辑模式 */
@@ -208,6 +212,28 @@ function onCancel() {
   emit('close')
 }
 
+/** 连接测试：用当前表单信息尝试 SSH 连接（连接→认证→断开），不保存、不开终端 */
+async function onTestConnection() {
+  try {
+    await formRef.value?.validate()
+  } catch {
+    message.warning('请检查表单填写')
+    return
+  }
+  testing.value = true
+  try {
+    // 编辑模式未重填密码/口令时回退到 Keyring 中已存的凭据（secretOverride 传 undefined）
+    const secret = buildSecret()
+    const config = await buildConfig(buildProfile(props.profileId), secret ?? undefined)
+    const ms = await sessionService.test(config)
+    message.success(`连接成功（${ms}ms）`)
+  } catch (e) {
+    message.error(`连接失败：${e}`)
+  } finally {
+    testing.value = false
+  }
+}
+
 /** 编辑模式：回填表单（密码/口令不回填，重新输入才更新） */
 async function loadForEdit() {
   if (!props.profileId) return
@@ -329,9 +355,10 @@ onMounted(() => {
     </NForm>
 
     <div class="actions">
-      <NButton :disabled="busy" @click="onCancel">取消</NButton>
-      <NButton tertiary :disabled="busy" @click="onSaveOnly">仅保存</NButton>
-      <NButton type="primary" :loading="busy" @click="onSaveAndConnect">保存并连接</NButton>
+      <NButton :disabled="busy || testing" @click="onCancel">取消</NButton>
+      <NButton tertiary :loading="testing" :disabled="busy" @click="onTestConnection">连接测试</NButton>
+      <NButton tertiary :disabled="busy || testing" @click="onSaveOnly">仅保存</NButton>
+      <NButton type="primary" :loading="busy" :disabled="testing" @click="onSaveAndConnect">保存并连接</NButton>
     </div>
   </div>
 </template>

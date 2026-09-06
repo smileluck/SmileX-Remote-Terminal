@@ -102,6 +102,11 @@ export async function disconnect(sessionId: string): Promise<void> {
   return invoke<void>('session_disconnect', { sessionId })
 }
 
+/** 测试连接（连接 → 认证 → 断开），成功返回耗时毫秒 */
+export async function test(config: SshConfig): Promise<number> {
+  return invoke<number>('session_test', { config })
+}
+
 /** 在独立通道执行一次性命令（非交互，用于命令补全等） */
 export async function exec(sessionId: string, command: string): Promise<string> {
   return invoke<string>('session_exec', { sessionId, command })
