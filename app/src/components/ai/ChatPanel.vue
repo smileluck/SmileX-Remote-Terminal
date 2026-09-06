@@ -105,6 +105,9 @@ watch(
     if (listRef.value) listRef.value.scrollTop = listRef.value.scrollHeight
   },
 )
+
+/** 展示用消息：tool（命令执行结果）不回显到面板，仅保留在对话中作为 LLM 续问上下文 */
+const visibleMessages = computed(() => agent.messages.filter((m) => m.role !== 'tool'))
 </script>
 
 <template>
@@ -199,7 +202,7 @@ watch(
         <p class="empty-title">向 Agent 提问运维问题</p>
         <p class="empty-hint">基于「{{ serverLabel }}」的终端输出与监控指标作答，<br />需要更多信息时 Agent 会给出可执行的命令</p>
       </div>
-      <MessageBubble v-for="msg in agent.messages" :key="msg.id" :message="msg" />
+      <MessageBubble v-for="msg in visibleMessages" :key="msg.id" :message="msg" />
       <div v-if="agent.error" class="error">{{ agent.error }}</div>
     </div>
 

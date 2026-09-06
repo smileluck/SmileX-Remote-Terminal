@@ -336,7 +336,7 @@ export const useAgentStore = defineStore('agent', () => {
     await llmSend(chatId, text)
   }
 
-  /** 命令执行结果：前端展示为 tool 气泡，发给 LLM 作为续问上下文 */
+  /** 命令执行结果：不回显到面板（ChatPanel 过滤 tool 消息），发给 LLM 作为续问上下文 */
   async function sendResult(chatId: string, cmd: string, output: string) {
     const list = msgListOf(chatId)
     list.push({

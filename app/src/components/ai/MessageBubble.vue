@@ -5,7 +5,7 @@
  * - user：右对齐纯文本
  * - assistant：左对齐 Markdown 渲染；```run 块渲染为可执行命令卡片（RunBlock），
  *   ```bash/```sh 等 shell 代码块渲染为可复制/可执行的 CodeBlock
- * - tool：命令执行结果，终端风格回显
+ * - tool：命令执行结果，不在面板回显（由 ChatPanel 过滤），仅作为 LLM 续问上下文
  * 深色主题，代码高亮使用 github-dark。
  */
 import { computed } from 'vue'
@@ -92,12 +92,8 @@ function renderMd(text: string): string {
 <template>
   <div class="message" :class="message.role">
     <div class="bubble" :class="{ error: message.error, pending: message.pending }">
-      <!-- 命令执行结果：终端风格回显 -->
-      <template v-if="message.role === 'tool'">
-        <pre class="tool-out">{{ message.content }}</pre>
-      </template>
       <!-- assistant：markdown + run 命令卡片 -->
-      <template v-else-if="message.role === 'assistant'">
+      <template v-if="message.role === 'assistant'">
         <template v-for="(seg, i) in segments" :key="i">
           <details v-if="seg.type === 'think'" class="think">
             <summary>{{ thinkLabel(seg) }}</summary>
@@ -134,8 +130,7 @@ function renderMd(text: string): string {
 .message.user {
   justify-content: flex-end;
 }
-.message.assistant,
-.message.tool {
+.message.assistant {
   justify-content: flex-start;
 }
 .bubble {
@@ -151,11 +146,6 @@ function renderMd(text: string): string {
 .message.user .bubble {
   background: var(--primary-bg);
   border: 1px solid rgba(58, 122, 254, 0.3);
-}
-.message.tool .bubble {
-  background: #0d1117;
-  border: 1px solid var(--border-color);
-  max-width: 100%;
 }
 .bubble.error {
   background: rgba(248, 113, 113, 0.1);
@@ -188,14 +178,6 @@ function renderMd(text: string): string {
   word-break: break-word;
   max-height: 220px;
   overflow-y: auto;
-}
-.tool-out {
-  margin: 0;
-  font-family: ui-monospace, Consolas, 'Courier New', monospace;
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 .md :deep(p) {
   margin: 4px 0;

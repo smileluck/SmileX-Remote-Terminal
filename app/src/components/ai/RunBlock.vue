@@ -6,8 +6,8 @@
  * - 手动点击「执行」→ 危险命令先二次确认 → 命令写入绑定的终端窗口
  *   会话执行（用户可在终端看到全过程），回显自动捕获为输出
  * - 自动执行模式下由 agent store 直接触发，危险命令仍跳过留给手动确认
- * - 执行状态（agent store runStates）；输出由后续 tool 消息统一展示，
- *   此处不重复渲染
+ * - 执行状态（agent store runStates）；输出不回显在面板，仅作为 tool 消息
+ *   保留在对话中供 LLM 续问上下文使用
  */
 import { computed } from 'vue'
 import { NButton, NIcon, useDialog, useMessage } from 'naive-ui'
