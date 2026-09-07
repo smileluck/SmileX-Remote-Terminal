@@ -8,11 +8,12 @@
  */
 import { ref, watch, nextTick, computed } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
-import { NButton, NIcon, NSelect } from 'naive-ui'
+import { NButton, NIcon, NSelect, NDropdown, useMessage } from 'naive-ui'
 import { Terminal2, X, Plus } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
+import { useSnippetsStore } from '@/stores/snippets'
 
 const props = defineProps<{
   sessionId: string | null
@@ -29,9 +30,95 @@ const emit = defineEmits<{
 
 const tabs = useTabsStore()
 const ui = useUiStore()
-const { term, sessionId: ownSession, init, bind, fit } = useTerminal()
+const message = useMessage()
+const snippets = useSnippetsStore()
+const { term, sessionId: ownSession, init, bind, fit, getInputLine } = useTerminal()
 
 const containerRef = ref<HTMLDivElement | null>(null)
+
+/** 终端右键菜单（manual NDropdown，同 FilePanel 模式） */
+const menuShow = ref(false)
+const menuX = ref(0)
+const menuY = ref(0)
+/** 打开菜单时捕获的选中文本与当前输入行（菜单打开期间保持不变） */
+const menuSelection = ref('')
+const menuLine = ref('')
+
+function onContextMenu(e: MouseEvent) {
+  menuSelection.value = term.value?.getSelection() ?? ''
+  menuLine.value = getInputLine()
+  menuX.value = e.clientX
+  menuY.value = e.clientY
+  menuShow.value = true
+}
+
+const menuOptions = computed(() => [
+  { label: '复制', key: 'copy', disabled: !menuSelection.value },
+  { label: '粘贴', key: 'paste' },
+  {
+    label: '添加到常用记录',
+    key: 'add-snippet',
+    disabled: !menuSelection.value && !menuLine.value,
+  },
+])
+
+function onMenuSelect(key: string) {
+  menuShow.value = false
+  switch (key) {
+    case 'copy':
+      void copySelection()
+      break
+    case 'paste':
+      void pasteClipboard()
+      break
+    case 'add-snippet':
+      void addToSnippets()
+      break
+  }
+  term.value?.focus()
+}
+
+async function copySelection() {
+  if (!menuSelection.value) return
+  try {
+    await navigator.clipboard.writeText(menuSelection.value)
+  } catch {
+    message.warning('复制失败：无法访问剪贴板')
+  }
+}
+
+/** 粘贴：走 term.paste() 经 onData 转发（如同键入，支持 bracketed paste） */
+async function pasteClipboard() {
+  let text = ''
+  try {
+    text = await navigator.clipboard.readText()
+  } catch {
+    message.warning('粘贴失败：无法读取剪贴板')
+    return
+  }
+  if (text) term.value?.paste(text)
+}
+
+/** 添加到常用记录：优先选中文本，否则当前输入行；加入「未分组」 */
+async function addToSnippets() {
+  const command = (menuSelection.value || menuLine.value).trim()
+  if (!command) return
+  try {
+    await snippets.load()
+    await snippets.save({
+      id: crypto.randomUUID(),
+      name: command.slice(0, 30),
+      command,
+      tags: '',
+      groupName: '',
+      sortOrder: 0,
+      createdAt: Math.floor(Date.now() / 1000),
+    })
+    message.success('已添加到常用记录')
+  } catch (e) {
+    message.error(`添加失败：${e}`)
+  }
+}
 
 /** 首行提示只写一次（挂载即绑定 / 后经选择器绑定两条路径共用） */
 let initialWritten = false
@@ -95,7 +182,12 @@ const pickedSession = ref<string | null>(null)
       </NButton>
     </div>
 
-    <div v-if="sessionId" ref="containerRef" class="pane-term"></div>
+    <div
+      v-if="sessionId"
+      ref="containerRef"
+      class="pane-term"
+      @contextmenu.prevent="onContextMenu"
+    ></div>
 
     <div v-else class="pane-picker">
       <template v-if="sessionOptions.length">
@@ -117,6 +209,17 @@ const pickedSession = ref<string | null>(null)
         新建 SSH 连接
       </NButton>
     </div>
+
+    <NDropdown
+      trigger="manual"
+      :show="menuShow"
+      :x="menuX"
+      :y="menuY"
+      placement="bottom-start"
+      :options="menuOptions"
+      @select="onMenuSelect"
+      @clickoutside="menuShow = false"
+    />
   </div>
 </template>
 

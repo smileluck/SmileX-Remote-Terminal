@@ -163,6 +163,11 @@ export function useTerminal() {
     if (data.length === 1 && data >= ' ') inputLine += data
   }
 
+  /** 当前正在编辑的命令行（右键「添加到常用记录」无选区时的回退来源） */
+  function getInputLine(): string {
+    return inputLine.trim()
+  }
+
   /** 调整终端尺寸（容器变化时调用） */
   function fit() {
     fitAddon.value?.fit()
@@ -192,5 +197,6 @@ export function useTerminal() {
     connect,
     fit,
     disconnect,
+    getInputLine,
   }
 }

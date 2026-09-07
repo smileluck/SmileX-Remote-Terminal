@@ -122,6 +122,16 @@ function extractOutput(
   return { out: out.replace(/\n{3,}/g, '\n\n').trim() }
 }
 
+/** 终端执行的结构化结果 */
+export interface TermExecResult {
+  /** 清理后的输出文本（同 execInTerminal 返回值） */
+  text: string
+  /** 退出码（END 标记正常出现时可解析；否则 undefined） */
+  rc?: number
+  /** 是否等到 END 标记（false = 超时/静默兜底，结果可能不完整） */
+  sawEnd: boolean
+}
+
 /**
  * 在绑定的终端窗口会话中执行命令并捕获输出
  *
@@ -131,6 +141,17 @@ export async function execInTerminal(
   sessionId: string,
   command: string,
 ): Promise<string> {
+  return (await execInTerminalDetailed(sessionId, command)).text
+}
+
+/**
+ * execInTerminal 的结构化版本：除文本外带回退出码与完成标记
+ * （常用记录整组执行按退出码判成败、失败即中止）
+ */
+export async function execInTerminalDetailed(
+  sessionId: string,
+  command: string,
+): Promise<TermExecResult> {
   const { wrapped, begin, end } = wrapCommand(command)
 
   let buf = ''
@@ -186,5 +207,5 @@ export async function execInTerminal(
       : '输出提前停止，命令可能未执行完成（结果可能不完整）'
     parts.push(`（${why}）`)
   }
-  return parts.join('\n')
+  return { text: parts.join('\n'), rc, sawEnd }
 }

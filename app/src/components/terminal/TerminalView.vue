@@ -21,6 +21,7 @@ import {
   Robot,
   ChartAreaLine,
   Bell,
+  Bookmarks,
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
@@ -50,11 +51,12 @@ const layout = useLayoutStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
 
-/** 右栏面板入口（Agent / 监控 / 告警）：按钮高亮条件与点击切换 */
+/** 右栏面板入口（Agent / 监控 / 告警 / 常用记录）：按钮高亮条件与点击切换 */
 const panelEntries = [
   { key: 'monitor', label: '监控看板（⌘M）', icon: ChartAreaLine },
   { key: 'agent', label: 'AI 运维助手（⌘J）', icon: Robot },
   { key: 'alerts', label: '告警规则', icon: Bell },
+  { key: 'snippets', label: '常用记录', icon: Bookmarks },
 ] as const
 
 /** 分屏下拉选项（二级选择分割方向） */

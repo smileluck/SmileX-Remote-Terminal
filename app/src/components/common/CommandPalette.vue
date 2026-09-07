@@ -106,6 +106,8 @@ async function saveAsSnippet(command: string) {
       name: command.slice(0, 30),
       command,
       tags: '',
+      groupName: '',
+      sortOrder: 0,
       createdAt: Math.floor(Date.now() / 1000),
     })
     message.success('已收藏为片段')

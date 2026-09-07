@@ -105,6 +105,12 @@ pub struct CommandSnippet {
     pub command: String,
     #[serde(default)]
     pub tags: String,
+    /// 所属分组名（空串 = 未分组）
+    #[serde(default)]
+    pub group_name: String,
+    /// 排序序号（分组内 + 分组间共用，越小越靠前）
+    #[serde(default)]
+    pub sort_order: i64,
     pub created_at: i64,
 }
 
@@ -348,6 +354,18 @@ impl SqliteStorage {
             "llm_profiles",
             "auth_mode",
             "ALTER TABLE llm_profiles ADD COLUMN auth_mode TEXT",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "group_name",
+            "ALTER TABLE command_snippets ADD COLUMN group_name TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "sort_order",
+            "ALTER TABLE command_snippets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
         )?;
         Ok(())
     }
@@ -644,17 +662,25 @@ impl SqliteStorage {
     pub async fn save_snippet(&self, snippet: &CommandSnippet) -> Result<()> {
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![snippet.id, snippet.name, snippet.command, snippet.tags, snippet.created_at],
+            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, group_name, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                snippet.id,
+                snippet.name,
+                snippet.command,
+                snippet.tags,
+                snippet.group_name,
+                snippet.sort_order,
+                snippet.created_at
+            ],
         )?;
         Ok(())
     }
 
-    /// 全部命令片段（新→旧）
+    /// 全部命令片段（按分组 + 排序序号，旧库无排序时退化为创建时间）
     pub async fn list_snippets(&self) -> Result<Vec<CommandSnippet>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, name, command, tags, created_at FROM command_snippets ORDER BY created_at DESC",
+            "SELECT id, name, command, tags, group_name, sort_order, created_at FROM command_snippets ORDER BY group_name, sort_order, created_at",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(CommandSnippet {
@@ -662,10 +688,26 @@ impl SqliteStorage {
                 name: row.get(1)?,
                 command: row.get(2)?,
                 tags: row.get(3)?,
-                created_at: row.get(4)?,
+                group_name: row.get(4)?,
+                sort_order: row.get(5)?,
+                created_at: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 批量重排命令片段（更新分组与排序序号，单事务落库）
+    pub async fn reorder_snippets(&self, snippets: &[CommandSnippet]) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let tx = conn.unchecked_transaction()?;
+        for s in snippets {
+            tx.execute(
+                "UPDATE command_snippets SET group_name = ?1, sort_order = ?2 WHERE id = ?3",
+                params![s.group_name, s.sort_order, s.id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// 删除命令片段（返回是否存在）

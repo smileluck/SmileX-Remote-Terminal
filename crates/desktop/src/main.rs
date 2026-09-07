@@ -103,6 +103,7 @@ fn main() {
             commands::snippet::snippet_list,
             commands::snippet::snippet_save,
             commands::snippet::snippet_delete,
+            commands::snippet::snippet_reorder,
             commands::snippet::history_add,
             commands::snippet::history_list,
             commands::snippet::history_clear,

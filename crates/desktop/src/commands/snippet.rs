@@ -44,6 +44,19 @@ pub async fn snippet_delete(state: State<'_, AppState>, id: String) -> Result<bo
         .map_err(|e| AppError::storage(format!("删除命令片段失败: {e}")))
 }
 
+/// 批量重排命令片段（分组/排序拖拽落库）
+#[tauri::command]
+pub async fn snippet_reorder(
+    state: State<'_, AppState>,
+    snippets: Vec<CommandSnippet>,
+) -> Result<(), AppError> {
+    state
+        .storage
+        .reorder_snippets(&snippets)
+        .await
+        .map_err(|e| AppError::storage(format!("重排命令片段失败: {e}")))
+}
+
 /// 记录一条命令历史（终端回车行）
 #[tauri::command]
 pub async fn history_add(

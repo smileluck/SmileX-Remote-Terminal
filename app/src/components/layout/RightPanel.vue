@@ -15,6 +15,7 @@ import { useTabsStore } from '@/stores/tabs'
 import MonitorDashboard from '@/components/monitor/MonitorDashboard.vue'
 import AlertRules from '@/components/monitor/AlertRules.vue'
 import ChatPanel from '@/components/ai/ChatPanel.vue'
+import SnippetPanel from '@/components/terminal/SnippetPanel.vue'
 
 const layout = useLayoutStore()
 const tabs = useTabsStore()
@@ -32,6 +33,7 @@ const panelTitles: Record<RightPanelTab, string> = {
   agent: 'AI 运维助手',
   monitor: '监控看板',
   alerts: '告警规则',
+  snippets: '常用记录',
 }
 const title = computed(() => panelTitles[layout.rightTab])
 
@@ -69,7 +71,8 @@ function onDragStart(e: MouseEvent) {
     <div class="panel-body" :class="{ agent: layout.rightTab === 'agent' }">
       <ChatPanel v-if="layout.rightTab === 'agent'" />
       <MonitorDashboard v-else-if="layout.rightTab === 'monitor'" />
-      <AlertRules v-else />
+      <AlertRules v-else-if="layout.rightTab === 'alerts'" />
+      <SnippetPanel v-else-if="layout.rightTab === 'snippets'" />
     </div>
   </aside>
 </template>

@@ -56,6 +56,25 @@ export const useTabsStore = defineStore('tabs', () => {
     }
   }
 
+  /** 关闭指定标签左侧的所有标签 */
+  function closeTabsToLeft(id: string) {
+    const idx = tabs.value.findIndex((t) => t.id === id)
+    if (idx <= 0) return
+    for (const tab of tabs.value.slice(0, idx)) closeTab(tab.id)
+  }
+
+  /** 关闭指定标签右侧的所有标签 */
+  function closeTabsToRight(id: string) {
+    const idx = tabs.value.findIndex((t) => t.id === id)
+    if (idx === -1) return
+    for (const tab of tabs.value.slice(idx + 1)) closeTab(tab.id)
+  }
+
+  /** 关闭所有标签 */
+  function closeAllTabs() {
+    for (const tab of [...tabs.value]) closeTab(tab.id)
+  }
+
   /** 切换活动标签 */
   function setActive(id: string) {
     activeId.value = id
@@ -73,6 +92,9 @@ export const useTabsStore = defineStore('tabs', () => {
     activeTab,
     addTab,
     closeTab,
+    closeTabsToLeft,
+    closeTabsToRight,
+    closeAllTabs,
     setActive,
     updateTab,
   }
