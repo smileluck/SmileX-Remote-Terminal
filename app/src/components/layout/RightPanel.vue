@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * RightPanel - 右栏容器（Agent 助手 / 监控看板 / 告警规则）
+ * RightPanel - 右栏容器（Agent 助手 / 监控看板 / 告警规则 / 常用记录 / Docker 管理）
  *
  * 三栏布局的右栏（仅在打开会话时显示，设置页/空首页隐藏；
  * 收起时整体隐藏；打开/切换入口在终端工具栏列，与其他面板互斥）：
@@ -16,6 +16,7 @@ import MonitorDashboard from '@/components/monitor/MonitorDashboard.vue'
 import AlertRules from '@/components/monitor/AlertRules.vue'
 import ChatPanel from '@/components/ai/ChatPanel.vue'
 import SnippetPanel from '@/components/terminal/SnippetPanel.vue'
+import DockerPanel from '@/components/docker/DockerPanel.vue'
 
 const layout = useLayoutStore()
 const tabs = useTabsStore()
@@ -34,6 +35,7 @@ const panelTitles: Record<RightPanelTab, string> = {
   monitor: '监控看板',
   alerts: '告警规则',
   snippets: '常用记录',
+  docker: 'Docker 管理',
 }
 const title = computed(() => panelTitles[layout.rightTab])
 
@@ -73,6 +75,7 @@ function onDragStart(e: MouseEvent) {
       <MonitorDashboard v-else-if="layout.rightTab === 'monitor'" />
       <AlertRules v-else-if="layout.rightTab === 'alerts'" />
       <SnippetPanel v-else-if="layout.rightTab === 'snippets'" />
+      <DockerPanel v-else-if="layout.rightTab === 'docker'" />
     </div>
   </aside>
 </template>

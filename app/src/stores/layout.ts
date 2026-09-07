@@ -4,7 +4,7 @@ import { ref, watch } from 'vue'
 const STORAGE_KEY = 'smilex-layout-v1'
 
 /** 右栏面板页签（单页签显示，切换制，不同时叠加多个面板） */
-export type RightPanelTab = 'agent' | 'monitor' | 'alerts' | 'snippets'
+export type RightPanelTab = 'agent' | 'monitor' | 'alerts' | 'snippets' | 'docker'
 
 /** 侧栏列表页签（SSH 会话 / 远程桌面） */
 export type SidebarTab = 'ssh' | 'desktop'
