@@ -3,7 +3,9 @@
  * SideBar - 侧边栏（会话面板）
  *
  * Termius 风卡片化会话列表：
- * - 顶部 header（「会话」标题 + 折叠按钮）；搜索栏右侧「+」下拉新建（打开全局连接弹窗）
+ * - 内容由 ActivityRail「会话 / 远程桌面」入口切换（layout.sidebarTab 持久化，按 kind 过滤）
+ * - 顶部 header（标题随页签变化 + 折叠按钮）
+ * - 搜索栏右侧「+」按当前页签直接打开对应新建弹窗
  * - 卡片：kind 图标 + 名称 + user@host:port + 相对时间 + 悬浮 编辑/删除
  * - 点击卡片走统一连接流程（已连接弹「切换/新开」，断线原地重连）
  *
@@ -20,7 +22,7 @@
  * - tabs store（连接成功后 addTab）
  */
 import { computed, nextTick, onMounted, ref, type Component } from 'vue'
-import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NDropdown, NTooltip, useDialog, useMessage } from 'naive-ui'
+import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NTooltip, useDialog, useMessage } from 'naive-ui'
 import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight, LayoutSidebarLeftCollapse } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
@@ -55,14 +57,9 @@ const kindIcon: Record<string, Component> = {
 /** 正在连接的 profile id（禁用按钮防抖） */
 const connectingId = ref<string | null>(null)
 
-/** 新建下拉选项（SSH 会话 / 远程桌面连接，统一弹窗新增） */
-const addOptions = [
-  { label: '新建 SSH 会话', key: 'ssh' },
-  { label: '新建远程桌面连接', key: 'desktop' },
-]
-
-function onAddSelect(key: string) {
-  if (key === 'ssh') ui.openConnectDialog()
+/** 「+」新建：按当前页签直接打开对应弹窗（SSH 会话 / 远程桌面连接） */
+function onAdd() {
+  if (layout.sidebarTab === 'ssh') ui.openConnectDialog()
   else ui.openDesktopConnectDialog()
 }
 
@@ -81,11 +78,18 @@ function groupKey(name: string): string {
   return name.toLowerCase()
 }
 
-/** 过滤后的 profiles */
+/** 当前页签的 profiles（SSH 会话 tab 只含 ssh；远程桌面 tab 含 rdp/host） */
+const tabProfiles = computed(() =>
+  layout.sidebarTab === 'ssh'
+    ? profilesStore.profiles.filter((p) => p.kind === 'ssh')
+    : profilesStore.profiles.filter((p) => p.kind !== 'ssh'),
+)
+
+/** 过滤后的 profiles（当前页签 + 搜索关键字） */
 const filteredProfiles = computed(() => {
   const kw = search.value.trim().toLowerCase()
-  if (!kw) return profilesStore.profiles
-  return profilesStore.profiles.filter(
+  if (!kw) return tabProfiles.value
+  return tabProfiles.value.filter(
     (p) =>
       p.name.toLowerCase().includes(kw) ||
       p.host.toLowerCase().includes(kw) ||
@@ -324,6 +328,12 @@ async function onConnect(profile: SessionProfile) {
   }
 }
 
+/** 编辑：按 kind 打开对应弹窗（SSH 会话 / 远程桌面） */
+function onEdit(p: SessionProfile) {
+  if (p.kind === 'ssh') ui.openConnectDialog(p.id)
+  else ui.openDesktopConnectDialog(p.id)
+}
+
 onMounted(() => {
   profilesStore.loadAll()
 })
@@ -332,7 +342,7 @@ onMounted(() => {
 <template>
   <aside class="side-bar">
     <header class="section-header">
-      <span class="section-title">会话</span>
+      <span class="section-title">{{ layout.sidebarTab === 'ssh' ? '会话' : '远程桌面' }}</span>
       <NTooltip placement="bottom">
         <template #trigger>
           <NButton quaternary size="tiny" circle title="折叠会话栏" @click="layout.toggleSidebar()">
@@ -347,17 +357,24 @@ onMounted(() => {
       <NInput v-model:value="search" size="small" placeholder="搜索会话 / 主机 / 分组" clearable>
         <template #prefix><NIcon :component="Search" /></template>
       </NInput>
-      <NDropdown :options="addOptions" trigger="click" placement="bottom-end" @select="onAddSelect">
-        <NButton quaternary size="small" circle title="新建">
-          <NIcon :component="Plus" />
-        </NButton>
-      </NDropdown>
+      <NButton
+        quaternary
+        size="small"
+        circle
+        :title="layout.sidebarTab === 'ssh' ? '新建 SSH 会话' : '新建远程桌面连接'"
+        @click="onAdd"
+      >
+        <NIcon :component="Plus" />
+      </NButton>
     </div>
 
     <div class="list-scroll">
       <!-- 空状态 -->
-      <div v-if="profilesStore.profiles.length === 0" class="empty">
-        <NEmpty size="small" description="暂无会话">
+      <div v-if="tabProfiles.length === 0" class="empty">
+        <NEmpty
+          size="small"
+          :description="layout.sidebarTab === 'ssh' ? '暂无会话' : '暂无远程桌面'"
+        >
           <template #extra>
             <span class="empty-hint">点击搜索框右侧 + 新建</span>
           </template>
@@ -433,7 +450,7 @@ onMounted(() => {
                   </div>
                 </div>
                 <div class="card-actions">
-                  <NButton text size="tiny" title="编辑" @click.stop="ui.openConnectDialog(p.id)">
+                  <NButton text size="tiny" title="编辑" @click.stop="onEdit(p)">
                     <NIcon :component="Pencil" />
                   </NButton>
                   <NPopconfirm @positive-click="onDelete(p)">

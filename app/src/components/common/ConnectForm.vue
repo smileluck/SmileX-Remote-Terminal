@@ -133,16 +133,6 @@ const rules: FormRules = {
   },
 }
 
-/** 与现有分组忽略大小写同名时沿用已有写法，避免同组因大小写分叉 */
-function normalizeGroupName(input: string): string | undefined {
-  if (!input) return undefined
-  for (const p of profilesStore.profiles) {
-    const g = decodeExtra(p.extra).group?.trim() || ''
-    if (g && g.toLowerCase() === input.toLowerCase()) return g
-  }
-  return input
-}
-
 /** 新建模式下缓存首次生成的 id，保存失败重试时复用，避免重复插入 */
 const createdId = ref<string>()
 
@@ -160,7 +150,7 @@ function buildProfile(id?: string): SessionProfile {
     extra: encodeExtra({
       private_key_path: form.authType === 'private_key' ? form.privateKeyPath.trim() : undefined,
       ssh_key_id: form.authType === 'private_key_mem' ? form.sshKeyId : undefined,
-      group: normalizeGroupName(form.group.trim()),
+      group: profilesStore.normalizeGroupName(form.group),
       accept_first_host_key: form.acceptFirstHostKey,
     }),
     created_at: now,

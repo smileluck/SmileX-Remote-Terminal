@@ -2,12 +2,12 @@
 /**
  * ActivityRail - 左侧活动栏
  *
- * - 顶部「会话」Tab：展开/收起侧边栏（会话列表；折叠按钮在侧栏头部）
+ * - 顶部「会话 / 远程桌面」Tab：切换侧边栏内容（再点当前项折叠侧栏）
  * - 底部设置入口（单例 tab）
- * 新建会话 / 远程桌面统一由 SideBar「+」下拉弹窗承担。
+ * 新建会话 / 远程桌面统一由 SideBar「+」按钮弹窗承担。
  */
 import { NButton, NIcon, NTooltip } from 'naive-ui'
-import { Terminal2, Settings } from '@vicons/tabler'
+import { Terminal2, DeviceDesktop, Settings } from '@vicons/tabler'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
 
@@ -31,13 +31,27 @@ function openSettings() {
             quaternary
             circle
             class="rail-btn"
-            :class="{ active: !layout.sidebarCollapsed }"
-            @click="layout.toggleSidebar()"
+            :class="{ active: !layout.sidebarCollapsed && layout.sidebarTab === 'ssh' }"
+            @click="layout.toggleSidebarTab('ssh')"
           >
             <template #icon><NIcon :component="Terminal2" /></template>
           </NButton>
         </template>
         会话
+      </NTooltip>
+      <NTooltip placement="right">
+        <template #trigger>
+          <NButton
+            quaternary
+            circle
+            class="rail-btn"
+            :class="{ active: !layout.sidebarCollapsed && layout.sidebarTab === 'desktop' }"
+            @click="layout.toggleSidebarTab('desktop')"
+          >
+            <template #icon><NIcon :component="DeviceDesktop" /></template>
+          </NButton>
+        </template>
+        远程桌面
       </NTooltip>
     </div>
 

@@ -6,8 +6,8 @@ import { ref } from 'vue'
  *
  * - 连接弹窗：全应用唯一的新建/编辑 SSH 会话入口
  *   （欢迎页 / ⌘T / 终端窗格等入口都打开这同一个弹窗）
- * - 远程桌面连接弹窗：新建 rdp/host 连接的唯一入口
- *   （会话列表「+」下拉 / 欢迎页打开）
+ * - 远程桌面连接弹窗：新建/编辑 rdp/host 服务器的唯一入口
+ *   （会话列表「+」下拉 / 欢迎页 / 桌面 tab 卡片编辑打开）
  */
 export const useUiStore = defineStore('ui', () => {
   /** 连接弹窗是否可见 */
@@ -29,15 +29,19 @@ export const useUiStore = defineStore('ui', () => {
 
   /** 远程桌面连接弹窗是否可见 */
   const desktopConnectVisible = ref(false)
+  /** 编辑模式：目标桌面 profile id（null = 新建） */
+  const desktopProfileId = ref<string | null>(null)
 
-  /** 打开远程桌面连接弹窗 */
-  function openDesktopConnectDialog() {
+  /** 打开远程桌面连接弹窗（传入 profileId 进入编辑模式） */
+  function openDesktopConnectDialog(profileId?: string) {
+    desktopProfileId.value = profileId ?? null
     desktopConnectVisible.value = true
   }
 
   /** 关闭远程桌面连接弹窗 */
   function closeDesktopConnectDialog() {
     desktopConnectVisible.value = false
+    desktopProfileId.value = null
   }
 
   return {
@@ -46,6 +50,7 @@ export const useUiStore = defineStore('ui', () => {
     openConnectDialog,
     closeConnectDialog,
     desktopConnectVisible,
+    desktopProfileId,
     openDesktopConnectDialog,
     closeDesktopConnectDialog,
   }

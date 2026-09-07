@@ -53,6 +53,17 @@ export const useProfilesStore = defineStore('profiles', () => {
     return profiles.value.find((p) => p.id === id)
   }
 
+  /** 与现有分组忽略大小写同名时沿用已有写法，避免同组因大小写分叉；空串返回 undefined */
+  function normalizeGroupName(input: string): string | undefined {
+    const v = input.trim()
+    if (!v) return undefined
+    for (const p of profiles.value) {
+      const g = decodeExtra(p.extra).group?.trim() || ''
+      if (g && g.toLowerCase() === v.toLowerCase()) return g
+    }
+    return v
+  }
+
   /**
    * 批量把会话移动到指定分组（拖拽移动/分组合并/重命名共用）
    *
@@ -81,6 +92,7 @@ export const useProfilesStore = defineStore('profiles', () => {
     save,
     remove,
     findById,
+    normalizeGroupName,
     setGroup,
   }
 })

@@ -6,8 +6,12 @@ const STORAGE_KEY = 'smilex-layout-v1'
 /** 右栏面板页签（单页签显示，切换制，不同时叠加多个面板） */
 export type RightPanelTab = 'agent' | 'monitor' | 'alerts'
 
+/** 侧栏列表页签（SSH 会话 / 远程桌面） */
+export type SidebarTab = 'ssh' | 'desktop'
+
 interface LayoutState {
   sidebarCollapsed: boolean
+  sidebarTab: SidebarTab
   monitorVisible: boolean
   monitorWidth: number
   rightTab: RightPanelTab
@@ -18,6 +22,7 @@ interface LayoutState {
 function loadState(): LayoutState {
   const defaults: LayoutState = {
     sidebarCollapsed: false,
+    sidebarTab: 'ssh',
     monitorVisible: true,
     monitorWidth: 320,
     rightTab: 'monitor',
@@ -45,6 +50,8 @@ export const useLayoutStore = defineStore('layout', () => {
 
   /** 左栏（SideBar）是否折叠（折叠后仅 ActivityRail 图标列） */
   const sidebarCollapsed = ref(initial.sidebarCollapsed)
+  /** 左栏当前页签（SSH 会话 / 远程桌面） */
+  const sidebarTab = ref<SidebarTab>(initial.sidebarTab)
   /** 右栏是否可见 */
   const monitorVisible = ref(initial.monitorVisible)
   /** 右栏宽度（px，拖拽调宽） */
@@ -59,6 +66,16 @@ export const useLayoutStore = defineStore('layout', () => {
   /** 切换左栏折叠 */
   function toggleSidebar() {
     sidebarCollapsed.value = !sidebarCollapsed.value
+  }
+
+  /** 切换左栏页签（VSCode 式：已在当前页签且展开时折叠，否则切换并展开） */
+  function toggleSidebarTab(tab: SidebarTab) {
+    if (!sidebarCollapsed.value && sidebarTab.value === tab) {
+      sidebarCollapsed.value = true
+    } else {
+      sidebarTab.value = tab
+      sidebarCollapsed.value = false
+    }
   }
 
   /** 切换右栏显示/隐藏 */
@@ -101,13 +118,14 @@ export const useLayoutStore = defineStore('layout', () => {
 
   // 持久化（watch 深度变化写入 localStorage）
   watch(
-    [sidebarCollapsed, monitorVisible, monitorWidth, rightTab, filesWidth],
+    [sidebarCollapsed, sidebarTab, monitorVisible, monitorWidth, rightTab, filesWidth],
     () => {
       try {
         localStorage.setItem(
           STORAGE_KEY,
           JSON.stringify({
             sidebarCollapsed: sidebarCollapsed.value,
+            sidebarTab: sidebarTab.value,
             monitorVisible: monitorVisible.value,
             monitorWidth: monitorWidth.value,
             rightTab: rightTab.value,
@@ -123,12 +141,14 @@ export const useLayoutStore = defineStore('layout', () => {
 
   return {
     sidebarCollapsed,
+    sidebarTab,
     monitorVisible,
     monitorWidth,
     rightTab,
     filesWidth,
     filesVisible,
     toggleSidebar,
+    toggleSidebarTab,
     toggleMonitor,
     setRightTab,
     openRightPanel,
