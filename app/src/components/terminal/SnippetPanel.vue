@@ -3,11 +3,13 @@
  * SnippetPanel - 右栏「常用记录」面板
  *
  * 命令片段按组分类管理（与 ⌘K 命令面板共用 command_snippets 数据）：
+ * - 顶部「命令 / 服务」分段切换（NTabs segment），列表按当前 Tab 的 kind 过滤
  * - 分组折叠列表：组头（执行整组/重命名/删除/拖拽）、条目（单条执行/编辑/删除/拖拽）
  * - 拖拽排序：Pointer Events 自实现（Tauri 拦截 HTML5 DnD，参照 SideBar），
  *   支持组内排序、跨组移动、整组拖动，结束后统一 persistOrder 落库
- * - 执行：整组顺序执行（等待每条完成，退出码非零中止）/ 单条执行，
- *   走终端标记协议（termExec），无活跃 SSH 会话时按钮置灰
+ *   （基于完整数组重编 sortOrder，另一 kind 的相对顺序不受影响）
+ * - 执行：整组顺序执行（仅当前 Tab 类型条目，等待每条完成，退出码非零中止）/
+ *   单条执行，走终端标记协议（termExec），无活跃 SSH 会话时按钮置灰
  * - 服务条目：静默通道（sessionService.exec）轮询运行状态（10s），
  *   提供启动/停止/重启快捷操作（终端可见执行 systemctl）
  */
@@ -20,8 +22,9 @@ import {
   NAutoComplete,
   NEmpty,
   NPopconfirm,
-  NRadioGroup,
-  NRadioButton,
+  NTabs,
+  NTab,
+  NDropdown,
   useMessage,
   useDialog,
 } from 'naive-ui'
@@ -61,6 +64,18 @@ watch(
   () => void store.refreshServiceStatus(),
 )
 
+/* ---------------- Tab 过滤视图 ---------------- */
+
+/** 当前 Tab：命令 / 服务 */
+const activeKind = ref<SnippetKind>('command')
+
+/** 当前 Tab 可见的分组（仅含对应 kind 的条目；空组不显示） */
+const visibleGroups = computed<SnippetGroup[]>(() =>
+  store.groups
+    .map((g) => ({ ...g, items: g.items.filter((s) => s.kind === activeKind.value) }))
+    .filter((g) => g.items.length > 0),
+)
+
 /* ---------------- 分组折叠 ---------------- */
 
 const collapsedKeys = ref<Set<string>>(new Set())
@@ -88,14 +103,27 @@ const draft = ref({
   checkCmd: '',
 })
 
-/** 已有分组名（所属组自动补全候选） */
+/** 已有分组名（所属组自动补全候选，取当前 Tab 的组） */
 const groupOptions = computed(() =>
-  store.groups.filter((g) => g.key).map((g) => ({ label: g.key, value: g.key })),
+  visibleGroups.value.filter((g) => g.key).map((g) => ({ label: g.key, value: g.key })),
 )
 
-function openCreate() {
+/** 「新增」下拉选项 */
+const createOptions = [
+  { label: '新增命令', key: 'command' },
+  { label: '新增服务', key: 'service' },
+]
+
+/** 弹窗标题（类型由打开方式决定，编辑时 kind 不可改） */
+const formTitle = computed(
+  () =>
+    `${editingId.value ? '编辑' : '新增'}${draft.value.kind === 'service' ? '服务' : '命令'}`,
+)
+
+function openCreate(kind: string | number) {
+  const k = (kind === 'service' ? 'service' : 'command') as SnippetKind
   editingId.value = null
-  draft.value = { name: '', command: '', group: '', kind: 'command', checkCmd: '' }
+  draft.value = { name: '', command: '', group: '', kind: k, checkCmd: '' }
   showForm.value = true
 }
 
@@ -136,6 +164,8 @@ async function submitForm() {
     await store.save(snippet)
     showForm.value = false
     message.success('已保存')
+    // 跨 Tab 新增（如在「命令」Tab 选「新增服务」）时切到对应 Tab，让用户看到新条目
+    activeKind.value = kind
     if (kind === 'service') void store.refreshServiceStatus()
   } catch (e) {
     message.error(String(e))
@@ -213,7 +243,7 @@ async function runOne(s: CommandSnippet) {
 
 async function runGroup(g: SnippetGroup) {
   try {
-    await store.runGroup(g.key)
+    await store.runGroup(g.key, activeKind.value)
     message.success(`分组「${g.name}」执行完成`)
   } catch (e) {
     message.error(String(e))
@@ -370,7 +400,7 @@ async function applyDrop(
   try {
     if (d.kind === 'item') {
       if (item) {
-        const g = store.groups.find((gr) => gr.items.some((s) => s.id === item.id))
+        const g = visibleGroups.value.find((gr) => gr.items.some((s) => s.id === item.id))
         if (!g) return
         const idx = g.items.findIndex((s) => s.id === item.id)
         const beforeId = item.before ? item.id : (g.items[idx + 1]?.id ?? null)
@@ -382,7 +412,7 @@ async function applyDrop(
         await store.moveItem(d.id, group.key, null)
       }
     } else if (group && group.key !== d.id) {
-      const keys = store.groups.map((g) => g.key)
+      const keys = visibleGroups.value.map((g) => g.key)
       const ti = keys.indexOf(group.key)
       const beforeKey = group.before ? group.key : (keys[ti + 1] ?? null)
       if (beforeKey === d.id) return
@@ -398,21 +428,32 @@ async function applyDrop(
 <template>
   <section class="snippet-panel">
     <div class="sp-toolbar">
-      <NButton size="tiny" secondary @click="openCreate">
-        <template #icon><NIcon :component="Plus" /></template>
-        新增记录
-      </NButton>
+      <NTabs
+        v-model:value="activeKind"
+        type="segment"
+        size="small"
+        :animated="false"
+        class="sp-tabs"
+      >
+        <NTab name="command" tab="命令" />
+        <NTab name="service" tab="服务" />
+      </NTabs>
+      <NDropdown trigger="click" :options="createOptions" @select="openCreate">
+        <NButton size="tiny" quaternary circle title="新增">
+          <template #icon><NIcon :component="Plus" /></template>
+        </NButton>
+      </NDropdown>
     </div>
 
     <NEmpty
-      v-if="!store.groups.length"
+      v-if="!visibleGroups.length"
       size="small"
-      description="暂无常用记录，点上方按钮添加"
+      :description="activeKind === 'service' ? '暂无服务记录，点上方「新增」添加' : '暂无常用命令，点上方「新增」添加'"
       class="sp-empty"
     />
 
     <div
-      v-for="g in store.groups"
+      v-for="g in visibleGroups"
       :key="g.key || '__ungrouped__'"
       class="sp-group"
       :data-sgc="g.key"
@@ -464,10 +505,7 @@ async function applyDrop(
             <NIcon :component="GripVertical" :size="13" />
           </span>
           <div class="sp-item-info">
-            <span class="sp-item-name">
-              <span v-if="s.kind === 'service'" class="sp-svc-tag">服务</span>
-              {{ s.name }}
-            </span>
+            <span class="sp-item-name">{{ s.name }}</span>
             <span class="sp-item-cmd">{{ s.command }}</span>
           </div>
           <span
@@ -551,20 +589,20 @@ async function applyDrop(
       </div>
     </div>
 
-    <!-- 新增 / 编辑条目 -->
+    <!-- 新增 / 编辑条目（类型由打开方式决定，编辑时 kind 不可改） -->
     <NModal
       :show="showForm"
       preset="card"
-      :title="editingId ? '编辑记录' : '新增记录'"
+      :title="formTitle"
       style="width: 420px"
       @update:show="(v: boolean) => (showForm = v)"
     >
       <div class="sp-form">
-        <NRadioGroup v-model:value="draft.kind" size="small">
-          <NRadioButton value="command">命令</NRadioButton>
-          <NRadioButton value="service">服务</NRadioButton>
-        </NRadioGroup>
-        <NInput v-model:value="draft.name" size="small" placeholder="名称（留空取命令前 30 字）" />
+        <NInput
+          v-model:value="draft.name"
+          size="small"
+          :placeholder="draft.kind === 'service' ? '名称（留空取服务名）' : '名称（留空取命令前 30 字）'"
+        />
         <NInput
           v-if="draft.kind === 'command'"
           v-model:value="draft.command"
@@ -629,8 +667,14 @@ async function applyDrop(
 }
 .sp-toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 6px;
+}
+.sp-tabs {
+  flex: 1;
+  min-width: 0;
 }
 .sp-empty {
   padding: 28px 0;
@@ -722,17 +766,6 @@ async function applyDrop(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.sp-svc-tag {
-  display: inline-block;
-  margin-right: 4px;
-  padding: 0 4px;
-  font-size: 10px;
-  line-height: 14px;
-  color: var(--primary);
-  border: 1px solid var(--primary);
-  border-radius: 3px;
-  vertical-align: 1px;
 }
 .sp-dot {
   flex-shrink: 0;

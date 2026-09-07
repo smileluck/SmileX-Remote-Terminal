@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
-import type { CommandSnippet } from '@/services/snippets'
+import type { CommandSnippet, SnippetKind } from '@/services/snippets'
 import {
   snippetList,
   snippetSave,
@@ -232,12 +232,18 @@ export const useSnippetsStore = defineStore('snippets', () => {
     setTimeout(() => void refreshServiceStatus(), 1000)
   }
 
-  /** 顺序执行整组（等待每条完成再发下一条；失败即中止并抛错） */
-  async function runGroup(groupKey: string) {
+  /**
+   * 顺序执行整组（等待每条完成再发下一条；失败即中止并抛错）
+   *
+   * kind 传入时只执行该类型的条目（面板按 Tab 过滤后的整组执行）；
+   * 不传则执行组内全部条目。
+   */
+  async function runGroup(groupKey: string, kind?: SnippetKind) {
     const sid = activeSshSessionId()
     if (!sid) throw new Error('当前无激活的 SSH 终端，请先连接主机')
     if (running.value) throw new Error('已有命令在执行中，请等待完成')
-    const items = groups.value.find((g) => g.key === groupKey)?.items ?? []
+    const all = groups.value.find((g) => g.key === groupKey)?.items ?? []
+    const items = kind ? all.filter((s) => s.kind === kind) : all
     if (!items.length) return
     running.value = true
     for (const s of items) setRunState(s.id, 'pending')
