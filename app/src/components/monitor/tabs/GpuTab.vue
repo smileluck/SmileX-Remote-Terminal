@@ -37,6 +37,7 @@ const gpuViews = computed(() =>
     <div v-if="gpuViews.length" class="gpu-list">
       <div v-for="g in gpuViews" :key="g.index" class="gpu-card">
         <div class="gpu-head">
+          <span class="gpu-index">GPU {{ g.index }}</span>
           <span class="gpu-name" :title="g.name">{{ g.name }}</span>
           <span v-if="g.temp_c != null" class="gpu-temp">{{ g.temp_c.toFixed(0) }}°C</span>
         </div>
@@ -88,7 +89,20 @@ const gpuViews = computed(() =>
   align-items: baseline;
   gap: 8px;
 }
+.gpu-index {
+  font-size: 10px;
+  font-weight: 600;
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
 .gpu-name {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-primary);

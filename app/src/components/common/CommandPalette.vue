@@ -97,6 +97,13 @@ async function sendCommand(command: string) {
   }
 }
 
+/** 发送片段到终端（服务条目发送 systemctl status 查询） */
+function sendSnippet(s: CommandSnippet) {
+  void sendCommand(
+    s.kind === 'service' ? `systemctl status --no-pager ${s.command}` : s.command,
+  )
+}
+
 /** 收藏历史为片段 */
 async function saveAsSnippet(command: string) {
   const id = crypto.randomUUID()
@@ -108,6 +115,8 @@ async function saveAsSnippet(command: string) {
       tags: '',
       groupName: '',
       sortOrder: 0,
+      kind: 'command',
+      checkCmd: '',
       createdAt: Math.floor(Date.now() / 1000),
     })
     message.success('已收藏为片段')
@@ -188,7 +197,7 @@ const hostResults = computed(() => {
             v-for="s in snippets.slice(0, 8)"
             :key="s.id"
             class="palette-row"
-            @click="sendCommand(s.command)"
+            @click="sendSnippet(s)"
           >
             <NIcon :component="Terminal2" class="row-icon" />
             <span class="row-main">{{ s.name }}</span>

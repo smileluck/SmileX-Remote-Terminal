@@ -8,8 +8,10 @@
  *   支持组内排序、跨组移动、整组拖动，结束后统一 persistOrder 落库
  * - 执行：整组顺序执行（等待每条完成，退出码非零中止）/ 单条执行，
  *   走终端标记协议（termExec），无活跃 SSH 会话时按钮置灰
+ * - 服务条目：静默通道（sessionService.exec）轮询运行状态（10s），
+ *   提供启动/停止/重启快捷操作（终端可见执行 systemctl）
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
   NButton,
   NIcon,
@@ -17,12 +19,16 @@ import {
   NModal,
   NAutoComplete,
   NEmpty,
+  NPopconfirm,
+  NRadioGroup,
+  NRadioButton,
   useMessage,
   useDialog,
 } from 'naive-ui'
 import {
   Plus,
   PlayerPlay,
+  PlayerStop,
   Pencil,
   Trash,
   GripVertical,
@@ -31,15 +37,29 @@ import {
   CircleX,
   Loader,
   Clock,
+  Eye,
+  Refresh,
 } from '@vicons/tabler'
-import { useSnippetsStore, type SnippetGroup } from '@/stores/snippets'
-import type { CommandSnippet } from '@/services/snippets'
+import { useSnippetsStore, type SnippetGroup, type ServiceStatus } from '@/stores/snippets'
+import { useTabsStore } from '@/stores/tabs'
+import type { CommandSnippet, SnippetKind } from '@/services/snippets'
 
 const store = useSnippetsStore()
+const tabs = useTabsStore()
 const message = useMessage()
 const dialog = useDialog()
 
-onMounted(() => void store.load())
+onMounted(async () => {
+  await store.load()
+  store.startStatusPolling()
+})
+onUnmounted(() => store.stopStatusPolling())
+
+// 活跃会话切换时刷新一次服务状态
+watch(
+  () => tabs.activeTab?.sessionId,
+  () => void store.refreshServiceStatus(),
+)
 
 /* ---------------- 分组折叠 ---------------- */
 
@@ -60,7 +80,13 @@ function toggleCollapse(key: string) {
 
 const showForm = ref(false)
 const editingId = ref<string | null>(null)
-const draft = ref({ name: '', command: '', group: '' })
+const draft = ref({
+  name: '',
+  command: '',
+  group: '',
+  kind: 'command' as SnippetKind,
+  checkCmd: '',
+})
 
 /** 已有分组名（所属组自动补全候选） */
 const groupOptions = computed(() =>
@@ -69,25 +95,32 @@ const groupOptions = computed(() =>
 
 function openCreate() {
   editingId.value = null
-  draft.value = { name: '', command: '', group: '' }
+  draft.value = { name: '', command: '', group: '', kind: 'command', checkCmd: '' }
   showForm.value = true
 }
 
 function openEdit(s: CommandSnippet) {
   editingId.value = s.id
-  draft.value = { name: s.name, command: s.command, group: s.groupName }
+  draft.value = {
+    name: s.name,
+    command: s.command,
+    group: s.groupName,
+    kind: s.kind,
+    checkCmd: s.checkCmd,
+  }
   showForm.value = true
 }
 
 async function submitForm() {
   const command = draft.value.command.trim()
   if (!command) {
-    message.warning('请填写命令')
+    message.warning(draft.value.kind === 'service' ? '请填写服务名' : '请填写命令')
     return
   }
   const old = editingId.value
     ? store.snippets.find((s) => s.id === editingId.value)
     : undefined
+  const kind = draft.value.kind
   const snippet: CommandSnippet = {
     id: editingId.value ?? crypto.randomUUID(),
     name: draft.value.name.trim() || command.slice(0, 30),
@@ -95,12 +128,15 @@ async function submitForm() {
     tags: old?.tags ?? '',
     groupName: draft.value.group.trim(),
     sortOrder: old?.sortOrder ?? 0,
+    kind,
+    checkCmd: kind === 'service' ? draft.value.checkCmd.trim() : '',
     createdAt: old?.createdAt ?? Math.floor(Date.now() / 1000),
   }
   try {
     await store.save(snippet)
     showForm.value = false
     message.success('已保存')
+    if (kind === 'service') void store.refreshServiceStatus()
   } catch (e) {
     message.error(String(e))
   }
@@ -182,6 +218,27 @@ async function runGroup(g: SnippetGroup) {
   } catch (e) {
     message.error(String(e))
   }
+}
+
+/** 服务快捷操作（启动/停止/重启，终端可见执行 systemctl） */
+async function svcAction(s: CommandSnippet, action: 'start' | 'stop' | 'restart') {
+  try {
+    await store.runServiceAction(s, action)
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+/** 服务状态（无活跃 SSH 会话时一律未知） */
+function svcStatus(s: CommandSnippet): ServiceStatus {
+  if (!store.canRun) return 'unknown'
+  return store.serviceStatus[s.id] ?? 'unknown'
+}
+
+const svcStatusText: Record<ServiceStatus, string> = {
+  active: '运行中',
+  inactive: '已停止',
+  unknown: '未知',
 }
 
 /** 条目执行状态图标（仅运行期间/之后出现） */
@@ -343,14 +400,14 @@ async function applyDrop(
     <div class="sp-toolbar">
       <NButton size="tiny" secondary @click="openCreate">
         <template #icon><NIcon :component="Plus" /></template>
-        新增命令
+        新增记录
       </NButton>
     </div>
 
     <NEmpty
       v-if="!store.groups.length"
       size="small"
-      description="暂无常用命令，点上方按钮添加"
+      description="暂无常用记录，点上方按钮添加"
       class="sp-empty"
     />
 
@@ -407,9 +464,18 @@ async function applyDrop(
             <NIcon :component="GripVertical" :size="13" />
           </span>
           <div class="sp-item-info">
-            <span class="sp-item-name">{{ s.name }}</span>
+            <span class="sp-item-name">
+              <span v-if="s.kind === 'service'" class="sp-svc-tag">服务</span>
+              {{ s.name }}
+            </span>
             <span class="sp-item-cmd">{{ s.command }}</span>
           </div>
+          <span
+            v-if="s.kind === 'service'"
+            class="sp-dot"
+            :class="`sp-dot-${svcStatus(s)}`"
+            :title="`状态：${svcStatusText[svcStatus(s)]}`"
+          />
           <NIcon
             v-if="stateIcon(s.id)"
             :component="stateIcon(s.id)!.icon"
@@ -417,7 +483,56 @@ async function applyDrop(
             :size="14"
           />
           <span class="sp-ops">
+            <template v-if="s.kind === 'service'">
+              <button
+                class="sp-op"
+                title="查看状态（systemctl status）"
+                :disabled="!store.canRun || store.running"
+                @click="runOne(s)"
+              >
+                <NIcon :component="Eye" :size="13" />
+              </button>
+              <button
+                class="sp-op"
+                title="启动"
+                :disabled="!store.canRun || store.running"
+                @click="svcAction(s, 'start')"
+              >
+                <NIcon :component="PlayerPlay" :size="13" />
+              </button>
+              <NPopconfirm
+                :disabled="!store.canRun || store.running"
+                @positive-click="svcAction(s, 'stop')"
+              >
+                <template #trigger>
+                  <button
+                    class="sp-op danger"
+                    title="停止"
+                    :disabled="!store.canRun || store.running"
+                  >
+                    <NIcon :component="PlayerStop" :size="13" />
+                  </button>
+                </template>
+                确认停止服务「{{ s.name }}」？
+              </NPopconfirm>
+              <NPopconfirm
+                :disabled="!store.canRun || store.running"
+                @positive-click="svcAction(s, 'restart')"
+              >
+                <template #trigger>
+                  <button
+                    class="sp-op"
+                    title="重启"
+                    :disabled="!store.canRun || store.running"
+                  >
+                    <NIcon :component="Refresh" :size="13" />
+                  </button>
+                </template>
+                确认重启服务「{{ s.name }}」？
+              </NPopconfirm>
+            </template>
             <button
+              v-else
               class="sp-op"
               title="执行"
               :disabled="!store.canRun || store.running"
@@ -440,19 +555,33 @@ async function applyDrop(
     <NModal
       :show="showForm"
       preset="card"
-      :title="editingId ? '编辑命令' : '新增命令'"
+      :title="editingId ? '编辑记录' : '新增记录'"
       style="width: 420px"
       @update:show="(v: boolean) => (showForm = v)"
     >
       <div class="sp-form">
+        <NRadioGroup v-model:value="draft.kind" size="small">
+          <NRadioButton value="command">命令</NRadioButton>
+          <NRadioButton value="service">服务</NRadioButton>
+        </NRadioGroup>
         <NInput v-model:value="draft.name" size="small" placeholder="名称（留空取命令前 30 字）" />
         <NInput
+          v-if="draft.kind === 'command'"
           v-model:value="draft.command"
           size="small"
           type="textarea"
           :autosize="{ minRows: 2, maxRows: 6 }"
           placeholder="命令（如 docker ps -a）"
         />
+        <template v-else>
+          <NInput v-model:value="draft.command" size="small" placeholder="服务名（如 nginx）" />
+          <NInput
+            v-model:value="draft.checkCmd"
+            size="small"
+            placeholder="检查命令（可选，留空用 systemctl is-active）"
+            clearable
+          />
+        </template>
         <NAutoComplete
           v-model:value="draft.group"
           size="small"
@@ -593,6 +722,32 @@ async function applyDrop(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.sp-svc-tag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: 3px;
+  vertical-align: 1px;
+}
+.sp-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.sp-dot-active {
+  background: var(--success, #18a058);
+}
+.sp-dot-inactive {
+  background: var(--danger);
+}
+.sp-dot-unknown {
+  background: var(--text-tertiary);
 }
 .sp-item-cmd {
   font-size: 11px;

@@ -111,7 +111,17 @@ pub struct CommandSnippet {
     /// 排序序号（分组内 + 分组间共用，越小越靠前）
     #[serde(default)]
     pub sort_order: i64,
+    /// 条目类型：`command`（命令）/ `service`（服务，command 字段存服务名）
+    #[serde(default = "default_snippet_kind")]
+    pub kind: String,
+    /// 服务条目的自定义状态检查命令（空串 = 默认 systemctl is-active）
+    #[serde(default)]
+    pub check_cmd: String,
     pub created_at: i64,
+}
+
+fn default_snippet_kind() -> String {
+    "command".to_string()
 }
 
 /// 命令历史条目
@@ -148,6 +158,9 @@ pub struct AgentChat {
     pub id: String,
     /// 标题（空串 = 未命名；首条用户消息落库时自动生成）
     pub title: String,
+    /// 关联的会话配置 ID（profile_id；空串 = 未关联/旧数据，快速连接回退用 tab 标题）
+    #[serde(default)]
+    pub profile_id: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -321,9 +334,11 @@ impl SqliteStorage {
 
             -- Agent 助手会话（Chat 面板多会话 Tab）
             -- title 空串 = 未命名（首条用户消息落库时自动生成）
+            -- profile_id 关联的会话配置 ID（空串 = 未关联/旧数据），按终端会话区分聊天
             CREATE TABLE IF NOT EXISTS agent_chats (
                 id            TEXT    PRIMARY KEY NOT NULL,
                 title         TEXT    NOT NULL DEFAULT '',
+                profile_id    TEXT    NOT NULL DEFAULT '',
                 created_at    INTEGER NOT NULL,
                 updated_at    INTEGER NOT NULL
             );
@@ -366,6 +381,24 @@ impl SqliteStorage {
             "command_snippets",
             "sort_order",
             "ALTER TABLE command_snippets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "kind",
+            "ALTER TABLE command_snippets ADD COLUMN kind TEXT NOT NULL DEFAULT 'command'",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "check_cmd",
+            "ALTER TABLE command_snippets ADD COLUMN check_cmd TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "agent_chats",
+            "profile_id",
+            "ALTER TABLE agent_chats ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''",
         )?;
         Ok(())
     }
@@ -662,7 +695,7 @@ impl SqliteStorage {
     pub async fn save_snippet(&self, snippet: &CommandSnippet) -> Result<()> {
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, group_name, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, group_name, sort_order, kind, check_cmd, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 snippet.id,
                 snippet.name,
@@ -670,6 +703,8 @@ impl SqliteStorage {
                 snippet.tags,
                 snippet.group_name,
                 snippet.sort_order,
+                snippet.kind,
+                snippet.check_cmd,
                 snippet.created_at
             ],
         )?;
@@ -680,7 +715,7 @@ impl SqliteStorage {
     pub async fn list_snippets(&self) -> Result<Vec<CommandSnippet>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, name, command, tags, group_name, sort_order, created_at FROM command_snippets ORDER BY group_name, sort_order, created_at",
+            "SELECT id, name, command, tags, group_name, sort_order, kind, check_cmd, created_at FROM command_snippets ORDER BY group_name, sort_order, created_at",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(CommandSnippet {
@@ -690,7 +725,9 @@ impl SqliteStorage {
                 tags: row.get(3)?,
                 group_name: row.get(4)?,
                 sort_order: row.get(5)?,
-                created_at: row.get(6)?,
+                kind: row.get(6)?,
+                check_cmd: row.get(7)?,
+                created_at: row.get(8)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -702,8 +739,8 @@ impl SqliteStorage {
         let tx = conn.unchecked_transaction()?;
         for s in snippets {
             tx.execute(
-                "UPDATE command_snippets SET group_name = ?1, sort_order = ?2 WHERE id = ?3",
-                params![s.group_name, s.sort_order, s.id],
+                "UPDATE command_snippets SET group_name = ?1, sort_order = ?2, kind = ?3, check_cmd = ?4 WHERE id = ?5",
+                params![s.group_name, s.sort_order, s.kind, s.check_cmd, s.id],
             )?;
         }
         tx.commit()?;
@@ -821,14 +858,15 @@ impl SqliteStorage {
     pub async fn list_chats(&self) -> Result<Vec<AgentChat>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, title, created_at, updated_at FROM agent_chats ORDER BY updated_at DESC",
+            "SELECT id, title, profile_id, created_at, updated_at FROM agent_chats ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(AgentChat {
                 id: row.get(0)?,
                 title: row.get(1)?,
-                created_at: row.get(2)?,
-                updated_at: row.get(3)?,
+                profile_id: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -838,8 +876,8 @@ impl SqliteStorage {
     pub async fn create_chat(&self, chat: &AgentChat) -> Result<()> {
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT OR IGNORE INTO agent_chats (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            params![chat.id, chat.title, chat.created_at, chat.updated_at],
+            "INSERT OR IGNORE INTO agent_chats (id, title, profile_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![chat.id, chat.title, chat.profile_id, chat.created_at, chat.updated_at],
         )?;
         Ok(())
     }
@@ -929,14 +967,15 @@ impl SqliteStorage {
         };
 
         let chat = conn.query_row(
-            "SELECT id, title, created_at, updated_at FROM agent_chats WHERE id = ?1",
+            "SELECT id, title, profile_id, created_at, updated_at FROM agent_chats WHERE id = ?1",
             params![msg.chat_id],
             |r| {
                 Ok(AgentChat {
                     id: r.get(0)?,
                     title: r.get(1)?,
-                    created_at: r.get(2)?,
-                    updated_at: r.get(3)?,
+                    profile_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                    updated_at: r.get(4)?,
                 })
             },
         )?;
@@ -1205,6 +1244,7 @@ mod tests {
             .create_chat(&AgentChat {
                 id: "chat-1".into(),
                 title: String::new(),
+                profile_id: "profile-a".into(),
                 created_at: 100,
                 updated_at: 100,
             })
@@ -1214,6 +1254,7 @@ mod tests {
             .create_chat(&AgentChat {
                 id: "chat-2".into(),
                 title: String::new(),
+                profile_id: String::new(),
                 created_at: 200,
                 updated_at: 200,
             })
@@ -1284,6 +1325,9 @@ mod tests {
         assert_eq!(chats.len(), 2);
         assert_eq!(chats[0].id, "chat-2");
         assert_eq!(chats[1].id, "chat-1");
+        // profile_id 随会话往返持久化
+        assert_eq!(chats[1].profile_id, "profile-a");
+        assert_eq!(chats[0].profile_id, "");
 
         // 重命名
         storage.rename_chat("chat-1", "自定义名").await.unwrap();

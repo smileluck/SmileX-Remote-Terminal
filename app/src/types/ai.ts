@@ -26,6 +26,8 @@ export interface AgentChat {
   id: string
   /** 标题（空串 = 未命名，UI 显示「新会话」；首条用户消息自动生成） */
   title: string
+  /** 关联终端会话的区分键（profileId，快速连接回退 tab 标题；空串 = 未关联/旧数据） */
+  profileId: string
   createdAt: number
   updatedAt: number
 }

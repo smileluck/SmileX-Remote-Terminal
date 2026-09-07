@@ -9,10 +9,14 @@ import {
   snippetReorder,
 } from '@/services/snippets'
 import { execInTerminalDetailed } from '@/services/termExec'
+import * as sessionService from '@/services/session'
 import { useTabsStore } from '@/stores/tabs'
 
 /** 条目执行状态（整组顺序执行时逐条流转） */
 export type SnippetRunState = 'pending' | 'running' | 'success' | 'failed'
+
+/** 服务运行状态：active = 运行中，inactive = 已停止，unknown = 未知（无会话/检查异常） */
+export type ServiceStatus = 'active' | 'inactive' | 'unknown'
 
 export interface SnippetGroup {
   /** 分组名（'' = 未分组） */
@@ -30,12 +34,17 @@ export interface SnippetGroup {
  * - 任何排序/分组变动后 persistOrder() 统一重编 sortOrder 并整体落库
  * - runOne/runGroup 走终端标记协议（execInTerminalDetailed），
  *   退出码非零即判定失败，整组执行失败中止
+ * - 服务条目（kind='service'）：command 字段存服务名；
+ *   状态经静默 exec 通道轮询（startStatusPolling/stopStatusPolling 由面板组件管理生命周期），
+ *   快捷操作 runServiceAction 在终端可见执行 systemctl start|stop|restart
  */
 export const useSnippetsStore = defineStore('snippets', () => {
   /** 全部片段（顺序 = 展示顺序） */
   const snippets = ref<CommandSnippet[]>([])
   /** 条目执行状态（snippetId → 状态），仅运行期间/之后展示 */
   const runStates = ref<Record<string, SnippetRunState>>({})
+  /** 服务运行状态（service snippetId → 状态） */
+  const serviceStatus = ref<Record<string, ServiceStatus>>({})
   /** 是否有执行进行中（防重入） */
   const running = ref(false)
 
@@ -177,26 +186,50 @@ export const useSnippetsStore = defineStore('snippets', () => {
     runStates.value = { ...runStates.value, [id]: state }
   }
 
-  /** 执行单条命令（等待完成；退出码非零视为失败并抛错） */
-  async function runOne(snippet: CommandSnippet) {
+  /**
+   * 条目在终端实际执行的命令
+   *
+   * - command 条目：原样执行
+   * - service 条目：执行 `systemctl status`（--no-pager 避免 pager 阻塞终端；
+   *   `|| true` 兜底：服务停止时 status 退出码非零，属正常查询结果而非执行失败）
+   */
+  function effectiveCommand(s: CommandSnippet): string {
+    return s.kind === 'service'
+      ? `systemctl status --no-pager ${s.command} || true`
+      : s.command
+  }
+
+  /** 在终端执行条目（供 runOne / 服务快捷操作共用） */
+  async function runCommand(s: CommandSnippet, command: string) {
     const sid = activeSshSessionId()
     if (!sid) throw new Error('当前无激活的 SSH 终端，请先连接主机')
     if (running.value) throw new Error('已有命令在执行中，请等待完成')
     running.value = true
-    setRunState(snippet.id, 'running')
+    setRunState(s.id, 'running')
     try {
-      const r = await execInTerminalDetailed(sid, snippet.command)
+      const r = await execInTerminalDetailed(sid, command)
       if (r.rc !== undefined && r.rc !== 0) {
-        setRunState(snippet.id, 'failed')
-        throw new Error(`「${snippet.name}」执行失败（退出码 ${r.rc}）`)
+        setRunState(s.id, 'failed')
+        throw new Error(`「${s.name}」执行失败（退出码 ${r.rc}）`)
       }
-      setRunState(snippet.id, 'success')
+      setRunState(s.id, 'success')
     } catch (e) {
-      if (runStates.value[snippet.id] === 'running') setRunState(snippet.id, 'failed')
+      if (runStates.value[s.id] === 'running') setRunState(s.id, 'failed')
       throw e
     } finally {
       running.value = false
     }
+  }
+
+  /** 执行单条命令（等待完成；退出码非零视为失败并抛错） */
+  async function runOne(snippet: CommandSnippet) {
+    await runCommand(snippet, effectiveCommand(snippet))
+  }
+
+  /** 服务快捷操作：在终端可见执行 systemctl start|stop|restart，完成后延迟刷新状态 */
+  async function runServiceAction(s: CommandSnippet, action: 'start' | 'stop' | 'restart') {
+    await runCommand(s, `systemctl ${action} ${s.command}`)
+    setTimeout(() => void refreshServiceStatus(), 1000)
   }
 
   /** 顺序执行整组（等待每条完成再发下一条；失败即中止并抛错） */
@@ -211,7 +244,7 @@ export const useSnippetsStore = defineStore('snippets', () => {
     try {
       for (const s of items) {
         setRunState(s.id, 'running')
-        const r = await execInTerminalDetailed(sid, s.command)
+        const r = await execInTerminalDetailed(sid, effectiveCommand(s))
         if (r.rc !== undefined && r.rc !== 0) {
           setRunState(s.id, 'failed')
           throw new Error(`组执行中止：「${s.name}」失败（退出码 ${r.rc}）`)
@@ -228,9 +261,72 @@ export const useSnippetsStore = defineStore('snippets', () => {
     }
   }
 
+  /* ---------------- 服务状态监控（静默 exec 通道，不影响 PTY） ---------------- */
+
+  let refreshingStatus = false
+  let statusTimer: ReturnType<typeof setInterval> | null = null
+
+  /** 静默检查单个服务状态（exec 抛错 = 未知） */
+  async function checkService(sid: string, s: CommandSnippet): Promise<ServiceStatus> {
+    const checkCmd = s.checkCmd.trim()
+    if (checkCmd) {
+      // 自定义检查命令：包装执行并回显退出码（输出全部丢弃，只认 SVC_RC）
+      const out = await sessionService.exec(
+        sid,
+        `{ ${checkCmd} ; } >/dev/null 2>&1; echo "SVC_RC=$?"`,
+      )
+      const matches = [...out.matchAll(/SVC_RC=(\d+)/g)]
+      if (!matches.length) return 'unknown'
+      return Number(matches[matches.length - 1][1]) === 0 ? 'active' : 'inactive'
+    }
+    const out = await sessionService.exec(sid, `systemctl is-active ${s.command}`)
+    return out.trim() === 'active' ? 'active' : 'inactive'
+  }
+
+  /** 刷新全部服务条目状态（并发检查；无活跃 SSH 会话时全部置 unknown；防重入） */
+  async function refreshServiceStatus() {
+    if (refreshingStatus) return
+    const services = snippets.value.filter((s) => s.kind === 'service')
+    if (!services.length) return
+    const sid = activeSshSessionId()
+    if (!sid) {
+      const next = { ...serviceStatus.value }
+      for (const s of services) next[s.id] = 'unknown'
+      serviceStatus.value = next
+      return
+    }
+    refreshingStatus = true
+    try {
+      const results = await Promise.allSettled(services.map((s) => checkService(sid, s)))
+      const next = { ...serviceStatus.value }
+      results.forEach((r, i) => {
+        next[services[i].id] = r.status === 'fulfilled' ? r.value : 'unknown'
+      })
+      serviceStatus.value = next
+    } finally {
+      refreshingStatus = false
+    }
+  }
+
+  /** 启动服务状态轮询（立即刷新一次 + 定时刷新；幂等，重复调用不产生多重定时器） */
+  function startStatusPolling(intervalMs = 10_000) {
+    if (statusTimer !== null) return
+    void refreshServiceStatus()
+    statusTimer = setInterval(() => void refreshServiceStatus(), intervalMs)
+  }
+
+  /** 停止服务状态轮询 */
+  function stopStatusPolling() {
+    if (statusTimer !== null) {
+      clearInterval(statusTimer)
+      statusTimer = null
+    }
+  }
+
   return {
     snippets,
     runStates,
+    serviceStatus,
     running,
     groups,
     canRun,
@@ -244,5 +340,9 @@ export const useSnippetsStore = defineStore('snippets', () => {
     moveGroup,
     runOne,
     runGroup,
+    runServiceAction,
+    refreshServiceStatus,
+    startStatusPolling,
+    stopStatusPolling,
   }
 })

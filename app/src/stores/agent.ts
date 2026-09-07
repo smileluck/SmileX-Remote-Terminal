@@ -53,6 +53,8 @@ function genId(prefix: string): string {
  *
  * - 历史会话：对话自动按会话持久化到 SQLite，重启可恢复；
  *   后端 LLM 上下文按会话隔离，切回历史会话自动从库恢复。
+ *   聊天记录按终端会话区分（profileId，快速连接回退 tab 标题），
+ *   切换标签自动跟随到该服务器最近的聊天；无聊天时显示空态、发送时懒创建。
  *   单会话推进：新会话仅经「新会话」动作创建（首条消息也会兜底创建），
  *   无多开入口
  * - 事件路由：后端 sessionId 即会话 id，ai_token/ai_done 按其分发到
@@ -89,6 +91,12 @@ export const useAgentStore = defineStore('agent', () => {
   const includeContext = ref(true)
   /** 绑定的目标 SSH 会话（null = 未连接） */
   const sshSessionId = ref<string | null>(null)
+  /** 当前终端会话的聊天区分键（profileId 优先，快速连接回退 tab 标题；非 SSH/已断开/无 tab = null，不切换聊天） */
+  const currentKey = computed(() => {
+    const t = tabs.activeTab
+    if (t?.kind === 'ssh' && t.sessionId && !t.disconnected) return t.profileId || t.title
+    return null
+  })
   /** 自动执行模式（信任模式：命令不再逐条确认，危险命令仍跳过） */
   const autoRun = ref(localStorage.getItem(AUTORUN_KEY) === '1')
   /** run 块执行状态：`${messageId}#${index}` → RunState */
@@ -150,6 +158,8 @@ export const useAgentStore = defineStore('agent', () => {
         activeChatId.value = list[0].id
         await loadMessages(list[0].id)
       }
+      // 启动时已有激活的 SSH tab：按区分键校正激活会话
+      await syncChatWithKey()
     } catch {
       /* 非 Tauri 环境 */
     }
@@ -162,7 +172,7 @@ export const useAgentStore = defineStore('agent', () => {
     if (current && (messagesByChat.value[current]?.length ?? 0) === 0) return current
     const id = genId('chat')
     const now = Math.floor(Date.now() / 1000)
-    const chat: AgentChat = { id, title: '', createdAt: now, updatedAt: now }
+    const chat: AgentChat = { id, title: '', profileId: currentKey.value ?? '', createdAt: now, updatedAt: now }
     try {
       await agentChatService.chatCreate(chat)
       upsertChat(chat)
@@ -188,6 +198,8 @@ export const useAgentStore = defineStore('agent', () => {
       void aiService.chatAbort().catch(() => {})
       generatingChatId.value = null
     }
+    // 清理后端 LLM 内存中的该会话历史
+    void aiService.chatClear(chatId).catch(() => {})
     try {
       await agentChatService.chatDelete(chatId)
     } catch {
@@ -240,10 +252,23 @@ export const useAgentStore = defineStore('agent', () => {
   })
 
   /* ---------------- 会话绑定：跟随激活的 SSH tab ---------------- */
+  /** 聊天跟随终端会话切换：区分键变化时切到该 key 下最近的聊天（无则空态，不自动建聊天） */
+  async function syncChatWithKey() {
+    const key = currentKey.value
+    if (!key) return
+    const active = chats.value.find((c) => c.id === activeChatId.value)
+    if (active?.profileId === key) return
+    // chats 按 updatedAt 倒序，首个匹配即该 key 下最近的聊天
+    const next = chats.value.find((c) => c.profileId === key)
+    activeChatId.value = next?.id ?? null
+    if (next && !messagesByChat.value[next.id]) await loadMessages(next.id)
+  }
+
   watch(
     () => tabs.activeTab,
     (t) => {
       if (t?.kind === 'ssh' && t.sessionId && !t.disconnected) sshSessionId.value = t.sessionId
+      void syncChatWithKey()
     },
   )
   /** 绑定的会话失效（tab 关闭/断开）时回退到任一活跃 SSH 会话 */
@@ -426,6 +451,7 @@ export const useAgentStore = defineStore('agent', () => {
   return {
     chats,
     activeChatId,
+    currentKey,
     messages,
     busy,
     loading,

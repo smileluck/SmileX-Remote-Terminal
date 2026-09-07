@@ -6,6 +6,9 @@
 
 import { invoke } from './invoke'
 
+/** 片段类型：command = 命令；service = 服务（command 字段存服务名） */
+export type SnippetKind = 'command' | 'service'
+
 /** 命令片段 */
 export interface CommandSnippet {
   id: string
@@ -16,6 +19,10 @@ export interface CommandSnippet {
   groupName: string
   /** 排序序号（分组内 + 分组间共用，越小越靠前） */
   sortOrder: number
+  /** 条目类型（默认 'command'） */
+  kind: SnippetKind
+  /** 服务条目的自定义状态检查命令（空串 = 默认 systemctl is-active） */
+  checkCmd: string
   createdAt: number
 }
 

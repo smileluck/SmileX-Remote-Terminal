@@ -112,6 +112,8 @@ async function addToSnippets() {
       tags: '',
       groupName: '',
       sortOrder: 0,
+      kind: 'command',
+      checkCmd: '',
       createdAt: Math.floor(Date.now() / 1000),
     })
     message.success('已添加到常用记录')
