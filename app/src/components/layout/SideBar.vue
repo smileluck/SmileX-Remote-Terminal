@@ -140,90 +140,132 @@ function toggleGroup(g: GroupBucket) {
 
 // ---------------------------------------------------------------------------
 // 拖拽：会话卡片 → 分组（移动）；分组头 → 分组（合并 + 提示重命名）
+// Pointer Events 自实现：Tauri dragDropEnabled 会拦截 HTML5 drop（FilePanel
+// 的 OS 文件拖入依赖该行为），原生 DnD 在页面内不可用。
 // ---------------------------------------------------------------------------
 
-/** 拖拽 payload 的自定义 MIME（与 Tauri 文件拖拽区分） */
-const SESSION_MIME = 'application/x-srt-session'
-const GROUP_MIME = 'application/x-srt-group'
-
-/** 正在拖拽的会话 id / 分组键（drop 判定用；dragover 阶段读不到 dataTransfer 数据） */
+/** 正在拖拽的会话 id / 分组键（源高亮用） */
 const dragProfileId = ref<string | null>(null)
 const dragGroupKey = ref<string | null>(null)
-/** 当前拖拽悬停的目标分组键（高亮用） */
+/** 当前拖拽悬停的目标分组键（drop-target 高亮用；'' = 未分组） */
 const dropGroupKey = ref<string | null>(null)
 
-function onCardDragStart(e: DragEvent, p: SessionProfile) {
-  e.dataTransfer?.setData(SESSION_MIME, p.id)
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
-  dragProfileId.value = p.id
+/** 拖拽判定阈值（px）：位移内视为点击，保证单击连接/双击重命名不受影响 */
+const DRAG_THRESHOLD = 6
+
+/** 进行中的指针拖拽（null = 无；started 前不拦截任何默认行为） */
+interface PointerDrag {
+  kind: 'session' | 'group'
+  /** session：会话 id；group：分组键 */
+  id: string
+  /** ghost 显示文本 */
+  label: string
+  startX: number
+  startY: number
+  started: boolean
+  ghost: HTMLElement | null
+}
+let pointerDrag: PointerDrag | null = null
+
+function onCardPointerDown(e: PointerEvent, p: SessionProfile) {
+  if (e.button !== 0) return
+  beginPointerDrag(e, { kind: 'session', id: p.id, label: p.name })
 }
 
-function onCardDragEnd() {
-  dragProfileId.value = null
-  dropGroupKey.value = null
-}
-
-function onGroupDragStart(e: DragEvent, g: GroupBucket) {
+function onGroupPointerDown(e: PointerEvent, g: GroupBucket) {
   // 「未分组」不可作为整体拖走
-  if (!g.key) {
-    e.preventDefault()
-    return
+  if (e.button !== 0 || !g.key) return
+  beginPointerDrag(e, { kind: 'group', id: g.key, label: g.name })
+}
+
+function beginPointerDrag(e: PointerEvent, info: Pick<PointerDrag, 'kind' | 'id' | 'label'>) {
+  e.preventDefault() // 阻止文本选中；不影响后续 click/dblclick
+  pointerDrag = { ...info, startX: e.clientX, startY: e.clientY, started: false, ghost: null }
+  window.addEventListener('pointermove', onDragPointerMove)
+  window.addEventListener('pointerup', onDragPointerUp)
+  window.addEventListener('pointercancel', onDragPointerUp)
+}
+
+function createGhost(label: string): HTMLElement {
+  const el = document.createElement('div')
+  el.className = 'sidebar-drag-ghost'
+  el.textContent = label
+  document.body.appendChild(el)
+  return el
+}
+
+function moveGhost(ghost: HTMLElement | null, x: number, y: number) {
+  if (!ghost) return
+  ghost.style.left = `${x + 12}px`
+  ghost.style.top = `${y + 12}px`
+}
+
+/** 指针位置命中的分组键（依赖分组头/分组体上的 data-group-key；未命中返回 null） */
+function hitGroupKey(x: number, y: number): string | null {
+  const el = document.elementFromPoint(x, y)
+  const host = el?.closest('[data-group-key]') as HTMLElement | null
+  return host?.dataset.groupKey ?? null
+}
+
+function onDragPointerMove(e: PointerEvent) {
+  const d = pointerDrag
+  if (!d) return
+  if (!d.started) {
+    if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_THRESHOLD) return
+    d.started = true
+    d.ghost = createGhost(d.label)
+    document.body.classList.add('sidebar-dragging')
+    if (d.kind === 'session') dragProfileId.value = d.id
+    else dragGroupKey.value = d.id
   }
-  e.dataTransfer?.setData(GROUP_MIME, g.key)
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
-  dragGroupKey.value = g.key
-}
-
-function onGroupDragEnd() {
-  dragGroupKey.value = null
-  dropGroupKey.value = null
-}
-
-function onGroupDragOver(e: DragEvent, g: GroupBucket) {
-  // 仅响应侧栏内部拖拽；外部文件拖拽交给 FilePanel 的 Tauri 事件处理
-  const internal = !!dragProfileId.value || !!dragGroupKey.value
-  if (!internal) return
+  moveGhost(d.ghost, e.clientX, e.clientY)
+  const key = hitGroupKey(e.clientX, e.clientY)
   // 分组不能拖到自己身上
-  if (dragGroupKey.value && dragGroupKey.value === g.key) return
-  e.preventDefault()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-  dropGroupKey.value = g.key
+  dropGroupKey.value = d.kind === 'group' && key === d.id ? null : key
 }
 
-function onGroupDragLeave(g: GroupBucket) {
-  if (dropGroupKey.value === g.key) dropGroupKey.value = null
-}
-
-async function onGroupDrop(e: DragEvent, g: GroupBucket) {
-  e.preventDefault()
-  const sessionId = e.dataTransfer?.getData(SESSION_MIME) || dragProfileId.value
-  const sourceKey = e.dataTransfer?.getData(GROUP_MIME) || dragGroupKey.value
-  const draggingSession = !!dragProfileId.value
+function cleanupPointerDrag() {
+  window.removeEventListener('pointermove', onDragPointerMove)
+  window.removeEventListener('pointerup', onDragPointerUp)
+  window.removeEventListener('pointercancel', onDragPointerUp)
+  pointerDrag?.ghost?.remove()
+  document.body.classList.remove('sidebar-dragging')
+  pointerDrag = null
   dragProfileId.value = null
   dragGroupKey.value = null
   dropGroupKey.value = null
+}
 
-  if (draggingSession && sessionId) {
+function onDragPointerUp(e: PointerEvent) {
+  const d = pointerDrag
+  const key = d?.started ? hitGroupKey(e.clientX, e.clientY) : null
+  cleanupPointerDrag()
+  // 未过阈值：视为点击，click/dblclick 自然触发
+  if (!d || !d.started || key === null) return
+  const target = groupedProfiles.value.find((b) => b.key === key)
+  if (!target) return
+
+  if (d.kind === 'session') {
     // 已在目标分组则不动作（避免无意义的写库与提示）
-    const p = profilesStore.findById(sessionId)
-    if (p && groupKey(groupOf(p)) === g.key) return
-    const targetName = g.name || '未分组'
+    const p = profilesStore.findById(d.id)
+    if (p && groupKey(groupOf(p)) === target.key) return
+    const targetName = target.name || '未分组'
     dialog.warning({
       title: '移动会话',
-      content: `将「${p?.name ?? sessionId}」移动到「${targetName}」？`,
+      content: `将「${p?.name ?? d.id}」移动到「${targetName}」？`,
       positiveText: '移动',
       negativeText: '取消',
-      onPositiveClick: () => moveSessions([sessionId], g),
+      onPositiveClick: () => moveSessions([d.id], target),
     })
-  } else if (sourceKey && sourceKey !== g.key) {
-    const sourceName = groupedProfiles.value.find((b) => b.key === sourceKey)?.name || sourceKey
-    const targetName = g.name || '未分组'
+  } else if (d.id !== target.key) {
+    const sourceName = groupedProfiles.value.find((b) => b.key === d.id)?.name || d.id
+    const targetName = target.name || '未分组'
     dialog.warning({
       title: '合并分组',
       content: `将分组「${sourceName}」的全部会话合并到「${targetName}」？`,
       positiveText: '合并',
       negativeText: '取消',
-      onPositiveClick: () => mergeGroups(sourceKey, g),
+      onPositiveClick: () => mergeGroups(d.id, target),
     })
   }
 }
@@ -398,15 +440,11 @@ onMounted(() => {
           <div
             v-if="groupedProfiles.length > 1 || g.name"
             class="group-header"
-            :draggable="!!g.key"
+            :data-group-key="g.key"
             :title="g.key ? '拖拽会话到此移动；拖拽分组头合并；双击重命名' : '拖拽会话到此移出分组'"
             @click="toggleGroup(g)"
             @dblclick="g.key && openRename(g.key)"
-            @dragstart="onGroupDragStart($event, g)"
-            @dragend="onGroupDragEnd"
-            @dragover="onGroupDragOver($event, g)"
-            @dragleave="onGroupDragLeave(g)"
-            @drop="onGroupDrop($event, g)"
+            @pointerdown="onGroupPointerDown($event, g)"
           >
             <NIcon :component="ChevronRight" class="chevron" :class="{ open: !isGroupCollapsed(g) }" />
             <span class="group-name">{{ g.name || '未分组' }}</span>
@@ -416,19 +454,15 @@ onMounted(() => {
           <div
             v-show="!isGroupCollapsed(g)"
             class="group-body"
-            @dragover="onGroupDragOver($event, g)"
-            @dragleave="onGroupDragLeave(g)"
-            @drop="onGroupDrop($event, g)"
+            :data-group-key="g.key"
           >
             <div v-for="p in g.profiles" :key="p.id" class="card-slot">
               <div
                 class="profile-card"
                 :class="{ dragging: dragProfileId === p.id }"
-                draggable="true"
                 :title="`${p.username}@${p.host}:${p.port}`"
                 @click="onConnect(p)"
-                @dragstart="onCardDragStart($event, p)"
-                @dragend="onCardDragEnd"
+                @pointerdown="onCardPointerDown($event, p)"
               >
                 <NIcon
                   :component="kindIcon[p.kind] || Terminal2"
@@ -701,5 +735,29 @@ onMounted(() => {
 }
 .card-actions .danger:hover {
   --n-text-color: var(--danger) !important;
+}
+</style>
+
+<style>
+/* 拖拽 ghost / 拖拽中页面状态：元素挂在 body 下，scoped 样式到不了，需全局定义 */
+.sidebar-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  max-width: 220px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm, 4px);
+  opacity: 0.92;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.sidebar-dragging {
+  user-select: none;
+  cursor: grabbing;
 }
 </style>
