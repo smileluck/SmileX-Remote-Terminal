@@ -35,17 +35,29 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 
 import * as sftp from '@/services/sftp'
 import type { SftpEntry } from '@/services/sftp'
+import * as sessionService from '@/services/session'
+import { connectProfile } from '@/composables/useSshConnect'
+import { shellQuote } from '@/utils/shell'
 import { useTransferStore } from '@/stores/transfer'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
+import { useSnippetsStore } from '@/stores/snippets'
+import { useProfilesStore } from '@/stores/profiles'
+import { useMonitorStore } from '@/stores/monitor'
 import TransferList from './TransferList.vue'
 
 const props = defineProps<{ sessionId: string }>()
+const emit = defineEmits<{ (e: 'open-split-at', path: string): void }>()
 const message = useMessage()
 const dialog = useDialog()
 const transferStore = useTransferStore()
 const tabsStore = useTabsStore()
 const layout = useLayoutStore()
+const snippets = useSnippetsStore()
+const profiles = useProfilesStore()
+const monitor = useMonitorStore()
+
+const encoder = new TextEncoder()
 
 const loading = ref(false)
 const entries = ref<SftpEntry[]>([])
@@ -138,10 +150,36 @@ function enter(entry: SftpEntry) {
   load(entry.path)
 }
 
-function goCrumb(index: number) {
+/** 第 index 段 crumb 对应的绝对路径（根为 index=-1 → '/'） */
+function crumbPath(index: number): string {
   const parts = cwd.value.split('/').filter(Boolean)
-  const target = '/' + parts.slice(0, index + 1).join('/')
-  load(target || '/')
+  if (index < 0) return '/'
+  return '/' + parts.slice(0, index + 1).join('/')
+}
+
+function goCrumb(index: number) {
+  load(crumbPath(index))
+}
+
+/** 双击面包屑进入路径编辑：回车跳转（失败保留原状），Esc/失焦取消 */
+const pathEditing = ref(false)
+const pathDraft = ref('')
+
+function startPathEdit() {
+  pathDraft.value = cwd.value
+  pathEditing.value = true
+}
+
+async function confirmPathEdit() {
+  // Enter 确认后输入框卸载会再触发一次 blur，需去重
+  if (!pathEditing.value) return
+  const draft = pathDraft.value.trim()
+  pathEditing.value = false
+  if (!draft || draft === cwd.value) return
+  // 不以 / 开头视为相对当前目录
+  const target = draft.startsWith('/') ? draft : `${cwd.value.replace(/\/$/, '')}/${draft}`
+  // 失败时 load 内部已 toast 且 cwd 不变，面包屑自然保持原路径
+  await load(target)
 }
 
 /** 面包屑最多直接展示的层数（超出时折叠中间段为省略号，保留首尾） */
@@ -291,6 +329,113 @@ function onRowMenu(key: string, entry: SftpEntry) {
   else if (key === 'remove') handleRemove(entry)
 }
 
+/** 面包屑右键菜单（手动定位，与文件行菜单相互独立） */
+const crumbMenuShow = ref(false)
+const crumbMenuX = ref(0)
+const crumbMenuY = ref(0)
+/** 打开菜单时捕获的目标路径（菜单打开期间保持不变） */
+const crumbMenuPath = ref('')
+
+function onCrumbContextMenu(e: MouseEvent, path: string) {
+  crumbMenuPath.value = path
+  crumbMenuX.value = e.clientX
+  crumbMenuY.value = e.clientY
+  crumbMenuShow.value = true
+}
+
+/** 当前会话关联的档案（无则「新会话打开」不可用） */
+const currentProfile = computed(() => {
+  const tab = tabsStore.tabs.find((t) => t.sessionId === props.sessionId)
+  return profiles.profiles.find((p) => p.id === tab?.profileId) ?? null
+})
+
+const crumbMenuOptions = computed(() => [
+  { label: '复制绝对路径', key: 'copy' },
+  { label: '保存到常用记录', key: 'save-snippet' },
+  { label: '会话跳转到该路径', key: 'cd' },
+  { label: '新会话打开该路径', key: 'new-session', disabled: !currentProfile.value },
+  { label: '新分屏打开该路径', key: 'new-split' },
+])
+
+function onCrumbMenuSelect(key: string) {
+  crumbMenuShow.value = false
+  const path = crumbMenuPath.value
+  if (!path) return
+  switch (key) {
+    case 'copy':
+      void copyCrumbPath(path)
+      break
+    case 'save-snippet':
+      void saveCrumbSnippet(path)
+      break
+    case 'cd':
+      void cdToPath(props.sessionId, path)
+      break
+    case 'new-session':
+      void openSessionAtPath(path)
+      break
+    case 'new-split':
+      emit('open-split-at', path)
+      break
+  }
+}
+
+async function copyCrumbPath(path: string) {
+  try {
+    await navigator.clipboard.writeText(path)
+    message.success('已复制路径')
+  } catch {
+    message.warning('复制失败：无法访问剪贴板')
+  }
+}
+
+/** 保存为常用记录（cd 命令片段，未分组） */
+async function saveCrumbSnippet(path: string) {
+  const command = `cd ${shellQuote(path)}`
+  try {
+    await snippets.load()
+    await snippets.save({
+      id: crypto.randomUUID(),
+      name: command.slice(0, 30),
+      command,
+      tags: '',
+      groupName: '',
+      sortOrder: 0,
+      kind: 'command',
+      checkCmd: '',
+      createdAt: Math.floor(Date.now() / 1000),
+    })
+    message.success('已添加到常用记录')
+  } catch (e) {
+    message.error(`添加失败：${e}`)
+  }
+}
+
+/** 向指定会话发送 cd（raw input，用户在终端可见命令与报错） */
+async function cdToPath(sessionId: string, path: string) {
+  try {
+    await sessionService.input(sessionId, encoder.encode(`cd ${shellQuote(path)}\r`))
+  } catch (e) {
+    message.error(`发送失败：${e}`)
+  }
+}
+
+/** 新建会话并落在指定路径（shell 就绪无信号，延时后发送 cd） */
+async function openSessionAtPath(path: string) {
+  const profile = currentProfile.value
+  if (!profile) return
+  try {
+    const sid = await connectProfile(profile)
+    tabsStore.addTab(profile.kind, profile.name, sid, profile.id)
+    monitor.setActive(sid)
+    setTimeout(() => {
+      sessionService.input(sid, encoder.encode(`cd ${shellQuote(path)}\r`)).catch(() => {})
+    }, 500)
+  } catch (e) {
+    message.error(`连接失败：${e}`)
+  }
+}
+
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`
@@ -305,12 +450,39 @@ defineExpose({ reload: load })
   <div class="file-panel" :style="{ width: layout.filesWidth + 'px' }">
     <div class="resize-handle" :class="{ dragging: resizing }" @mousedown="onResizeStart" />
     <div class="fp-toolbar">
-      <div class="fp-crumbs" :title="cwd">
-        <span class="crumb" @click="load('/')">/</span>
-        <template v-for="(s, k) in crumbSegs" :key="k">
-          <NIcon :component="ChevronRight" class="crumb-sep" />
-          <span v-if="s.i < 0" class="crumb crumb-ellipsis">{{ s.name }}</span>
-          <span v-else class="crumb" @click="goCrumb(s.i)">{{ s.name }}</span>
+      <div
+        class="fp-crumbs"
+        :title="cwd"
+        @dblclick="startPathEdit"
+        @contextmenu.prevent="(e: MouseEvent) => onCrumbContextMenu(e, cwd)"
+      >
+        <NInput
+          v-if="pathEditing"
+          v-model:value="pathDraft"
+          size="tiny"
+          autofocus
+          class="fp-path-input"
+          placeholder="输入路径，回车跳转"
+          @keyup.enter="confirmPathEdit"
+          @keyup.esc="pathEditing = false"
+          @blur="confirmPathEdit"
+        />
+        <template v-else>
+          <span
+            class="crumb"
+            @click="load('/')"
+            @contextmenu.prevent.stop="(e: MouseEvent) => onCrumbContextMenu(e, '/')"
+          >/</span>
+          <template v-for="(s, k) in crumbSegs" :key="k">
+            <NIcon :component="ChevronRight" class="crumb-sep" />
+            <span v-if="s.i < 0" class="crumb crumb-ellipsis">{{ s.name }}</span>
+            <span
+              v-else
+              class="crumb"
+              @click="goCrumb(s.i)"
+              @contextmenu.prevent.stop="(e: MouseEvent) => onCrumbContextMenu(e, crumbPath(s.i))"
+            >{{ s.name }}</span>
+          </template>
         </template>
       </div>
       <div class="fp-actions">
@@ -429,6 +601,17 @@ defineExpose({ reload: load })
       @select="onMenuSelect"
       @clickoutside="menuShow = false"
     />
+    <!-- 面包屑右键菜单 -->
+    <NDropdown
+      trigger="manual"
+      :show="crumbMenuShow"
+      :x="crumbMenuX"
+      :y="crumbMenuY"
+      placement="bottom-start"
+      :options="crumbMenuOptions"
+      @select="onCrumbMenuSelect"
+      @clickoutside="crumbMenuShow = false"
+    />
   </div>
 </template>
 
@@ -492,6 +675,10 @@ defineExpose({ reload: load })
   font-size: 11px;
   color: var(--text-tertiary);
   flex-shrink: 0;
+}
+.fp-path-input {
+  flex: 1;
+  min-width: 0;
 }
 .fp-actions {
   display: flex;

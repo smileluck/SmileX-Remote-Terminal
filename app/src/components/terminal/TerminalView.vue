@@ -26,6 +26,7 @@ import {
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
+import { shellQuote } from '@/utils/shell'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
 import { useLayoutStore } from '@/stores/layout'
@@ -158,10 +159,14 @@ watch(
   },
 )
 
-/** 分屏：在当前选中 pane 位置原位分割（row = 向右，column = 向下） */
+/** 分屏：在当前选中 pane 位置原位分割（row = 向右，column = 向下）；initialPath 时新窗格就绪后 cd 过去 */
 const splitting = ref(false)
-async function addPane(dir: 'row' | 'column') {
-  if (paneCount.value >= 4 || splitting.value) return
+async function addPane(dir: 'row' | 'column', initialPath?: string) {
+  if (paneCount.value >= 4) {
+    message.warning('已达最大分屏数（4）')
+    return
+  }
+  if (splitting.value) return
   const targetId = findPane(root.value, activePaneId.value) ? activePaneId.value : primaryPaneId.value
   const target = findPane(root.value, targetId)
   const pane: PaneNode = { kind: 'pane', id: genNodeId('p-'), sessionId: null }
@@ -173,6 +178,14 @@ async function addPane(dir: 'row' | 'column') {
       const sid = await sessionService.clone(target.sessionId, 80, 24)
       pane.sessionId = sid
       ownSessions.add(sid)
+      // shell 就绪无信号，延时后发送 cd
+      if (initialPath) {
+        setTimeout(() => {
+          sessionService
+            .input(sid, Array.from(new TextEncoder().encode(`cd ${shellQuote(initialPath)}\r`)))
+            .catch(() => {})
+        }, 500)
+      }
     } catch (e) {
       message.error(`克隆会话失败：${e}`)
     } finally {
@@ -311,6 +324,7 @@ async function handleReconnect() {
       <FilePanel
         v-if="layout.filesVisible && tab.sessionId && !tab.disconnected"
         :session-id="tab.sessionId"
+        @open-split-at="(p: string) => addPane('row', p)"
       />
     </div>
     <!-- 断开遮罩 -->
