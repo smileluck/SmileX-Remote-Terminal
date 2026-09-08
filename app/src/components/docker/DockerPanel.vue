@@ -3,7 +3,7 @@
  * DockerPanel - Docker 管理面板（右栏页签）
  *
  * - 页签：容器 / 镜像（NTabs segment，骨架同 MonitorDashboard）
- * - 容器：名称 / 关联镜像 / 状态 / 端口；操作：启动、停止、重启
+ * - 容器：名称 / 关联镜像 / 状态 / 端口；操作：启动、停止、重启、删除（运行中强制删除）
  * - 镜像：repo:tag / ID / 大小 / 创建时间；操作：运行（参数对话框）、删除
  * - 数据来自 docker store（静默 exec 通道轮询，面板挂载期间 10s 一轮）
  * - 变更类操作静默执行，完成后自动刷新
@@ -232,6 +232,25 @@ async function submitRun() {
                 </template>
                 启动
               </NTooltip>
+              <NPopconfirm
+                @positive-click="
+                  onAction(
+                    () => docker.removeContainer(c.id, isRunning(c)),
+                    `已删除容器 ${c.name}`,
+                  )
+                "
+              >
+                <template #trigger>
+                  <NButton quaternary circle size="tiny" title="删除" :disabled="docker.acting">
+                    <NIcon :component="Trash" :size="14" />
+                  </NButton>
+                </template>
+                {{
+                  isRunning(c)
+                    ? `容器 ${c.name} 正在运行，将强制停止并删除，确认继续？`
+                    : `确认删除容器 ${c.name}？`
+                }}
+              </NPopconfirm>
             </div>
           </div>
         </template>

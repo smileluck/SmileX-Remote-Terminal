@@ -3,7 +3,7 @@
  *
  * 复用 session_exec 静默通道在远端主机执行 docker CLI：
  * - 列表查询走 `--format '{{json .}}'` per-line JSON，前端逐行解析
- * - 变更类操作（start/stop/restart/rmi/run）静默执行，调用方负责刷新
+ * - 变更类操作（start/stop/restart/rm/rmi/run）静默执行，调用方负责刷新
  * - 所有命令追加 SRT_RC 退出码标记（exec 通道 stdout/stderr 合并返回，
  *   无法区分流，以退出码 + 关键字判定成败与错误类别）
  */
@@ -144,6 +144,11 @@ export async function stopContainer(sid: string, id: string): Promise<void> {
 /** 重启容器 */
 export async function restartContainer(sid: string, id: string): Promise<void> {
   await runChecked(sid, `docker restart ${sq(id)}`)
+}
+
+/** 删除容器（运行中的容器需 force=true，等价于 docker rm -f） */
+export async function removeContainer(sid: string, id: string, force = false): Promise<void> {
+  await runChecked(sid, `docker rm ${force ? '-f ' : ''}${sq(id)}`)
 }
 
 /** 删除镜像 */

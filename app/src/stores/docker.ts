@@ -12,7 +12,7 @@ import type { DockerContainer, DockerImage, DockerErrorKind, RunContainerOptions
  * - 面向当前活跃的、未断开的 SSH 会话（activeSshSessionId）
  * - 列表数据经静默 exec 通道轮询（startPolling/stopPolling 由面板组件管理生命周期），
  *   模式同 snippets 的服务状态轮询
- * - 变更类操作（start/stop/restart/rmi/run）静默执行后自动刷新
+ * - 变更类操作（start/stop/restart/rm/rmi/run）静默执行后自动刷新
  */
 export const useDockerStore = defineStore('docker', () => {
   /** 容器列表 */
@@ -128,6 +128,11 @@ export const useDockerStore = defineStore('docker', () => {
     return act((sid) => dockerService.restartContainer(sid, id))
   }
 
+  /** 删除容器（运行中的容器传 force=true 强制删除） */
+  function removeContainer(id: string, force = false) {
+    return act((sid) => dockerService.removeContainer(sid, id, force))
+  }
+
   /** 删除镜像 */
   function removeImage(id: string) {
     return act((sid) => dockerService.removeImage(sid, id))
@@ -167,6 +172,7 @@ export const useDockerStore = defineStore('docker', () => {
     startContainer,
     stopContainer,
     restartContainer,
+    removeContainer,
     removeImage,
     runContainer,
     installDocker,
