@@ -145,13 +145,13 @@ function goCrumb(index: number) {
 }
 
 /** 面包屑最多直接展示的层数（超出时折叠中间段为省略号，保留首尾） */
-const MAX_CRUMBS = 4
+const MAX_CRUMBS = 3
 
 /** 面包屑段：目录层级过深时显示首尾，中间用省略号替代（ellipsis 段 i=-1，不可点击） */
 const crumbSegs = computed(() => {
   const parts = cwd.value.split('/').filter(Boolean)
   if (parts.length <= MAX_CRUMBS) return parts.map((name, i) => ({ name, i }))
-  const head = parts.slice(0, 2).map((name, i) => ({ name, i }))
+  const head = parts.slice(0, 1).map((name, i) => ({ name, i }))
   const tail = parts.slice(-2).map((name, j) => ({ name, i: parts.length - 2 + j }))
   return [...head, { name: '…', i: -1 }, ...tail]
 })
