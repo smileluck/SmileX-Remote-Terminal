@@ -69,6 +69,42 @@ function parseJsonLines<T>(out: string, map: (raw: Record<string, string>) => T)
   return items
 }
 
+/** 一键安装脚本：官方 get.docker.com，失败自动切阿里云镜像重试 */
+const INSTALL_SCRIPT = [
+  // 权限：root 直接执行；否则要求免密 sudo
+  'if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif sudo -n true 2>/dev/null; then SUDO="sudo -n"; else echo "需要 root 或免密 sudo 权限"; exit 42; fi',
+  // 下载器：优先 curl，其次 wget
+  'if command -v curl >/dev/null 2>&1; then DL="curl -fsSL --connect-timeout 8 --max-time 120 -o /tmp/srt-get-docker.sh"; elif command -v wget >/dev/null 2>&1; then DL="wget -q -T 120 -O /tmp/srt-get-docker.sh"; else echo "缺少 curl/wget"; exit 43; fi',
+  // 尝试 1：官方源
+  '$DL https://get.docker.com && $SUDO sh /tmp/srt-get-docker.sh',
+  'rc=$?',
+  // 尝试 2：阿里云镜像
+  'if [ $rc -ne 0 ]; then echo "官方源安装失败，切换阿里云镜像重试..."; $DL https://get.docker.com && $SUDO sh /tmp/srt-get-docker.sh --mirror Aliyun; rc=$?; fi',
+  'rm -f /tmp/srt-get-docker.sh',
+  'exit $rc',
+].join('; ')
+
+/**
+ * 一键安装 Docker（get.docker.com 官方脚本，失败自动切阿里云镜像）
+ *
+ * 远端脚本约定退出码：42 = 无 root/免密 sudo；43 = 缺少 curl/wget。
+ * 安装过程可能耗时数分钟（exec 通道无超时），调用方需维护 loading 态。
+ */
+export async function installDocker(sid: string): Promise<void> {
+  const out = await sessionService.exec(sid, `{ ${INSTALL_SCRIPT} ; } 2>&1; echo "SRT_RC=$?"`)
+  const m = out.match(/SRT_RC=(\d+)\s*$/)
+  const rc = m ? Number(m[1]) : -1
+  if (rc === 0) return
+  const body = (m ? out.slice(0, m.index) : out).trim()
+  if (rc === 42) {
+    throw new DockerError('no-permission', '一键安装需要 root 或免密 sudo 权限，请在终端中手动安装 Docker')
+  }
+  if (rc === 43) {
+    throw new DockerError('unknown', '远端主机缺少 curl/wget，无法下载安装脚本，请手动安装')
+  }
+  throw new DockerError('unknown', body || `Docker 安装失败（退出码 ${rc}）`)
+}
+
 /** 列出全部容器（含已停止） */
 export async function listContainers(sid: string): Promise<DockerContainer[]> {
   const out = await runChecked(sid, `docker ps -a --format '{{json .}}'`)

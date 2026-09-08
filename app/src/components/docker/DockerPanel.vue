@@ -91,6 +91,11 @@ async function onAction(fn: () => Promise<unknown>, ok: string) {
   }
 }
 
+/** 一键安装 Docker（确认弹窗回调，store 内完成后自动刷新） */
+function onInstall() {
+  void onAction(() => docker.installDocker(), 'Docker 安装完成')
+}
+
 /* ---------------- 运行对话框 ---------------- */
 
 const showRun = ref(false)
@@ -160,6 +165,15 @@ async function submitRun() {
         <div v-else-if="docker.errorKind !== 'none'" class="error-state">
           <NIcon :component="BrandDocker" :size="32" class="error-icon" />
           <p class="error-text">{{ errorText }}</p>
+          <NPopconfirm v-if="docker.errorKind === 'not-installed'" @positive-click="onInstall">
+            <template #trigger>
+              <NButton size="small" type="primary" :loading="docker.installing">
+                一键安装 Docker
+              </NButton>
+            </template>
+            将通过 get.docker.com 官方脚本安装 Docker（失败自动切换阿里云镜像），需要 root 或免密
+            sudo 权限。确认安装？
+          </NPopconfirm>
         </div>
 
         <!-- 容器列表 -->
