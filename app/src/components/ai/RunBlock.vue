@@ -2,12 +2,14 @@
 /**
  * RunBlock - AI 回复中的可执行命令卡片
  *
- * AI 按命令执行协议输出 ```run 块，此处渲染为命令卡片：
- * - 手动点击「执行」→ 危险命令先二次确认 → 命令写入绑定的终端窗口
- *   会话执行（用户可在终端看到全过程），回显自动捕获为输出
- * - 自动执行模式下由 agent store 直接触发，危险命令仍跳过留给手动确认
- * - 执行状态（agent store runStates）；输出不回显在面板，仅作为 tool 消息
- *   保留在对话中供 LLM 续问上下文使用
+ * AI 按命令执行协议输出 ```run 块，此处渲染为命令卡片，按三级分类处理：
+ * - 查询（只读）：点击直接执行；自动链路中始终自动执行
+ * - 修改：点击弹确认框；自动链路中仅「自动执行」开启时直接执行，否则逐条弹窗确认
+ * - 危险：永不自动执行，手动执行需二次确认
+ * 命令写入该聊天绑定的终端窗口会话执行（用户可在终端看到全过程），
+ * 回显自动捕获为输出；绑定会话断开时阻止执行并提示。
+ * 执行状态（agent store runStates）；输出不回显在面板，仅作为 tool 消息
+ * 保留在对话中供 LLM 续问上下文使用
  */
 import { computed } from 'vue'
 import { NButton, NIcon, useDialog, useMessage } from 'naive-ui'
@@ -29,7 +31,11 @@ const message = useMessage()
 
 const key = computed(() => `${props.messageId}#${props.index}`)
 const state = computed(() => agent.runStates[key.value])
-const danger = computed(() => agent.isDangerous(props.command))
+const level = computed(() => agent.classifyCommand(props.command))
+const danger = computed(() => level.value === 'danger')
+const levelLabel = computed(
+  () => ({ query: '查询', modify: '修改', danger: '危险' })[level.value],
+)
 
 async function copyCommand() {
   try {
@@ -41,8 +47,9 @@ async function copyCommand() {
 }
 
 async function run() {
-  if (!agent.sshSessionId) {
-    message.warning('未连接 SSH 服务器，请先连接')
+  const reason = agent.execBlockReason(props.messageId)
+  if (reason) {
+    message.warning(reason)
     return
   }
   if (danger.value) {
@@ -57,14 +64,26 @@ async function run() {
     })
     return
   }
+  if (level.value === 'modify') {
+    dialog.warning({
+      title: '修改类命令确认',
+      content: `该命令可能修改服务器状态：\n\n$ ${props.command}\n\n确定执行吗？`,
+      positiveText: '执行',
+      negativeText: '取消',
+      onPositiveClick: () => {
+        void agent.executeRun(props.messageId, props.index, props.command)
+      },
+    })
+    return
+  }
   await agent.executeRun(props.messageId, props.index, props.command)
 }
 </script>
 
 <template>
-  <div class="run-block" :class="{ danger }">
+  <div class="run-block" :class="[level]">
     <div class="run-head">
-      <span class="run-title">$ 终端命令</span>
+      <span class="run-title">$ 终端命令 <span class="run-level" :class="[level]">{{ levelLabel }}</span></span>
       <div class="run-actions">
         <NButton size="tiny" quaternary title="复制命令" @click="copyCommand">
           <template #icon><NIcon :component="Copy" :size="12" /></template>
@@ -86,6 +105,7 @@ async function run() {
     </div>
     <code class="run-cmd">{{ command }}</code>
     <div v-if="danger" class="run-warn">⚠ 高风险命令，执行前请确认影响</div>
+    <div v-else-if="level === 'modify'" class="run-warn modify">⚠ 修改类命令，可能变更服务器状态</div>
   </div>
 </template>
 
@@ -101,6 +121,9 @@ async function run() {
 }
 .run-block.danger {
   border-left-color: var(--danger);
+}
+.run-block.modify {
+  border-left-color: var(--warning);
 }
 .run-head {
   display: flex;
@@ -132,5 +155,29 @@ async function run() {
   margin-top: 6px;
   font-size: 11px;
   color: var(--warning);
+}
+.run-warn.modify {
+  color: var(--warning);
+  opacity: 0.85;
+}
+.run-level {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+.run-level.query {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.run-level.modify {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+.run-level.danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 </style>

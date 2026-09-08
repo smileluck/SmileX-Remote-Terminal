@@ -15,6 +15,9 @@ export interface AiContext {
   includeContext: boolean
 }
 
+/** 命令分级：query=只读查询（自动执行）/ modify=修改类（确认或自动模式）/ danger=危险（始终手动二次确认） */
+export type CommandLevel = 'query' | 'modify' | 'danger'
+
 /** run 命令块的执行状态（key: `${messageId}#${index}`） */
 export interface RunState {
   status: 'running' | 'done' | 'error'

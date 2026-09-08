@@ -11,7 +11,7 @@
  * 「新会话」另起一段对话，当前对话保留在历史中。
  */
 import { ref, computed, nextTick, watch, onMounted } from 'vue'
-import { NButton, NInput, NIcon, NSelect, NTag, NSwitch, NTooltip, useMessage } from 'naive-ui'
+import { NButton, NInput, NIcon, NSelect, NTag, NSwitch, NTooltip, useDialog, useMessage } from 'naive-ui'
 import { Send, PlayerStop, PlugConnected, Settings, MessagePlus, History } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 import { useTabsStore } from '@/stores/tabs'
@@ -28,6 +28,24 @@ const profiles = useProfilesStore()
 const ui = useUiStore()
 const llm = useLlmStore()
 const message = useMessage()
+const dialog = useDialog()
+
+/** 修改类命令确认：自动链路在 store 挂起，此处弹窗并回调用户选择 */
+watch(
+  () => agent.pendingConfirm,
+  (p) => {
+    if (!p) return
+    dialog.warning({
+      title: '执行修改类命令？',
+      content: `AI 请求执行可能修改服务器状态的命令：\n\n$ ${p.command}\n\n是否执行？（开启「自动执行」后此类命令将不再询问）`,
+      positiveText: '执行',
+      negativeText: '跳过',
+      onPositiveClick: () => agent.resolvePendingConfirm(true),
+      onNegativeClick: () => agent.resolvePendingConfirm(false),
+      onClose: () => agent.resolvePendingConfirm(false),
+    })
+  },
+)
 
 const input = ref('')
 const listRef = ref<HTMLElement | null>(null)
@@ -182,7 +200,7 @@ const visibleMessages = computed(() => agent.messages.filter((m) => m.role !== '
               <span class="auto-run-label">自动执行</span>
             </div>
           </template>
-          开启后 AI 生成的命令将直接在终端窗口执行并回传输出分析（危险命令仍需手动确认）
+          开启后查询类与修改类命令自动执行（危险命令仍需手动确认）；关闭时查询类仍自动执行，修改类逐条确认
         </NTooltip>
       </div>
     </header>
