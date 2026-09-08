@@ -649,6 +649,8 @@ defineExpose({ reload: load })
 }
 .fp-crumbs {
   display: flex;
+  flex: 1;
+  align-self: stretch;
   align-items: center;
   gap: 2px;
   min-width: 0;
