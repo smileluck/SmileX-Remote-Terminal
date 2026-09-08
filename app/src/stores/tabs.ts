@@ -75,6 +75,13 @@ export const useTabsStore = defineStore('tabs', () => {
     for (const tab of [...tabs.value]) closeTab(tab.id)
   }
 
+  /** 关闭除指定标签外的所有标签 */
+  function closeOtherTabs(id: string) {
+    for (const tab of [...tabs.value]) {
+      if (tab.id !== id) closeTab(tab.id)
+    }
+  }
+
   /** 切换活动标签 */
   function setActive(id: string) {
     activeId.value = id
@@ -95,6 +102,7 @@ export const useTabsStore = defineStore('tabs', () => {
     closeTabsToLeft,
     closeTabsToRight,
     closeAllTabs,
+    closeOtherTabs,
     setActive,
     updateTab,
   }

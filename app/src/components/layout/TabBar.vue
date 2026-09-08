@@ -3,7 +3,7 @@
  * TabBar - 主区顶部标签栏
  *
  * 横向展示已打开的 Tab，支持切换 / 关闭。
- * 右键菜单：关闭 / 关闭左侧会话 / 关闭右侧会话 / 关闭所有会话 / 重新连接。
+ * 右键菜单：关闭 / 关闭其他会话 / 关闭左侧会话 / 关闭右侧会话 / 关闭所有会话 / 重新连接。
  * 激活态：底部 2px 主色边框 + 背景提亮（VSCode 编辑器标签风）。
  */
 import { NIcon, NButton, NDropdown, useMessage } from 'naive-ui'
@@ -44,6 +44,7 @@ function menuOptions(tab: TabItem) {
   const idx = tabs.tabs.findIndex((t) => t.id === tab.id)
   return [
     { label: '关闭', key: 'close' },
+    { label: '关闭其他会话', key: 'close-others', disabled: tabs.tabs.length <= 1 },
     { label: '关闭左侧会话', key: 'close-left', disabled: idx <= 0 },
     { label: '关闭右侧会话', key: 'close-right', disabled: idx >= tabs.tabs.length - 1 },
     { label: '关闭所有会话', key: 'close-all' },
@@ -59,6 +60,9 @@ function onMenuSelect(key: string) {
   switch (key) {
     case 'close':
       tabs.closeTab(tab.id)
+      break
+    case 'close-others':
+      tabs.closeOtherTabs(tab.id)
       break
     case 'close-left':
       tabs.closeTabsToLeft(tab.id)

@@ -11,6 +11,7 @@ import { computed, ref, watch, onMounted } from 'vue'
 import { NSelect, NTabs, NTabPane } from 'naive-ui'
 import { useMonitorStore } from '@/stores/monitor'
 import { useTabsStore } from '@/stores/tabs'
+import { segmentTabThemeOverrides } from '@/components/common/segmentTabTheme'
 import GeneralTab from './tabs/GeneralTab.vue'
 import CpuTab from './tabs/CpuTab.vue'
 import MemoryTab from './tabs/MemoryTab.vue'
@@ -58,7 +59,12 @@ const activeTab = ref('general')
     </div>
 
     <template v-if="monitor.latest">
-      <NTabs v-model:value="activeTab" type="segment" size="small">
+      <NTabs
+        v-model:value="activeTab"
+        type="segment"
+        size="small"
+        :theme-overrides="segmentTabThemeOverrides"
+      >
         <NTabPane name="general" tab="通用">
           <GeneralTab />
         </NTabPane>

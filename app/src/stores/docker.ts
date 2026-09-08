@@ -67,6 +67,9 @@ export const useDockerStore = defineStore('docker', () => {
         const e = failed.reason
         errorKind.value = e instanceof DockerError ? e.kind : 'unknown'
         errorMessage.value = e instanceof Error ? e.message : String(e)
+        // 失败时清空列表，避免展示上一个会话/环境的残留数据
+        containers.value = []
+        images.value = []
       } else {
         errorKind.value = 'none'
         errorMessage.value = ''

@@ -38,6 +38,7 @@ import {
 } from '@vicons/tabler'
 import { useDockerStore } from '@/stores/docker'
 import { useTabsStore } from '@/stores/tabs'
+import { segmentTabThemeOverrides } from '@/components/common/segmentTabTheme'
 import type { DockerContainer, DockerImage, RunContainerOptions } from '@/types/docker'
 
 const docker = useDockerStore()
@@ -55,6 +56,9 @@ watch(
 
 /** 当前页签 */
 const activeTab = ref<'containers' | 'images'>('containers')
+
+/** 压缩 segment 页签（共享主题变量，见 common/segmentTabTheme） */
+const tabsThemeOverrides = segmentTabThemeOverrides
 
 /** 环境错误提示文案 */
 const errorText = computed(() => {
@@ -127,7 +131,13 @@ async function submitRun() {
 <template>
   <div class="docker-panel">
     <div class="toolbar">
-      <NTabs v-model:value="activeTab" type="segment" size="small" class="tabs">
+      <NTabs
+        v-model:value="activeTab"
+        type="segment"
+        size="small"
+        class="tabs"
+        :theme-overrides="tabsThemeOverrides"
+      >
         <NTabPane name="containers" :tab="`容器（${docker.containers.length}）`" />
         <NTabPane name="images" :tab="`镜像（${docker.images.length}）`" />
       </NTabs>
@@ -329,6 +339,16 @@ async function submitRun() {
 }
 .tabs {
   flex: 1;
+  min-width: 0;
+}
+/* 压缩 segment 页签轨道，与刷新按钮高度对齐 */
+.tabs :deep(.n-tabs-rail) {
+  padding: 2px;
+}
+/* 面板内容在 NTabs 外自渲染：隐藏空 pane 区域（其 8px 上 padding 会把页签轨顶偏） */
+.tabs :deep(.n-tabs-pane-wrapper),
+.tabs :deep(.n-tab-pane) {
+  display: none;
 }
 .panel-content {
   display: flex;

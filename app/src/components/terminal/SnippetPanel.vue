@@ -45,6 +45,7 @@ import {
 } from '@vicons/tabler'
 import { useSnippetsStore, type SnippetGroup, type ServiceStatus } from '@/stores/snippets'
 import { useTabsStore } from '@/stores/tabs'
+import { segmentTabThemeOverrides } from '@/components/common/segmentTabTheme'
 import type { CommandSnippet, SnippetKind } from '@/services/snippets'
 
 const store = useSnippetsStore()
@@ -434,6 +435,7 @@ async function applyDrop(
         size="small"
         :animated="false"
         class="sp-tabs"
+        :theme-overrides="segmentTabThemeOverrides"
       >
         <NTab name="command" tab="命令" />
         <NTab name="service" tab="服务" />
