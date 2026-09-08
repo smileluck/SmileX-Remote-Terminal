@@ -13,7 +13,12 @@ export interface AiContext {
   sessionId?: string
   terminalOutput?: string
   includeContext: boolean
+  /** 计划模式：先输出执行计划待用户确认，再逐步执行 */
+  planMode?: boolean
 }
+
+/** 计划块的确认状态（key: `${messageId}#${index}`，规则同 runStates） */
+export type PlanState = 'pending' | 'confirmed' | 'cancelled'
 
 /** 命令分级：query=只读查询（自动执行）/ modify=修改类（确认或自动模式）/ danger=危险（始终手动二次确认） */
 export type CommandLevel = 'query' | 'modify' | 'danger'

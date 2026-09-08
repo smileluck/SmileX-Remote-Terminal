@@ -15,11 +15,15 @@ import type {
   AiTokenPayload,
   AiDonePayload,
   CommandLevel,
+  PlanState,
   RunState,
 } from '@/types/ai'
 
 /** ```run 块解析（与 MessageBubble 的解析规则保持一致） */
 const RUN_RE = /```run\s*\n([\s\S]*?)```/g
+
+/** ```plan 块解析（计划模式；与 MessageBubble 的解析规则保持一致） */
+const PLAN_RE = /```plan\s*\n([\s\S]*?)```/g
 
 /** 危险命令特征：自动模式跳过，手动执行需二次确认 */
 const DANGER_PATTERNS: RegExp[] = [
@@ -104,6 +108,8 @@ function classifyCommand(cmd: string): CommandLevel {
 
 /** 自动执行模式持久化键 */
 const AUTORUN_KEY = 'smilex-agent-autorun'
+/** 计划模式持久化键 */
+const PLANMODE_KEY = 'smilex-agent-planmode'
 /** 单条命令回传 LLM 的输出截断上限 */
 const MAX_EXEC_OUTPUT = 8 * 1024
 /** 一次用户提问后自动执行的链路上限（防止 agent 循环失控） */
@@ -133,6 +139,8 @@ function genId(prefix: string): string {
  *   上下文注入与命令执行均解析该聊天的绑定会话（而非跟随当前激活 tab），
  *   绑定的服务器断开后阻止执行并提示，绝不静默打到别的机器；
  *   仅无绑定的通用聊天回退到当前激活的 SSH 会话
+ * - 计划模式（planMode）：开启后 AI 先输出 ```plan 块执行计划，用户确认后
+ *   前端回传「计划已确认 + 计划原文」，AI 再按计划逐步输出 run 块执行
  * - 命令分级执行：```run 块按 查询（只读，自动执行）/ 修改（自动模式直接执行，
  *   否则逐条弹窗确认）/ 危险（始终手动二次确认）三级处理；
  *   命令写入绑定的终端窗口会话执行（对用户可见、保留会话状态），
@@ -173,8 +181,12 @@ export const useAgentStore = defineStore('agent', () => {
   })
   /** 自动执行模式（信任模式：修改类命令不再逐条确认；查询类始终自动执行，危险命令仍跳过） */
   const autoRun = ref(localStorage.getItem(AUTORUN_KEY) === '1')
+  /** 计划模式（先出执行计划，用户确认后再逐步执行） */
+  const planMode = ref(localStorage.getItem(PLANMODE_KEY) === '1')
   /** run 块执行状态：`${messageId}#${index}` → RunState */
   const runStates = ref<Record<string, RunState>>({})
+  /** plan 块确认状态：`${messageId}#${index}` → PlanState（无记录 = pending 待确认） */
+  const planStates = ref<Record<string, PlanState>>({})
 
   /** 修改类命令待确认（自动链路挂起点，由 ChatPanel 呈现确认框并回调） */
   const pendingConfirm = ref<{
@@ -194,6 +206,14 @@ export const useAgentStore = defineStore('agent', () => {
   watch(autoRun, (v) => {
     try {
       localStorage.setItem(AUTORUN_KEY, v ? '1' : '0')
+    } catch {
+      /* 存储不可用时忽略 */
+    }
+  })
+
+  watch(planMode, (v) => {
+    try {
+      localStorage.setItem(PLANMODE_KEY, v ? '1' : '0')
     } catch {
       /* 存储不可用时忽略 */
     }
@@ -423,7 +443,11 @@ export const useAgentStore = defineStore('agent', () => {
   function buildCtx(chatId: string): AiContext {
     const { sessionId } = resolveSessionForChat(chatId)
     const use = includeContext.value && !!sessionId
-    return { sessionId: use ? sessionId! : undefined, includeContext: use }
+    return {
+      sessionId: use ? sessionId! : undefined,
+      includeContext: use,
+      planMode: planMode.value,
+    }
   }
 
   /** 消息落库（fire-and-forget；返回的会话用于同步列表排序与标题） */
@@ -549,12 +573,44 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  /**
+   * 确认计划：置 confirmed，把计划原文回传给 LLM 开始逐步执行
+   * （回传原文而非依赖模型回忆上一轮；执行链路计数重置）
+   */
+  async function confirmPlan(messageId: string, index: number, planText: string) {
+    const chatId = findChatIdOf(messageId) ?? activeChatId.value
+    if (!chatId || generatingChatId.value) return
+    const key = `${messageId}#${index}`
+    if (planStates.value[key] && planStates.value[key] !== 'pending') return
+    planStates.value = { ...planStates.value, [key]: 'confirmed' }
+    autoChain = 0
+    await llmSend(chatId, `[计划已确认] 请按以下计划逐步执行：\n${planText}`)
+  }
+
+  /** 取消计划：纯本地状态，不触发新一轮生成 */
+  function cancelPlan(messageId: string, index: number) {
+    const key = `${messageId}#${index}`
+    if (planStates.value[key] && planStates.value[key] !== 'pending') return
+    planStates.value = { ...planStates.value, [key]: 'cancelled' }
+  }
+
+  /** 消息内是否含未确认的 plan 块（计划模式兜底：计划未确认前不自动执行其中的 run 块） */
+  function hasUnconfirmedPlan(message: ChatMessage): boolean {
+    const plans = [...stripThink(message.content).matchAll(PLAN_RE)]
+    return plans.some((_, i) => {
+      const st = planStates.value[`${message.id}#${i}`]
+      return !st || st === 'pending'
+    })
+  }
+
   /** 自动链路：执行回复中第一条未执行的 run 命令（查询直接执行，修改类按自动模式/弹窗确认，危险跳过留给手动） */
   async function autoStep(chatId: string, message: ChatMessage) {
     if (autoChain >= MAX_AUTO_CHAIN) {
       error.value = `自动执行已达上限（${MAX_AUTO_CHAIN} 条），剩余命令请手动执行`
       return
     }
+    // 计划模式兜底：计划阶段不应有 run 块；若有且计划未确认，不自动执行
+    if (planMode.value && hasUnconfirmedPlan(message)) return
     // 思考段内的内容不参与命令解析
     const cmds = [...stripThink(message.content).matchAll(RUN_RE)].map((m) => m[1].trim())
     for (let i = 0; i < cmds.length; i++) {
@@ -601,13 +657,17 @@ export const useAgentStore = defineStore('agent', () => {
     includeContext,
     sshSessionId,
     autoRun,
+    planMode,
     runStates,
+    planStates,
     pendingConfirm,
     isDangerous,
     classifyCommand,
     resolveSessionForChat,
     execBlockReason,
     resolvePendingConfirm,
+    confirmPlan,
+    cancelPlan,
     newChat,
     switchChat,
     deleteChat,

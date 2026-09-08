@@ -24,6 +24,9 @@ pub struct Context {
     pub server_info: Option<String>,
     /// 用户是否勾选附带上下文
     pub include_context: bool,
+    /// 计划模式：先输出执行计划待用户确认，再逐步执行
+    #[serde(default)]
+    pub plan_mode: bool,
 }
 
 impl Context {
@@ -35,6 +38,7 @@ impl Context {
             metrics_summary: None,
             server_info: None,
             include_context: false,
+            plan_mode: false,
         }
     }
 
@@ -46,18 +50,26 @@ impl Context {
             metrics_summary: None,
             server_info: None,
             include_context: true,
+            plan_mode: false,
         }
     }
 
     /// 组装进 system prompt 的文本
     pub fn to_system_prompt(&self) -> Option<String> {
-        if !self.include_context {
+        // 计划模式协议不依赖运维上下文：关掉上下文也可能要计划模式
+        if !self.include_context && !self.plan_mode {
             return None;
         }
         let mut prompt = String::from(
             "你是一位资深运维工程师助手。请结合以下用户当前环境上下文回答问题。",
         );
         let mut has_any = false;
+        if self.plan_mode {
+            prompt.push_str(
+                "\n\n## 计划模式\n当前处于计划模式。收到任务后：先分析并输出一个 ```plan 代码块，内容为分步骤执行计划（每步写明目的和将执行的命令），并简述风险点；此阶段禁止输出 ```run 块。用户确认计划后你会收到「计划已确认」的消息，届时再按计划逐步输出 ```run 块执行，每步仍遵守命令执行协议的分级要求。如果任务只是咨询问答、无需在服务器上操作，直接回答即可，不必出计划。",
+            );
+            has_any = true;
+        }
         if let Some(s) = self.server_info.as_ref() {
             prompt.push_str(&format!("\n\n## 目标服务器\n`{}`", s));
             prompt.push_str(

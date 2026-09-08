@@ -196,6 +196,15 @@ const visibleMessages = computed(() => agent.messages.filter((m) => m.role !== '
         <NTooltip placement="bottom">
           <template #trigger>
             <div class="auto-run">
+              <NSwitch v-model:value="agent.planMode" size="small" />
+              <span class="auto-run-label">计划模式</span>
+            </div>
+          </template>
+          开启后 AI 先输出执行计划，经你确认后再逐步执行命令
+        </NTooltip>
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <div class="auto-run">
               <NSwitch v-model:value="agent.autoRun" size="small" />
               <span class="auto-run-label">自动执行</span>
             </div>

@@ -4,6 +4,7 @@
  *
  * - user：右对齐纯文本
  * - assistant：左对齐 Markdown 渲染；```run 块渲染为可执行命令卡片（RunBlock），
+ *   ```plan 块渲染为可确认的执行计划卡片（PlanBlock），
  *   ```bash/```sh 等 shell 代码块渲染为可复制/可执行的 CodeBlock
  * - tool：命令执行结果，不在面板回显（由 ChatPanel 过滤），仅作为 LLM 续问上下文
  * 深色主题，代码高亮使用 github-dark。
@@ -15,6 +16,7 @@ import 'highlight.js/styles/github-dark.css'
 import type { ChatMessage } from '@/types/ai'
 import { splitThink } from '@/utils/think'
 import RunBlock from './RunBlock.vue'
+import PlanBlock from './PlanBlock.vue'
 import CodeBlock from './CodeBlock.vue'
 
 const props = defineProps<{ message: ChatMessage }>()
@@ -37,13 +39,13 @@ const md = new MarkdownIt({
   },
 })
 
-/** 围栏块标记：run = agent 命令执行协议；bash/sh/shell/zsh = 可复制的 shell 代码块（流式生成中只匹配已闭合的块） */
-const BLOCK_RE = /```(run|bash|sh|shell|zsh)\s*\n([\s\S]*?)```/g
+/** 围栏块标记：run = agent 命令执行协议；plan = 计划模式执行计划；bash/sh/shell/zsh = 可复制的 shell 代码块（流式生成中只匹配已闭合的块） */
+const BLOCK_RE = /```(run|plan|bash|sh|shell|zsh)\s*\n([\s\S]*?)```/g
 
 interface Segment {
-  type: 'md' | 'run' | 'code' | 'think'
+  type: 'md' | 'run' | 'plan' | 'code' | 'think'
   text: string
-  /** run 段在消息内的序号（与 agent store runStates key 对应） */
+  /** run/plan 段在消息内的序号（分别与 agent store runStates / planStates key 对应） */
   index: number
   /** code 段的围栏语言 */
   lang?: string
@@ -51,12 +53,13 @@ interface Segment {
   closed?: boolean
 }
 
-/** 把 assistant 消息拆成 think 折叠段、markdown 段、run 命令块与 shell 代码块（保持顺序） */
+/** 把 assistant 消息拆成 think 折叠段、markdown 段、run 命令块、plan 计划块与 shell 代码块（保持顺序） */
 const segments = computed<Segment[]>(() => {
   if (props.message.role !== 'assistant') return []
   const content = props.message.content || ''
   const list: Segment[] = []
   let runIdx = 0
+  let planIdx = 0
   for (const part of splitThink(content)) {
     if (part.type === 'think') {
       list.push({ type: 'think', text: part.text, index: -1, closed: part.closed })
@@ -69,6 +72,9 @@ const segments = computed<Segment[]>(() => {
       if (m[1] === 'run') {
         list.push({ type: 'run', text: m[2].trim(), index: runIdx })
         runIdx++
+      } else if (m[1] === 'plan') {
+        list.push({ type: 'plan', text: m[2].trim(), index: planIdx })
+        planIdx++
       } else {
         list.push({ type: 'code', text: m[2].replace(/\n$/, ''), lang: m[1], index: -1 })
       }
@@ -105,6 +111,13 @@ function renderMd(text: string): string {
             :message-id="message.id"
             :index="seg.index"
             :command="seg.text"
+            :disabled="message.pending"
+          />
+          <PlanBlock
+            v-else-if="seg.type === 'plan'"
+            :message-id="message.id"
+            :index="seg.index"
+            :content="seg.text"
             :disabled="message.pending"
           />
           <CodeBlock
