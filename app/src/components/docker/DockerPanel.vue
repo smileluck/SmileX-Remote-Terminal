@@ -3,6 +3,8 @@
  * DockerPanel - Docker 管理面板（右栏页签）
  *
  * - 页签：容器 / 镜像（NTabs segment，骨架同 MonitorDashboard）
+ * - 筛选：工具栏关键字输入，大小写不敏感子串匹配，作用于当前页签列表
+ *   （容器匹配 名称/镜像/状态/端口，镜像匹配 repo/tag/ID）
  * - 容器：名称 / 关联镜像 / 状态 / 端口；操作：启动、停止、重启、删除（运行中强制删除）
  * - 镜像：repo:tag / ID / 大小 / 创建时间；操作：运行（参数对话框）、删除
  * - 数据来自 docker store（静默 exec 通道轮询，面板挂载期间 10s 一轮）
@@ -34,6 +36,7 @@ import {
   Trash,
   Plus,
   X,
+  Search,
   BrandDocker,
 } from '@vicons/tabler'
 import { useDockerStore } from '@/stores/docker'
@@ -56,6 +59,27 @@ watch(
 
 /** 当前页签 */
 const activeTab = ref<'containers' | 'images'>('containers')
+
+/** 筛选关键字（大小写不敏感，子串匹配；作用于当前页签的列表） */
+const keyword = ref('')
+
+/** 容器筛选：名称 / 镜像 / 状态 / 端口 */
+const filteredContainers = computed(() => {
+  const k = keyword.value.trim().toLowerCase()
+  if (!k) return docker.containers
+  return docker.containers.filter((c) =>
+    [c.name, c.image, c.status, c.ports].some((f) => f.toLowerCase().includes(k)),
+  )
+})
+
+/** 镜像筛选：repo / tag / ID */
+const filteredImages = computed(() => {
+  const k = keyword.value.trim().toLowerCase()
+  if (!k) return docker.images
+  return docker.images.filter((img) =>
+    [img.repository, img.tag, img.id].some((f) => f.toLowerCase().includes(k)),
+  )
+})
 
 /** 压缩 segment 页签（共享主题变量，见 common/segmentTabTheme） */
 const tabsThemeOverrides = segmentTabThemeOverrides
@@ -146,6 +170,17 @@ async function submitRun() {
         <NTabPane name="containers" :tab="`容器（${docker.containers.length}）`" />
         <NTabPane name="images" :tab="`镜像（${docker.images.length}）`" />
       </NTabs>
+      <NInput
+        v-model:value="keyword"
+        size="small"
+        clearable
+        :placeholder="activeTab === 'containers' ? '筛选容器' : '筛选镜像'"
+        class="filter-input"
+      >
+        <template #prefix>
+          <NIcon :component="Search" :size="13" />
+        </template>
+      </NInput>
       <NTooltip>
         <template #trigger>
           <NButton quaternary circle size="small" :loading="docker.loading" @click="docker.refresh()">
@@ -178,8 +213,12 @@ async function submitRun() {
 
         <!-- 容器列表 -->
         <template v-else-if="activeTab === 'containers'">
-          <NEmpty v-if="!docker.containers.length" description="暂无容器" class="empty" />
-          <div v-for="c in docker.containers" :key="c.id" class="item">
+          <NEmpty
+            v-if="!filteredContainers.length"
+            :description="docker.containers.length ? '无匹配的容器' : '暂无容器'"
+            class="empty"
+          />
+          <div v-for="c in filteredContainers" :key="c.id" class="item">
             <div class="item-main">
               <div class="item-title">
                 <span class="dot" :class="{ running: isRunning(c) }" />
@@ -257,8 +296,12 @@ async function submitRun() {
 
         <!-- 镜像列表 -->
         <template v-else>
-          <NEmpty v-if="!docker.images.length" description="暂无镜像" class="empty" />
-          <div v-for="img in docker.images" :key="img.id + img.repository + img.tag" class="item">
+          <NEmpty
+            v-if="!filteredImages.length"
+            :description="docker.images.length ? '无匹配的镜像' : '暂无镜像'"
+            class="empty"
+          />
+          <div v-for="img in filteredImages" :key="img.id + img.repository + img.tag" class="item">
             <div class="item-main">
               <div class="item-title">
                 <span class="name" :title="`${img.repository}:${img.tag}`">
@@ -373,6 +416,10 @@ async function submitRun() {
 .tabs {
   flex: 1;
   min-width: 0;
+}
+.filter-input {
+  width: 140px;
+  flex-shrink: 0;
 }
 /* 压缩 segment 页签轨道，与刷新按钮高度对齐 */
 .tabs :deep(.n-tabs-rail) {
