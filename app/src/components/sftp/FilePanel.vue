@@ -31,6 +31,8 @@ import {
   Edit,
   FolderPlus,
   ChevronRight,
+  List,
+  ListDetails,
 } from '@vicons/tabler'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -40,6 +42,7 @@ import type { SftpEntry } from '@/services/sftp'
 import * as sessionService from '@/services/session'
 import { connectProfile } from '@/composables/useSshConnect'
 import { shellQuote } from '@/utils/shell'
+import { fmtTime, fmtMode } from '@/utils/format'
 import { useTransferStore } from '@/stores/transfer'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
@@ -507,6 +510,17 @@ function fmtSize(n: number): string {
   return `${(n / 1024 ** 3).toFixed(1)} GB`
 }
 
+/** 详细视图 meta 行：大小 · 修改时间 · 权限（符号串 + 八进制） */
+function metaLine(entry: SftpEntry): string {
+  const size = entry.is_dir ? '—' : fmtSize(entry.size)
+  const time = entry.mtime ? fmtTime(entry.mtime) : '—'
+  const perm =
+    entry.permissions != null
+      ? `${fmtMode(entry.permissions)} ${(entry.permissions & 0o777).toString(8).padStart(3, '0')}`
+      : '—'
+  return `${size} · ${time} · ${perm}`
+}
+
 defineExpose({ reload: load })
 </script>
 
@@ -549,6 +563,19 @@ defineExpose({ reload: load })
         </template>
       </div>
       <div class="fp-actions">
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <NButton
+              quaternary
+              circle
+              size="tiny"
+              @click="layout.filesView = layout.filesView === 'simple' ? 'detail' : 'simple'"
+            >
+              <NIcon :component="layout.filesView === 'simple' ? ListDetails : List" />
+            </NButton>
+          </template>
+          {{ layout.filesView === 'simple' ? '切换到详细视图' : '切换到简洁视图' }}
+        </NTooltip>
         <NTooltip placement="bottom">
           <template #trigger>
             <NButton quaternary circle size="tiny" @click="load()">
@@ -602,38 +629,46 @@ defineExpose({ reload: load })
         v-for="(entry, i) in entries"
         :key="entry.path"
         class="fp-row"
+        :class="{ detail: layout.filesView === 'detail' }"
         @dblclick="enter(entry)"
         @contextmenu.prevent="(e: MouseEvent) => onContextMenu(e, entry)"
       >
-        <NIcon
-          :component="entry.is_dir ? Folder : File"
-          class="fp-icon"
-          :class="{ dir: entry.is_dir }"
-        />
-        <template v-if="renamingIndex === i">
-          <NInput
-            v-model:value="renameValue"
-            size="tiny"
-            autofocus
-            @keyup.enter="confirmRename"
-            @blur="confirmRename"
+        <div class="fp-line">
+          <NIcon
+            :component="entry.is_dir ? Folder : File"
+            class="fp-icon"
+            :class="{ dir: entry.is_dir }"
           />
-        </template>
-        <template v-else>
-          <span class="fp-name" :title="entry.name" @click="enter(entry)">{{ entry.name }}</span>
-          <span class="fp-size">{{ entry.is_dir ? '—' : fmtSize(entry.size) }}</span>
-          <span class="fp-ops">
-            <NButton quaternary circle size="tiny" @click.stop="handleDownload(entry)">
-              <NIcon :component="Download" />
-            </NButton>
-            <NButton quaternary circle size="tiny" @click.stop="startRename(entry)">
-              <NIcon :component="Edit" />
-            </NButton>
-            <NButton quaternary circle size="tiny" @click.stop="handleRemove(entry)">
-              <NIcon :component="Trash" />
-            </NButton>
-          </span>
-        </template>
+          <template v-if="renamingIndex === i">
+            <NInput
+              v-model:value="renameValue"
+              size="tiny"
+              autofocus
+              @keyup.enter="confirmRename"
+              @blur="confirmRename"
+            />
+          </template>
+          <template v-else>
+            <span class="fp-name" :title="entry.name" @click="enter(entry)">{{ entry.name }}</span>
+            <span v-if="layout.filesView === 'simple'" class="fp-size">
+              {{ entry.is_dir ? '—' : fmtSize(entry.size) }}
+            </span>
+            <span class="fp-ops">
+              <NButton quaternary circle size="tiny" @click.stop="handleDownload(entry)">
+                <NIcon :component="Download" />
+              </NButton>
+              <NButton quaternary circle size="tiny" @click.stop="startRename(entry)">
+                <NIcon :component="Edit" />
+              </NButton>
+              <NButton quaternary circle size="tiny" @click.stop="handleRemove(entry)">
+                <NIcon :component="Trash" />
+              </NButton>
+            </span>
+          </template>
+        </div>
+        <div v-if="layout.filesView === 'detail' && renamingIndex !== i" class="fp-meta" :title="metaLine(entry)">
+          {{ metaLine(entry) }}
+        </div>
       </div>
       <!-- 拖拽上传遮罩 -->
       <div v-if="dragOver" class="fp-dropzone">
@@ -889,6 +924,26 @@ defineExpose({ reload: load })
 }
 .fp-row:hover .fp-size {
   display: none;
+}
+/* 详细视图：两行式（首行 图标+名称+操作，次行 meta 信息） */
+.fp-row.detail {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+.fp-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.fp-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding-left: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .fp-dropzone {
   position: absolute;

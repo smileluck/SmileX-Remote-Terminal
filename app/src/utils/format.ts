@@ -25,3 +25,22 @@ export function fmtUptime(s: number): string {
   if (h > 0) return `${h} 小时 ${m} 分`
   return `${m} 分`
 }
+
+/** Unix 秒 → 'YYYY-MM-DD HH:mm'（本地时区） */
+export function fmtTime(unixSec: number): string {
+  const d = new Date(unixSec * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** 权限位 → 符号串（如 'drwxr-xr-x'；type 位 d/-/l） */
+export function fmtMode(perms: number): string {
+  const type = perms & 0o170000
+  const t = type === 0o040000 ? 'd' : type === 0o120000 ? 'l' : '-'
+  let s = ''
+  for (let shift = 6; shift >= 0; shift -= 3) {
+    const v = (perms >> shift) & 7
+    s += (v & 4 ? 'r' : '-') + (v & 2 ? 'w' : '-') + (v & 1 ? 'x' : '-')
+  }
+  return t + s
+}

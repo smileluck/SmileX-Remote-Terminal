@@ -16,6 +16,7 @@ interface LayoutState {
   monitorWidth: number
   rightTab: RightPanelTab
   filesWidth: number
+  filesView: 'simple' | 'detail'
 }
 
 /** localStorage 读取（容错：损坏时回退默认值） */
@@ -27,6 +28,7 @@ function loadState(): LayoutState {
     monitorWidth: 320,
     rightTab: 'monitor',
     filesWidth: 240,
+    filesView: 'simple',
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -60,6 +62,8 @@ export const useLayoutStore = defineStore('layout', () => {
   const rightTab = ref<RightPanelTab>(initial.rightTab)
   /** 终端文件面板（SFTP）宽度（px，拖拽调宽） */
   const filesWidth = ref(initial.filesWidth)
+  /** 终端文件面板视图（简洁 / 详细） */
+  const filesView = ref<'simple' | 'detail'>(initial.filesView)
   /** 终端文件面板（SFTP）是否打开（与右栏三面板互斥；不持久化） */
   const filesVisible = ref(false)
 
@@ -118,7 +122,7 @@ export const useLayoutStore = defineStore('layout', () => {
 
   // 持久化（watch 深度变化写入 localStorage）
   watch(
-    [sidebarCollapsed, sidebarTab, monitorVisible, monitorWidth, rightTab, filesWidth],
+    [sidebarCollapsed, sidebarTab, monitorVisible, monitorWidth, rightTab, filesWidth, filesView],
     () => {
       try {
         localStorage.setItem(
@@ -130,6 +134,7 @@ export const useLayoutStore = defineStore('layout', () => {
             monitorWidth: monitorWidth.value,
             rightTab: rightTab.value,
             filesWidth: filesWidth.value,
+            filesView: filesView.value,
           }),
         )
       } catch {
@@ -146,6 +151,7 @@ export const useLayoutStore = defineStore('layout', () => {
     monitorWidth,
     rightTab,
     filesWidth,
+    filesView,
     filesVisible,
     toggleSidebar,
     toggleSidebarTab,
