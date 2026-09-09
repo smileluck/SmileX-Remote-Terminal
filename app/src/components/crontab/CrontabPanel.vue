@@ -9,7 +9,7 @@
  * - 不轮询：挂载 / 切换会话 / 操作完成后刷新，另有手动刷新按钮
  * - 停用 = 行首标记注释（见 services/crontab DISABLE_MARK），可逆
  */
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import {
   NButton,
   NIcon,
@@ -29,6 +29,7 @@ import {
 import { Refresh, Plus, Edit, Trash, CalendarTime } from '@vicons/tabler'
 import { useCrontabStore } from '@/stores/crontab'
 import { useTabsStore } from '@/stores/tabs'
+import { nextRuns } from '@/utils/cron'
 import type { CronLine } from '@/types/crontab'
 
 const crontab = useCrontabStore()
@@ -156,6 +157,19 @@ function parseSchedule(s: string) {
   } else {
     scheduleMode.value = 'custom'
   }
+}
+
+/** 自定义表达式的未来 5 次执行时间（null=非法，[]=@reboot） */
+const nextRunTimes = computed(() => {
+  if (scheduleMode.value !== 'custom') return null
+  const s = formSchedule.value.trim()
+  if (!s) return null
+  return nextRuns(s, 5)
+})
+
+function fmtDateTime(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 function openCreate() {
@@ -336,6 +350,14 @@ async function submitForm() {
               size="small"
               class="schedule-raw"
             />
+            <div v-if="scheduleMode === 'custom' && formSchedule.trim()" class="next-runs">
+              <span v-if="nextRunTimes === null">表达式无法解析，请检查格式</span>
+              <span v-else-if="nextRunTimes.length === 0">@reboot：随系统启动时执行一次</span>
+              <template v-else>
+                <div class="next-runs-title">未来 5 次执行时间（本地时区）：</div>
+                <div v-for="(t, i) in nextRunTimes" :key="i" class="next-run">{{ fmtDateTime(t) }}</div>
+              </template>
+            </div>
           </div>
           <template #feedback>
             <span v-if="scheduleMode === 'custom'" class="hint">
@@ -484,6 +506,16 @@ async function submitForm() {
   width: 84px;
 }
 .schedule-raw {
+  font-family: var(--font-mono);
+}
+.next-runs {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.next-run {
   font-family: var(--font-mono);
 }
 .dialog-footer {
