@@ -157,7 +157,6 @@ body,
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 12px;
   line-height: 22px;
-  pointer-events: none;
 }
 .autocomplete-item {
   padding: 0 8px;
@@ -166,8 +165,9 @@ body,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
 }
-.autocomplete-item.active {
+.autocomplete-item:hover {
   background: var(--primary, #4f8cff);
   color: #fff;
 }

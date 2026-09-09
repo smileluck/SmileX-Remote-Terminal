@@ -3,7 +3,11 @@
  *
  * - 连接后经 `session_exec("compgen -c | sort -u")` 拉取远端命令表（按 sessionId 缓存）
  * - 叠加本地命令片段/历史的首词
- * - 浮层候选列表：输入时更新，Tab/→ 补全，↑↓ 选择，Esc 关闭
+ * - 浮层候选列表：仅输入可打印字符时更新，点击候选补全
+ *
+ * 注意：本类不拦截任何按键（Tab/方向键/Esc 一律透传给 shell）。
+ * shell 自带 Tab 补全与 ↑↓ 历史翻找，拦截会导致按键被吞、补全错乱；
+ * 控制序列到达时 shell 端行内容已不可知，直接清空行缓冲并收起浮层。
  *
  * 实现为独立类（非 composable）：一个实例绑定一个 xterm + 一个会话。
  */
@@ -56,7 +60,6 @@ export class Suggester {
   private commands: Set<string> = new Set()
   /** 当前候选（已按前缀过滤） */
   private candidates: string[] = []
-  private selected = 0
   /** 当前输入行（首词 = 补全目标） */
   private line = ''
 
@@ -82,42 +85,27 @@ export class Suggester {
     }
     if (data === '\u007f') {
       this.line = this.line.slice(0, -1)
-    } else if (data.length === 1 && data >= ' ') {
-      this.line += data
-    } else {
-      // 控制序列（方向键/Tab 等）：交给 handleKey 处理，不更新
+      this.update()
       return this.candidates.length > 0
     }
-    this.update()
-    return this.candidates.length > 0
-  }
-
-  /**
-   * 拦截补全相关按键；返回 true 表示已消费（不再转发到远端）。
-   * - Tab / →：补全选中候选
-   * - ↑/↓：切换选中
-   * - Esc：关闭浮层
-   */
-  handleKey(data: string): boolean {
-    if (!this.candidates.length) return false
-    if (data === '\t' || data === '\x1b[C') {
-      this.complete()
-      return true
+    // 纯可打印字符（含 IME 组字/整段粘贴）：追加并刷新候选
+    let printable = data.length > 0
+    for (const ch of data) {
+      const c = ch.charCodeAt(0)
+      if (c < 0x20 || c === 0x7f) {
+        printable = false
+        break
+      }
     }
-    if (data === '\x1b[A') {
-      this.selected = (this.selected - 1 + this.candidates.length) % this.candidates.length
-      this.render()
-      return true
+    if (printable) {
+      this.line += data
+      this.update()
+      return this.candidates.length > 0
     }
-    if (data === '\x1b[B') {
-      this.selected = (this.selected + 1) % this.candidates.length
-      this.render()
-      return true
-    }
-    if (data === '\x1b') {
-      this.hide()
-      return true
-    }
+    // 控制序列（方向键/Tab/Esc 等）：交给 shell 处理，行内容已不可知，
+    // 清空缓冲并收起浮层，按键一律透传不拦截
+    this.line = ''
+    this.hide()
     return false
   }
 
@@ -134,25 +122,22 @@ export class Suggester {
       .filter((c) => c.toLowerCase().startsWith(lower) && c !== word)
       .sort()
       .slice(0, 8)
-    this.selected = 0
     if (this.candidates.length) this.render()
     else this.hide()
   }
 
-  /** 补全：把当前首词替换为选中候选（发送差量字符） */
-  private complete() {
-    const cand = this.candidates[this.selected]
+  /** 点击补全：把当前首词替换为指定候选（发送差量字符） */
+  private complete(index: number) {
+    const cand = this.candidates[index]
     if (!cand) return
     const word = this.line.trim().split(/\s+/)[0] || ''
     const diff = cand.slice(word.length)
     if (!diff) return
-    // 更新本地缓冲并发送差量
-    this.line += diff
-    const encoder = new TextEncoder()
-    // 补全后补一个空格便于继续输入参数
-    this.line += ' '
+    // 更新本地缓冲并发送差量；补全后补一个空格便于继续输入参数
+    this.line += diff + ' '
     const sessionId = this.currentSessionId
     if (sessionId) {
+      const encoder = new TextEncoder()
       sessionService.input(sessionId, encoder.encode(diff + ' ')).catch(() => {})
     }
     this.hide()
@@ -166,14 +151,18 @@ export class Suggester {
     if (!this.overlay) {
       const el = document.createElement('div')
       el.className = 'autocomplete-overlay'
+      // mousedown + preventDefault：点击补全时保持终端焦点不丢失
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault()
+        const item = (e.target as HTMLElement).closest('.autocomplete-item')
+        const idx = item?.getAttribute('data-index')
+        if (idx != null) this.complete(Number(idx))
+      })
       this.container.appendChild(el)
       this.overlay = el
     }
     const items = this.candidates
-      .map(
-        (c, i) =>
-          `<div class="autocomplete-item${i === this.selected ? ' active' : ''}">${escapeHtml(c)}</div>`,
-      )
+      .map((c, i) => `<div class="autocomplete-item" data-index="${i}">${escapeHtml(c)}</div>`)
       .join('')
     this.overlay.innerHTML = items
     this.overlay.style.display = 'block'
@@ -196,7 +185,6 @@ export class Suggester {
 
   hide() {
     this.candidates = []
-    this.selected = 0
     if (this.overlay) this.overlay.style.display = 'none'
   }
 

@@ -114,12 +114,12 @@ export function useTerminal() {
   function attachInput(t: Terminal) {
     if (inputAttached) return
     inputAttached = true
-    // 用户输入 → 后端（先经补全器：拦截补全按键 / 维护行缓冲）
+    // 用户输入 → 后端（经补全器维护行缓冲/展示候选；补全器不拦截按键，
+    // Tab/方向键全部透传给 shell，避免吞掉 shell 的补全与历史翻找）
     t.onData((data) => {
       if (sessionId.value) {
         if (suggester) {
           suggester.currentSessionId = sessionId.value
-          if (suggester.handleKey(data)) return
           suggester.feed(data)
         }
         const encoder = new TextEncoder()
