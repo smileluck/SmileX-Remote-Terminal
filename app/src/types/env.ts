@@ -9,6 +9,7 @@
 export type EnvId =
   | 'python'
   | 'conda'
+  | 'uv'
   | 'go'
   | 'java'
   | 'mysql'

@@ -2,7 +2,7 @@
 /**
  * EnvPanel - 环境管理面板（右栏页签）
  *
- * 对当前 SSH 会话远端主机的 10 种环境（Python / Conda / Go / Java /
+ * 对当前 SSH 会话远端主机的 11 种环境（Python / Conda / uv / Go / Java /
  * MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）提供：
  * - 安装（官方脚本 / 版本管理器，可选版本弹窗现场探测版本列表）
  * - 版本切换（python/go/java；仅版本管理器/官方包管理的运行时支持）
@@ -50,6 +50,7 @@ import {
   Download,
   SwitchHorizontal,
   Versions,
+  Rocket,
 } from '@vicons/tabler'
 import { useEnvStore } from '@/stores/env'
 import { useTabsStore } from '@/stores/tabs'
@@ -79,6 +80,7 @@ watch(
 const ENV_ICONS: Record<EnvId, Component> = {
   python: BrandPython,
   conda: Box,
+  uv: Rocket,
   go: Hexagon,
   java: Coffee,
   mysql: Database,
@@ -142,6 +144,7 @@ const MANAGED_SOURCES: Partial<Record<EnvId, string[]>> = {
   python: ['pyenv'],
   java: ['sdkman'],
   go: ['official'],
+  uv: ['official'],
 }
 
 /** 切换版本额外允许 conda 管理的 python（conda install python=<v>） */

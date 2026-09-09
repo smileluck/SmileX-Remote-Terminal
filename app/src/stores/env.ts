@@ -18,6 +18,7 @@ export const useEnvStore = defineStore('env', () => {
   const statuses = ref<Record<EnvId, EnvStatus | null>>({
     python: null,
     conda: null,
+    uv: null,
     go: null,
     java: null,
     mysql: null,

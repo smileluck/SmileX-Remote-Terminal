@@ -1,8 +1,8 @@
 /**
  * 环境管理服务
  *
- * 复用 session_exec 静默通道管理远端主机的 10 种环境
- * （Python / Conda / Go / Java / MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）：
+ * 复用 session_exec 静默通道管理远端主机的 11 种环境
+ * （Python / Conda / uv / Go / Java / MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）：
  * - 探测：一次 exec 执行拼接脚本（bash -lc 包装以拿到 login shell PATH），
  *   每种环境输出 SRT_ENV|<id>|<installed>|<version>|<path>|<service>|
  *   <config>|<bin 可选> 分隔行，前端逐行解析
@@ -60,6 +60,15 @@ export const ENV_DEFS: EnvDef[] = [
     configValidate: false,
     installNote: 'Miniconda 官方脚本安装到用户目录 ~/miniconda3（无需 root），失败切换清华镜像',
     uninstallNote: '将移除 Conda 安装目录与 ~/.bashrc 初始化块，已创建的 conda 环境一并删除',
+  },
+  {
+    id: 'uv',
+    name: 'uv',
+    service: false,
+    optionalVersion: false,
+    configValidate: false,
+    installNote: 'Astral 官方脚本安装到 ~/.local/bin（无需 root），失败尝试 pip --user 安装',
+    uninstallNote: '将移除 uv/uvx 二进制（缓存目录 ~/.cache/uv 保留）',
   },
   {
     id: 'go',
@@ -199,6 +208,8 @@ const DETECT_SCRIPT = [
   'sp=""; [ -x /usr/bin/python3 ] && sp=/usr/bin/python3; pp=$(command -v python3 2>/dev/null); if [ -n "$pp" ] || [ -n "$sp" ]; then rpy=$(readlink -f "$pp" 2>/dev/null || echo "$pp"); if [ -d "$HOME/.pyenv" ] && [ -n "$rpy" ] && [ "${rpy#$HOME/.pyenv}" != "$rpy" ]; then psrc="pyenv"; pdir="$HOME/.pyenv"; pv=$(python3 -V 2>&1 | awk "{print \\$2}"); elif [ -n "$sp" ]; then psrc="system"; pv=$("$sp" -V 2>&1 | awk "{print \\$2}"); pdir=$(dirname "$(readlink -f "$sp" 2>/dev/null || echo "$sp")"); elif [ -n "$pp" ]; then pv=$(python3 -V 2>&1 | awk "{print \\$2}"); case "$rpy" in *conda*) psrc="conda"; cbase="${rpy%%/envs/*}"; if [ "$cbase" != "$rpy" ]; then pdir="$cbase"; else pdir=$(dirname "$(dirname "$rpy")"); fi;; *) psrc="system"; pdir=$(dirname "$rpy");; esac; fi; pcfg=""; if [ "$psrc" = "pyenv" ] && [ -f "$HOME/.pyenv/version" ]; then pcfg="$HOME/.pyenv/version"; fi; emit python 1 "$pv" "$pdir" "-" "$pcfg" "" "$psrc"; else emit python 0 "" "" "-" ""; fi',
   // conda：command -v 可命中 login shell 里的 shell 函数；否则探测常见安装目录
   'cdir=""; cv=""; if command -v conda >/dev/null 2>&1; then cv=$(conda --version 2>/dev/null | awk "{print \\$2}"); cdir=$(conda info --base 2>/dev/null); elif [ -x "$HOME/miniconda3/bin/conda" ]; then cv=$("$HOME/miniconda3/bin/conda" --version 2>/dev/null | awk "{print \\$2}"); cdir="$HOME/miniconda3"; elif [ -x "$HOME/anaconda3/bin/conda" ]; then cv=$("$HOME/anaconda3/bin/conda" --version 2>/dev/null | awk "{print \\$2}"); cdir="$HOME/anaconda3"; elif [ -x /opt/conda/bin/conda ]; then cv=$(/opt/conda/bin/conda --version 2>/dev/null | awk "{print \\$2}"); cdir="/opt/conda"; fi; if [ -n "$cdir" ]; then ccfg=""; [ -f "$HOME/.condarc" ] && ccfg="$HOME/.condarc"; emit conda 1 "$cv" "$cdir" "-" "$ccfg"; else emit conda 0 "" "" "-" ""; fi',
+  // uv：安装路径取二进制所在目录；配置探测 uv.toml；source 标记 official（~/.local/bin、~/.cargo/bin）/ system
+  'up=$(command -v uv 2>/dev/null); if [ -n "$up" ]; then uvv=$(uv --version 2>/dev/null | awk "{print \\$2}"); udir=$(dirname "$(readlink -f "$up" 2>/dev/null || echo "$up")"); ucfg=$(first_file "$HOME/.config/uv/uv.toml" /etc/uv/uv.toml); case "$udir" in "$HOME/.local/bin"|"$HOME/.cargo/bin") usrc="official";; *) usrc="system";; esac; emit uv 1 "$uvv" "$udir" "-" "$ucfg" "" "$usrc"; else emit uv 0 "" "" "-" ""; fi',
   // go：GOROOT 为安装目录，GOENV 为 go env -w 持久化文件；source 标记 official（/usr/local/go）/ system
   'gp=$(command -v go 2>/dev/null); if [ -n "$gp" ]; then gv=$(go version 2>/dev/null | awk "{print \\$3}"); gv=${gv#go}; gdir=$(go env GOROOT 2>/dev/null); [ -n "$gdir" ] || gdir="/usr/local/go"; gcfg=$(go env GOENV 2>/dev/null); { [ -n "$gcfg" ] && [ -f "$gcfg" ]; } || gcfg=""; if [ "$gdir" = "/usr/local/go" ]; then gsrc="official"; else gsrc="system"; fi; emit go 1 "$gv" "$gdir" "-" "$gcfg" "" "$gsrc"; else emit go 0 "" "" "-" ""; fi',
   // java；source 标记 sdkman / system
@@ -274,6 +285,14 @@ function installScript(id: EnvId, version: string): string {
         'bash /tmp/srt-miniconda.sh -b -p "$HOME/miniconda3"',
         'rc=$?; rm -f /tmp/srt-miniconda.sh; [ $rc -eq 0 ] || exit $rc',
         '"$HOME/miniconda3/bin/conda" init bash 2>/dev/null || true',
+      ].join('; ')
+    // Astral 官方 installer（装到 ~/.local/bin，无需 root），失败 fallback pip --user
+    case 'uv':
+      return [
+        P_DL,
+        'DLF https://astral.sh/uv/install.sh /tmp/srt-uv.sh && sh /tmp/srt-uv.sh; rc=$?; rm -f /tmp/srt-uv.sh',
+        'if [ $rc -ne 0 ]; then echo "官方脚本失败，尝试 pip --user 安装..."; if command -v pip3 >/dev/null 2>&1; then pip3 install --user uv; rc=$?; elif command -v python3 >/dev/null 2>&1; then python3 -m pip install --user uv; rc=$?; else echo "远端无可用 pip"; rc=1; fi; fi',
+        '[ $rc -eq 0 ] || exit $rc',
       ].join('; ')
     // go.dev 官方 tar 包，失败切 golang.google.cn 镜像
     case 'go':
@@ -384,6 +403,12 @@ function uninstallScript(id: EnvId): string {
         '[ -n "$CB" ] || { echo "未检测到 Conda 安装目录"; exit 1; }',
         'if [ -x "$CB/bin/conda" ]; then "$CB/bin/conda" init --reverse bash 2>/dev/null || true; fi',
         '$SUDO rm -rf "$CB"',
+      ].join('; ')
+    case 'uv':
+      return [
+        'up=$(command -v uv 2>/dev/null); udir=""; [ -n "$up" ] && udir=$(dirname "$(readlink -f "$up" 2>/dev/null || echo "$up")")',
+        'case "$udir" in "$HOME/.local/bin"|"$HOME/.cargo/bin") ;; *) echo "当前 uv 可能由系统包管理器或 pip 安装，为避免破坏依赖请手动卸载"; exit 1;; esac',
+        'rm -f "$udir/uv" "$udir/uvx"',
       ].join('; ')
     case 'go':
       return [
