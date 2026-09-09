@@ -758,9 +758,8 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
         <div class="conda-envs">
           <NEmpty v-if="!condaEnvs.length" description="暂无 conda 环境" class="empty" />
           <div v-for="ce in condaEnvs" :key="ce.path" class="conda-env-row">
-            <span class="conda-env-name">
+            <span class="conda-env-name" :class="{ base: ce.isBase }">
               {{ ce.name }}
-              <NTag v-if="ce.isBase" size="tiny" type="info" :bordered="false">base</NTag>
               <span class="conda-env-py">{{ ce.pythonVersion ? `Python ${ce.pythonVersion}` : '无 Python' }}</span>
             </span>
             <span class="conda-env-path" :title="ce.path">{{ ce.path }}</span>
@@ -1001,6 +1000,9 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+.conda-env-name.base {
+  font-weight: 600;
 }
 .conda-env-py {
   font-size: 11px;
