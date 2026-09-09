@@ -670,7 +670,7 @@ export async function listCondaEnvs(sid: string): Promise<CondaEnv[]> {
   return list
 }
 
-/** 新建 conda 环境（pythonVersion 为空则不带 python 约束） */
+/** 新建 conda 环境（pythonVersion 为空时装最新版 Python，避免创建出无 Python 的空环境） */
 export async function createCondaEnv(sid: string, name: string, pythonVersion?: string): Promise<void> {
   const n = name.trim()
   if (!/^[0-9a-zA-Z._-]+$/.test(n)) throw new EnvError('unknown', '环境名仅支持字母、数字、点、下划线、连字符')
@@ -678,7 +678,7 @@ export async function createCondaEnv(sid: string, name: string, pythonVersion?: 
   if (py && !/^[0-9]+(\.[0-9]+){0,2}$/.test(py)) throw new EnvError('unknown', 'Python 版本格式不正确（如 3.12）')
   await runChecked(
     sid,
-    `bash -lc ${sq(`${CONDA_PATH}; conda create -y -n ${sq(n)}${py ? ` python=${sq(py)}` : ''}`)}`,
+    `bash -lc ${sq(`${CONDA_PATH}; conda create -y -n ${sq(n)}${py ? ` python=${sq(py)}` : ' python'}`)}`,
   )
 }
 

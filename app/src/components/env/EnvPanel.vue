@@ -795,7 +795,7 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
       </NSpin>
       <div class="conda-create">
         <NInput v-model:value="newEnvName" size="small" placeholder="环境名" class="conda-create-name" />
-        <NInput v-model:value="newEnvPy" size="small" placeholder="Python 版本（可选，如 3.12）" />
+        <NInput v-model:value="newEnvPy" size="small" placeholder="Python 版本（默认最新，如 3.12）" />
         <NButton size="small" type="primary" :loading="condaEnvOperating" @click="createCondaEnv">
           新建
         </NButton>
