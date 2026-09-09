@@ -513,8 +513,10 @@ export async function listLocalVersions(sid: string, id: EnvId): Promise<string[
 
 /**
  * 切换版本：
- * - python：pyenv install -s（已装则跳过）+ pyenv global
- * - java：本地已装走 sdk default，未装走 sdk install（yes 管道自动设为默认）
+ * - python：机器上没有 pyenv 时先自动安装 pyenv（官方 installer，失败切
+ *   gitee 镜像），再 pyenv install -s（已装则跳过）+ pyenv global
+ * - java：机器上没有 SDKMAN 时先自动安装 SDKMAN；本地已装版本走
+ *   sdk default，未装走 sdk install（yes 管道自动设为默认）
  * - go：重新下载官方包替换 /usr/local/go（复用安装脚本，需 root 或免密 sudo）
  * 切换可能耗时数分钟（exec 通道无超时），调用方需维护 loading 态。
  */
@@ -525,8 +527,11 @@ export async function switchVersion(sid: string, id: EnvId, version: string): Pr
     await runChecked(
       sid,
       [
-        'export PATH="$HOME/.pyenv/bin:$PATH"',
-        'command -v pyenv >/dev/null 2>&1 || { echo "未检测到 pyenv"; exit 1; }',
+        P_DL,
+        'export PYENV_ROOT="$HOME/.pyenv"',
+        'export PATH="$PYENV_ROOT/bin:$PATH"',
+        'if ! command -v pyenv >/dev/null 2>&1; then DLF https://pyenv.run /tmp/srt-pyenv.sh && bash /tmp/srt-pyenv.sh; rc=$?; if [ $rc -ne 0 ]; then echo "官方源失败，切换 gitee 镜像重试..."; git clone https://gitee.com/mirrors/pyenv.git "$PYENV_ROOT"; rc=$?; fi; rm -f /tmp/srt-pyenv.sh; [ $rc -eq 0 ] || exit $rc; fi',
+        'hash -r; command -v pyenv >/dev/null 2>&1 || { echo "pyenv 安装失败"; exit 1; }',
         `pyenv install -s ${sq(v)} && pyenv global ${sq(v)}`,
       ].join('; '),
     )
@@ -536,7 +541,9 @@ export async function switchVersion(sid: string, id: EnvId, version: string): Pr
     await runChecked(
       sid,
       [
-        'source "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || { echo "未检测到 SDKMAN"; exit 1; }',
+        P_DL,
+        'if [ ! -d "$HOME/.sdkman" ]; then DLF "https://get.sdkman.io" /tmp/srt-sdkman.sh && bash /tmp/srt-sdkman.sh; rc=$?; rm -f /tmp/srt-sdkman.sh; [ $rc -eq 0 ] || exit $rc; fi',
+        'source "$HOME/.sdkman/bin/sdkman-init.sh"',
         `if [ -d "$HOME/.sdkman/candidates/java/${v.replace(/[^0-9a-zA-Z._-]/g, '')}" ]; then sdk default java ${sq(v)}; else yes | sdk install java ${sq(v)}; fi`,
       ].join('; '),
     )
