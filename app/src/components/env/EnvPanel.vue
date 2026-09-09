@@ -416,12 +416,15 @@ function jumpFiles(path: string) {
 }
 
 /**
- * 跳转目标选项：默认只有安装路径一项；nginx 等路径已指到配置目录、
- * 且探测到二进制目录的环境，提供「配置目录 / 二进制目录」选择。
+ * 跳转目标选项：默认只有安装路径一项；探测到二进制目录（binPath）的
+ * 环境提供双目录选择。首项标签按环境语义区分：nginx/openresty 主路径
+ * 是配置目录，docker 是数据根目录，其余为安装路径。
  */
 function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
   const list: Array<{ label: string; key: string }> = []
-  if (s.installPath) list.push({ label: s.binPath ? '配置目录' : '安装路径', key: s.installPath })
+  const mainLabel =
+    s.id === 'docker' ? '数据目录' : s.id === 'nginx' || s.id === 'openresty' ? '配置目录' : '安装路径'
+  if (s.installPath) list.push({ label: s.binPath ? mainLabel : mainLabel, key: s.installPath })
   if (s.binPath && s.binPath !== s.installPath) {
     list.push({ label: '二进制目录', key: s.binPath })
   }
