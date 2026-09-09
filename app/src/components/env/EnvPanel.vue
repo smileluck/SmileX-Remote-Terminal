@@ -5,7 +5,7 @@
  * 对当前 SSH 会话远端主机的 8 种环境（Python / Go / Java / MySQL /
  * PostgreSQL / Redis / Nginx / OpenResty）提供：
  * - 安装（官方脚本 / 版本管理器，可选版本弹窗现场探测版本列表）
- * - 版本切换（python/go/java；无 pyenv/SDKMAN 时先自动安装版本管理器）
+ * - 版本切换（python/go/java；仅版本管理器/官方包管理的运行时支持）
  * - 卸载（NPopconfirm 二次确认，注明数据目录影响范围）
  * - 服务启停（仅服务类环境）
  * - 配置编辑（远程读取 → 面板文本编辑 → 带备份回写；nginx/openresty 校验失败自动回滚）
@@ -131,6 +131,11 @@ function uninstallBlocked(id: EnvId): boolean {
   return env.statuses[id]?.source === 'system'
 }
 
+/** 系统包安装的 python/go/java 同样禁用版本切换（不与系统自带运行时混用） */
+function switchBlocked(id: EnvId): boolean {
+  return env.statuses[id]?.source === 'system'
+}
+
 async function onAction(fn: () => Promise<unknown>, ok: string) {
   try {
     await fn()
@@ -193,9 +198,9 @@ const switchLoading = ref(false)
 const switchNote = computed(() => {
   switch (switchDef.value?.id) {
     case 'python':
-      return '选择本地已安装的 pyenv 版本直接切换；输入新版本号将先安装再切换。机器上没有 pyenv 时会先自动安装 pyenv（切换经 pyenv global 生效，不影响系统自带 Python）'
+      return '选择本地已安装的 pyenv 版本直接切换；输入新版本号将先安装再切换（pyenv global 生效，不影响系统自带 Python）'
     case 'java':
-      return '选择本地已安装的 SDKMAN 版本直接切换；输入新版本号将先安装再切换。机器上没有 SDKMAN 时会先自动安装（切换经 sdk default 生效，不影响系统自带 JDK）'
+      return '选择本地已安装的 SDKMAN 版本直接切换；输入新版本号将先安装再切换（sdk default 生效，不影响系统自带 JDK）'
     case 'go':
       return '选择版本后下载 go.dev 官方包替换 /usr/local/go（需 root 或免密 sudo）'
     default:
@@ -434,13 +439,13 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
                       quaternary
                       circle
                       size="tiny"
-                      :disabled="env.operating.has(def.id)"
+                      :disabled="env.operating.has(def.id) || switchBlocked(def.id)"
                       @click="openSwitch(def)"
                     >
                       <NIcon :component="SwitchHorizontal" :size="14" />
                     </NButton>
                   </template>
-                  切换版本
+                  {{ switchBlocked(def.id) ? '系统包安装，不支持一键切换版本' : '切换版本' }}
                 </NTooltip>
                 <NTooltip v-if="env.statuses[def.id]!.configPath">
                   <template #trigger>
