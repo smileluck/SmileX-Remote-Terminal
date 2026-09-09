@@ -638,25 +638,36 @@ export interface CondaEnv {
   path: string
   /** 是否为 base 环境（不可删除） */
   isBase: boolean
+  /** 环境内 Python 版本（未装 Python 为空串） */
+  pythonVersion: string
 }
 
 /** conda 未初始化进 shell 时的常见安装目录兜底 PATH */
 const CONDA_PATH = 'export PATH="$HOME/miniconda3/bin:$HOME/anaconda3/bin:/opt/conda/bin:$PATH"'
 
-/** 列出全部 conda 环境（bash -lc 包装以拿到 login shell 的 conda 函数） */
+/**
+ * 列出全部 conda 环境（bash -lc 包装以拿到 login shell 的 conda 函数）。
+ * 同一脚本内逐环境取 bin/python --version，输出 SRT_CONDA_ENV|name|path|pyver 行。
+ */
 export async function listCondaEnvs(sid: string): Promise<CondaEnv[]> {
-  const out = await runChecked(sid, `bash -lc ${sq(`${CONDA_PATH}; conda env list --json 2>/dev/null || true`)}`)
-  const m = out.match(/\{[\s\S]*"envs"[\s\S]*\}/)
-  if (!m) return []
-  try {
-    const paths = (JSON.parse(m[0]) as { envs?: string[] }).envs ?? []
-    return paths.map((p) => {
-      const isBase = !p.includes('/envs/')
-      return { name: isBase ? 'base' : p.replace(/\/$/, '').split('/').pop() ?? p, path: p, isBase }
-    })
-  } catch {
-    return []
+  const script = [
+    CONDA_PATH,
+    // conda env list 文本输出：name [*] path（激活环境带 * 列），path 取最后一列
+    'conda env list 2>/dev/null | grep -vE "^\\s*(#|$)" | awk "{print $1\\"|\\"$NF}" | while IFS="|" read -r name path; do pv=""; if [ -x "$path/bin/python" ]; then pv=$("$path/bin/python" --version 2>&1 | awk "{print \\$2}"); fi; echo "SRT_CONDA_ENV|$name|$path|$pv"; done',
+    'true',
+  ].join('; ')
+  const out = await runChecked(sid, `bash -lc ${sq(script)}`)
+  const list: CondaEnv[] = []
+  for (const line of out.split('\n')) {
+    const t = line.trim()
+    if (!t.startsWith('SRT_CONDA_ENV|')) continue
+    const p = t.split('|')
+    const name = p[1] ?? ''
+    const path = p[2] ?? ''
+    if (!name || !path) continue
+    list.push({ name, path, isBase: name === 'base' || !path.includes('/envs/'), pythonVersion: p[3] ?? '' })
   }
+  return list
 }
 
 /** 新建 conda 环境（pythonVersion 为空则不带 python 约束） */

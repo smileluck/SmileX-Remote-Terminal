@@ -761,6 +761,7 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
             <span class="conda-env-name">
               {{ ce.name }}
               <NTag v-if="ce.isBase" size="tiny" type="info" :bordered="false">base</NTag>
+              <span class="conda-env-py">{{ ce.pythonVersion ? `Python ${ce.pythonVersion}` : '无 Python' }}</span>
             </span>
             <span class="conda-env-path" :title="ce.path">{{ ce.path }}</span>
             <span class="conda-env-actions">
@@ -1000,6 +1001,10 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+.conda-env-py {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 .conda-env-path {
   flex: 1;
