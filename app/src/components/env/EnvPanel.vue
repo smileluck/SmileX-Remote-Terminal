@@ -2,8 +2,8 @@
 /**
  * EnvPanel - 环境管理面板（右栏页签）
  *
- * 对当前 SSH 会话远端主机的 9 种环境（Python / Go / Java / MySQL /
- * PostgreSQL / Redis / Nginx / OpenResty / Docker）提供：
+ * 对当前 SSH 会话远端主机的 10 种环境（Python / Conda / Go / Java /
+ * MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）提供：
  * - 安装（官方脚本 / 版本管理器，可选版本弹窗现场探测版本列表）
  * - 版本切换（python/go/java；仅版本管理器/官方包管理的运行时支持）
  * - 卸载（NPopconfirm 二次确认，注明数据目录影响范围）
@@ -38,6 +38,7 @@ import {
   Server,
   BrandOpenSource,
   BrandDocker,
+  Box,
   PlayerPlay,
   PlayerStop,
   RotateClockwise,
@@ -75,6 +76,7 @@ watch(
 /** 每种环境的展示图标（@vicons/tabler 近似匹配） */
 const ENV_ICONS: Record<EnvId, Component> = {
   python: BrandPython,
+  conda: Box,
   go: Hexagon,
   java: Coffee,
   mysql: Database,
@@ -117,6 +119,8 @@ function sourceLabel(s: EnvStatus): string {
   switch (s.source) {
     case 'pyenv':
       return 'pyenv'
+    case 'conda':
+      return 'conda'
     case 'sdkman':
       return 'SDKMAN'
     case 'official':
@@ -128,14 +132,45 @@ function sourceLabel(s: EnvStatus): string {
   }
 }
 
-/** 系统包安装的 python/go/java 禁用一键卸载（避免误删系统依赖，提示手动卸载） */
-function uninstallBlocked(id: EnvId): boolean {
-  return env.statuses[id]?.source === 'system'
+/**
+ * 各环境支持一键管理的安装来源（卸载/切换仅对这些来源开放；
+ * 系统包安装的一律禁用，避免误删系统依赖）
+ */
+const MANAGED_SOURCES: Partial<Record<EnvId, string[]>> = {
+  python: ['pyenv'],
+  java: ['sdkman'],
+  go: ['official'],
 }
 
-/** 系统包安装的 python/go/java 同样禁用版本切换（不与系统自带运行时混用） */
+/** 切换版本额外允许 conda 管理的 python（conda install python=<v>） */
+const SWITCH_SOURCES: Partial<Record<EnvId, string[]>> = {
+  python: ['pyenv', 'conda'],
+  java: ['sdkman'],
+  go: ['official'],
+}
+
+function sourceOf(id: EnvId): string {
+  return env.statuses[id]?.source ?? ''
+}
+
+/** 非受管来源时禁用一键卸载 */
+function uninstallBlocked(id: EnvId): boolean {
+  const allowed = MANAGED_SOURCES[id]
+  return !!allowed && !allowed.includes(sourceOf(id))
+}
+
+/** 非受管来源时禁用版本切换 */
 function switchBlocked(id: EnvId): boolean {
-  return env.statuses[id]?.source === 'system'
+  const allowed = SWITCH_SOURCES[id]
+  return !!allowed && !allowed.includes(sourceOf(id))
+}
+
+/** 卸载禁用原因（按来源差异化提示） */
+function uninstallBlockedReason(id: EnvId): string {
+  if (id === 'python' && sourceOf(id) === 'conda') {
+    return 'Conda 管理的 Python，请在 Conda 卡片中卸载'
+  }
+  return '系统包安装，为避免破坏系统请用包管理器手动卸载'
 }
 
 async function onAction(fn: () => Promise<unknown>, ok: string) {
@@ -200,7 +235,7 @@ const switchLoading = ref(false)
 const switchNote = computed(() => {
   switch (switchDef.value?.id) {
     case 'python':
-      return '选择本地已安装的 pyenv 版本直接切换；输入新版本号将先安装再切换（pyenv global 生效，不影响系统自带 Python）'
+      return 'pyenv 管理：选择本地已装版本直接切换，输入新版本号将先安装再切换（pyenv global 生效）；conda 管理：输入目标版本号经 conda install python=<版本> 切换（作用于 base 环境）'
     case 'java':
       return '选择本地已安装的 SDKMAN 版本直接切换；输入新版本号将先安装再切换（sdk default 生效，不影响系统自带 JDK）'
     case 'go':
@@ -519,7 +554,7 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
                       <NIcon :component="Trash" :size="14" />
                     </NButton>
                   </template>
-                  系统包安装，为避免破坏系统请用包管理器手动卸载
+                  {{ uninstallBlockedReason(def.id) }}
                 </NTooltip>
                 <NPopconfirm
                   v-else

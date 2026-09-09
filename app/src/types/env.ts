@@ -8,6 +8,7 @@
 /** 支持管理的环境 ID */
 export type EnvId =
   | 'python'
+  | 'conda'
   | 'go'
   | 'java'
   | 'mysql'
@@ -40,6 +41,6 @@ export interface EnvStatus {
   configPath?: string
   /** 二进制所在目录（仅 nginx 等路径已指到配置目录的环境提供，供跳转选择） */
   binPath?: string
-  /** 安装来源：pyenv / sdkman / official / system（仅 python/go/java 探测） */
+  /** 安装来源：pyenv / conda / sdkman / official / system（仅 python/go/java 探测） */
   source?: string
 }

@@ -17,6 +17,7 @@ export const useEnvStore = defineStore('env', () => {
   /** 每种环境的探测状态（未探测为 null） */
   const statuses = ref<Record<EnvId, EnvStatus | null>>({
     python: null,
+    conda: null,
     go: null,
     java: null,
     mysql: null,
