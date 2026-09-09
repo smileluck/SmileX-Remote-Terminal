@@ -6,6 +6,8 @@
  * 新建目录 / 递归删除 / 重命名。传输任务入全局队列，
  * 进度与继续/暂停/取消/重试在面板底部传输区直接查看操作。
  * 由 TerminalView 持有（tab 须带 sessionId）。
+ * 外部导航：navPath prop（layout.openFilesAt 写入的一次性目标路径），
+ * 消费后清除 layout.filesNavPath。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
@@ -51,7 +53,7 @@ import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
 import TransferList from './TransferList.vue'
 
-const props = defineProps<{ sessionId: string }>()
+const props = defineProps<{ sessionId: string; navPath?: string | null }>()
 const emit = defineEmits<{ (e: 'open-split-at', path: string): void }>()
 const message = useMessage()
 const dialog = useDialog()
@@ -104,16 +106,30 @@ async function load(path?: string) {
   }
 }
 
+/** 外部导航（layout.openFilesAt 写入）：一次性定位到目标路径，消费后清除 */
+watch(
+  () => props.navPath,
+  (p) => {
+    if (!p) return
+    layout.filesNavPath = null
+    void load(p)
+  },
+  { immediate: true },
+)
+
 onMounted(async () => {
-  loading.value = true
-  try {
-    // path 省略 → 后端进入远端 home；从返回条目 path 推断 cwd
-    entries.value = await sftp.list(props.sessionId)
-    cwd.value = entries.value[0]?.path.replace(/\/[^/]*$/, '') || '/'
-  } catch (e) {
-    message.error(String(e))
-  } finally {
-    loading.value = false
+  // 有外部导航目标时跳过默认 home 加载（navPath watch 已按目标路径加载）
+  if (!props.navPath) {
+    loading.value = true
+    try {
+      // path 省略 → 后端进入远端 home；从返回条目 path 推断 cwd
+      entries.value = await sftp.list(props.sessionId)
+      cwd.value = entries.value[0]?.path.replace(/\/[^/]*$/, '') || '/'
+    } catch (e) {
+      message.error(String(e))
+    } finally {
+      loading.value = false
+    }
   }
   // 拖拽上传（webview 级事件，多面板时只响应激活 tab）
   try {

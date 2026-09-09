@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * RightPanel - 右栏容器（Agent 助手 / 监控看板 / 告警规则 / 常用记录 / Docker 管理 / 定时任务）
+ * RightPanel - 右栏容器（Agent 助手 / 监控看板 / 告警规则 / 常用记录 / Docker 管理 / 定时任务 / 环境管理）
  *
  * 三栏布局的右栏（仅在打开会话时显示，设置页/空首页隐藏；
  * 收起时整体隐藏；打开/切换入口在终端工具栏列，与其他面板互斥）：
@@ -18,6 +18,7 @@ import ChatPanel from '@/components/ai/ChatPanel.vue'
 import SnippetPanel from '@/components/terminal/SnippetPanel.vue'
 import DockerPanel from '@/components/docker/DockerPanel.vue'
 import CrontabPanel from '@/components/crontab/CrontabPanel.vue'
+import EnvPanel from '@/components/env/EnvPanel.vue'
 
 const layout = useLayoutStore()
 const tabs = useTabsStore()
@@ -38,6 +39,7 @@ const panelTitles: Record<RightPanelTab, string> = {
   snippets: '常用记录',
   docker: 'Docker 管理',
   crontab: '定时任务',
+  env: '环境管理',
 }
 const title = computed(() => panelTitles[layout.rightTab])
 
@@ -79,6 +81,7 @@ function onDragStart(e: MouseEvent) {
       <SnippetPanel v-else-if="layout.rightTab === 'snippets'" />
       <DockerPanel v-else-if="layout.rightTab === 'docker'" />
       <CrontabPanel v-else-if="layout.rightTab === 'crontab'" />
+      <EnvPanel v-else-if="layout.rightTab === 'env'" />
     </div>
   </aside>
 </template>

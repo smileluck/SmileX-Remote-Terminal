@@ -24,6 +24,7 @@ import {
   Bookmarks,
   BrandDocker,
   CalendarTime,
+  Package,
 } from '@vicons/tabler'
 import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
@@ -54,7 +55,7 @@ const layout = useLayoutStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
 
-/** 右栏面板入口（Agent / 监控 / 告警 / 常用记录 / Docker / 定时任务）：按钮高亮条件与点击切换 */
+/** 右栏面板入口（Agent / 监控 / 告警 / 常用记录 / Docker / 定时任务 / 环境管理）：按钮高亮条件与点击切换 */
 const panelEntries = [
   { key: 'monitor', label: '监控看板（⌘M）', icon: ChartAreaLine },
   { key: 'agent', label: 'AI 运维助手（⌘J）', icon: Robot },
@@ -62,6 +63,7 @@ const panelEntries = [
   { key: 'snippets', label: '常用记录', icon: Bookmarks },
   { key: 'docker', label: 'Docker 管理', icon: BrandDocker },
   { key: 'crontab', label: '定时任务', icon: CalendarTime },
+  { key: 'env', label: '环境管理', icon: Package },
 ] as const
 
 /** 分屏下拉选项（二级选择分割方向） */
@@ -326,6 +328,7 @@ async function handleReconnect() {
       <FilePanel
         v-if="layout.filesVisible && tab.sessionId && !tab.disconnected"
         :session-id="tab.sessionId"
+        :nav-path="layout.filesNavPath"
         @open-split-at="(p: string) => addPane('row', p)"
       />
     </div>

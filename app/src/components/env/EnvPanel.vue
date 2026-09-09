@@ -1,0 +1,600 @@
+<script setup lang="ts">
+/**
+ * EnvPanel - 环境管理面板（右栏页签）
+ *
+ * 对当前 SSH 会话远端主机的 8 种环境（Python / Go / Java / MySQL /
+ * PostgreSQL / Redis / Nginx / OpenResty）提供：
+ * - 安装（官方脚本 / 版本管理器，可选版本弹窗现场探测版本列表）
+ * - 卸载（NPopconfirm 二次确认，注明数据目录影响范围）
+ * - 服务启停（仅服务类环境）
+ * - 配置编辑（远程读取 → 面板文本编辑 → 带备份回写；nginx/openresty 校验失败自动回滚）
+ * - 安装路径跳转（SFTP 文件面板定位 + 终端 cd 两个入口）
+ * 数据来自 env store（静默 exec 通道探测，操作完成后自动刷新）。
+ */
+import { ref, computed, watch, onMounted, type Component } from 'vue'
+import {
+  NButton,
+  NIcon,
+  NPopconfirm,
+  NModal,
+  NInput,
+  NSelect,
+  NEmpty,
+  NSpin,
+  NTooltip,
+  NTag,
+  useMessage,
+} from 'naive-ui'
+import {
+  Refresh,
+  BrandPython,
+  Hexagon,
+  Coffee,
+  Database,
+  DatabaseExport,
+  Bolt,
+  Server,
+  BrandOpenSource,
+  PlayerPlay,
+  PlayerStop,
+  RotateClockwise,
+  Trash,
+  FileCode,
+  Terminal2,
+  Folder,
+  Download,
+} from '@vicons/tabler'
+import { useEnvStore } from '@/stores/env'
+import { useTabsStore } from '@/stores/tabs'
+import { useLayoutStore } from '@/stores/layout'
+import { ENV_DEFS, type EnvDef } from '@/services/env'
+import * as envService from '@/services/env'
+import * as sessionService from '@/services/session'
+import { shellQuote } from '@/utils/shell'
+import type { EnvId, EnvStatus } from '@/types/env'
+
+const env = useEnvStore()
+const tabs = useTabsStore()
+const layout = useLayoutStore()
+const message = useMessage()
+
+const encoder = new TextEncoder()
+
+onMounted(() => void env.refresh())
+
+/** 切换活跃会话时重新探测 */
+watch(
+  () => tabs.activeTab?.sessionId,
+  () => void env.refresh(),
+)
+
+/** 每种环境的展示图标（@vicons/tabler 近似匹配） */
+const ENV_ICONS: Record<EnvId, Component> = {
+  python: BrandPython,
+  go: Hexagon,
+  java: Coffee,
+  mysql: Database,
+  postgresql: DatabaseExport,
+  redis: Bolt,
+  nginx: Server,
+  openresty: BrandOpenSource,
+}
+
+/** 当前主机提示 */
+const hostLabel = computed(() => tabs.activeTab?.title ?? '')
+
+/** 探测脚本整体失败的提示文案 */
+const errorText = computed(() => {
+  switch (env.errorKind) {
+    case 'no-permission':
+      return '当前用户权限不足，无法探测环境信息'
+    default:
+      return env.errorMessage || '环境探测失败'
+  }
+})
+
+/** 服务状态展示（运行 / 已停止 / 异常 / 未知） */
+function serviceLabel(s: EnvStatus): string {
+  switch (s.serviceActive) {
+    case 'active':
+      return '运行中'
+    case 'inactive':
+      return '已停止'
+    case 'failed':
+      return '异常'
+    default:
+      return '未知'
+  }
+}
+
+async function onAction(fn: () => Promise<unknown>, ok: string) {
+  try {
+    await fn()
+    message.success(ok)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/* ---------------- 安装弹窗 ---------------- */
+
+const showInstall = ref(false)
+const installDef = ref<EnvDef | null>(null)
+const installVersion = ref<string | null>(null)
+const versionOptions = ref<Array<{ label: string; value: string }>>([])
+const versionsLoading = ref(false)
+
+async function openInstall(def: EnvDef) {
+  installDef.value = def
+  installVersion.value = null
+  versionOptions.value = []
+  showInstall.value = true
+  if (def.optionalVersion) {
+    const sid = env.activeSshSessionId()
+    if (!sid) return
+    versionsLoading.value = true
+    try {
+      const list = await envService.listVersions(sid, def.id)
+      versionOptions.value = list.map((v) => ({ label: v, value: v }))
+      installVersion.value = list[0] ?? null
+    } catch {
+      // 版本列表探测失败不阻塞安装（可手动输入版本号）
+    } finally {
+      versionsLoading.value = false
+    }
+  }
+}
+
+async function submitInstall() {
+  const def = installDef.value
+  if (!def) return
+  try {
+    await env.install(def.id, installVersion.value ?? undefined)
+    message.success(`${def.name} 安装完成`)
+    showInstall.value = false
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/* ---------------- 配置编辑弹窗 ---------------- */
+
+const showConfig = ref(false)
+const configDraft = ref('')
+
+async function openConfig(def: EnvDef) {
+  const s = env.statuses[def.id]
+  if (!s?.configPath) return
+  try {
+    await env.loadConfig(def.id, s.configPath)
+    configDraft.value = env.configContent
+    showConfig.value = true
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function reloadConfig() {
+  if (!env.configEnvId || !env.configPath) return
+  try {
+    await env.loadConfig(env.configEnvId, env.configPath)
+    configDraft.value = env.configContent
+    message.success('已重新加载')
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function saveConfig() {
+  try {
+    await env.saveConfig(configDraft.value)
+    message.success('配置已保存（原文件已备份）')
+    showConfig.value = false
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/* ---------------- 路径跳转 ---------------- */
+
+/** 终端跳转：向当前会话发送 cd（用户在终端可见命令与报错） */
+function jumpTerminal(path: string) {
+  const sid = env.activeSshSessionId()
+  if (!sid) return
+  void sessionService.input(sid, encoder.encode(`cd ${shellQuote(path)}\r`)).catch((e) => {
+    message.error(`发送失败：${e}`)
+  })
+}
+
+/** 文件跳转：打开 SFTP 文件面板并定位到安装目录 */
+function jumpFiles(path: string) {
+  layout.openFilesAt(path)
+}
+</script>
+
+<template>
+  <div class="env-panel">
+    <div class="toolbar">
+      <span class="host" :title="hostLabel">{{ hostLabel }}</span>
+      <NTooltip>
+        <template #trigger>
+          <NButton quaternary circle size="small" :loading="env.detecting" @click="env.refresh()">
+            <NIcon :component="Refresh" :size="14" />
+          </NButton>
+        </template>
+        刷新
+      </NTooltip>
+    </div>
+
+    <NSpin :show="env.detecting" size="small">
+      <div class="panel-content">
+        <!-- 无活跃会话 -->
+        <NEmpty v-if="!env.hasSession" description="连接 SSH 会话后管理远端环境" class="empty" />
+
+        <!-- 探测脚本整体失败 -->
+        <div v-else-if="env.errorKind !== 'none'" class="error-state">
+          <p class="error-text">{{ errorText }}</p>
+        </div>
+
+        <!-- 环境卡片 -->
+        <template v-else>
+          <div v-for="def in ENV_DEFS" :key="def.id" class="card">
+            <div class="card-head">
+              <NIcon :component="ENV_ICONS[def.id]" :size="18" class="card-icon" />
+              <span class="card-name">{{ def.name }}</span>
+              <NTag
+                v-if="env.statuses[def.id]"
+                size="tiny"
+                :type="env.statuses[def.id]!.installed ? 'success' : 'default'"
+                :bordered="false"
+              >
+                {{
+                  env.statuses[def.id]!.installed
+                    ? `已安装 ${env.statuses[def.id]!.version}`
+                    : '未安装'
+                }}
+              </NTag>
+              <span v-else class="card-pending">…</span>
+              <span
+                v-if="def.service && env.statuses[def.id]?.installed"
+                class="svc"
+                :class="env.statuses[def.id]!.serviceActive"
+                :title="`服务：${env.statuses[def.id]!.serviceName ?? ''}`"
+              >
+                <span class="svc-dot" />{{ serviceLabel(env.statuses[def.id]!) }}
+              </span>
+            </div>
+            <div v-if="env.statuses[def.id]?.installPath" class="card-path" :title="env.statuses[def.id]!.installPath">
+              {{ env.statuses[def.id]!.installPath }}
+            </div>
+            <div class="card-actions">
+              <template v-if="!env.statuses[def.id]?.installed">
+                <NButton
+                  size="tiny"
+                  type="primary"
+                  :loading="env.operating.has(def.id)"
+                  @click="openInstall(def)"
+                >
+                  <template #icon><NIcon :component="Download" /></template>
+                  安装
+                </NButton>
+              </template>
+              <template v-else>
+                <template v-if="def.service && env.statuses[def.id]!.serviceName">
+                  <NTooltip v-if="env.statuses[def.id]!.serviceActive !== 'active'">
+                    <template #trigger>
+                      <NButton
+                        quaternary
+                        circle
+                        size="tiny"
+                        :disabled="env.operating.has(def.id)"
+                        @click="onAction(() => env.serviceAction(def.id, 'start'), `${def.name} 已启动`)"
+                      >
+                        <NIcon :component="PlayerPlay" :size="14" />
+                      </NButton>
+                    </template>
+                    启动
+                  </NTooltip>
+                  <NTooltip v-else>
+                    <template #trigger>
+                      <NButton
+                        quaternary
+                        circle
+                        size="tiny"
+                        :disabled="env.operating.has(def.id)"
+                        @click="onAction(() => env.serviceAction(def.id, 'stop'), `${def.name} 已停止`)"
+                      >
+                        <NIcon :component="PlayerStop" :size="14" />
+                      </NButton>
+                    </template>
+                    停止
+                  </NTooltip>
+                  <NTooltip>
+                    <template #trigger>
+                      <NButton
+                        quaternary
+                        circle
+                        size="tiny"
+                        :disabled="env.operating.has(def.id)"
+                        @click="onAction(() => env.serviceAction(def.id, 'restart'), `${def.name} 已重启`)"
+                      >
+                        <NIcon :component="RotateClockwise" :size="14" />
+                      </NButton>
+                    </template>
+                    重启
+                  </NTooltip>
+                </template>
+                <NTooltip v-if="env.statuses[def.id]!.configPath">
+                  <template #trigger>
+                    <NButton
+                      quaternary
+                      circle
+                      size="tiny"
+                      :disabled="env.operating.has(def.id)"
+                      @click="openConfig(def)"
+                    >
+                      <NIcon :component="FileCode" :size="14" />
+                    </NButton>
+                  </template>
+                  编辑配置
+                </NTooltip>
+                <NTooltip v-if="env.statuses[def.id]!.installPath">
+                  <template #trigger>
+                    <NButton
+                      quaternary
+                      circle
+                      size="tiny"
+                      @click="jumpFiles(env.statuses[def.id]!.installPath)"
+                    >
+                      <NIcon :component="Folder" :size="14" />
+                    </NButton>
+                  </template>
+                  文件面板定位
+                </NTooltip>
+                <NTooltip v-if="env.statuses[def.id]!.installPath">
+                  <template #trigger>
+                    <NButton
+                      quaternary
+                      circle
+                      size="tiny"
+                      @click="jumpTerminal(env.statuses[def.id]!.installPath)"
+                    >
+                      <NIcon :component="Terminal2" :size="14" />
+                    </NButton>
+                  </template>
+                  终端 cd 跳转
+                </NTooltip>
+                <NPopconfirm
+                  @positive-click="onAction(() => env.uninstall(def.id), `${def.name} 已卸载`)"
+                >
+                  <template #trigger>
+                    <NButton
+                      quaternary
+                      circle
+                      size="tiny"
+                      :loading="env.operating.has(def.id)"
+                    >
+                      <NIcon :component="Trash" :size="14" />
+                    </NButton>
+                  </template>
+                  确认卸载 {{ def.name }}？{{ def.uninstallNote }}。
+                </NPopconfirm>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </NSpin>
+
+    <!-- 安装弹窗 -->
+    <NModal
+      v-model:show="showInstall"
+      preset="card"
+      :title="`安装 ${installDef?.name ?? ''}`"
+      style="width: 440px"
+      :bordered="false"
+    >
+      <p class="install-note">{{ installDef?.installNote }}</p>
+      <div v-if="installDef?.optionalVersion" class="install-version">
+        <span class="install-version-label">版本</span>
+        <NSelect
+          v-model:value="installVersion"
+          :options="versionOptions"
+          :loading="versionsLoading"
+          filterable
+          tag
+          size="small"
+          placeholder="选择或输入版本号"
+        />
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <NButton size="small" @click="showInstall = false">取消</NButton>
+          <NButton
+            size="small"
+            type="primary"
+            :loading="installDef ? env.operating.has(installDef.id) : false"
+            @click="submitInstall"
+          >
+            安装
+          </NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 配置编辑弹窗 -->
+    <NModal
+      v-model:show="showConfig"
+      preset="card"
+      title="编辑配置"
+      style="width: 80%"
+      :bordered="false"
+    >
+      <div class="config-path">{{ env.configPath }}</div>
+      <p v-if="env.configEnvId === 'nginx' || env.configEnvId === 'openresty'" class="config-hint">
+        保存时将先校验语法，失败自动回滚到备份
+      </p>
+      <NInput
+        v-model:value="configDraft"
+        type="textarea"
+        class="config-editor"
+        :autosize="{ minRows: 18, maxRows: 30 }"
+        spellcheck="false"
+      />
+      <template #footer>
+        <div class="dialog-footer">
+          <NButton size="small" :loading="env.configLoading" @click="reloadConfig">重新加载</NButton>
+          <NButton size="small" type="primary" :loading="env.configSaving" @click="saveConfig">
+            保存
+          </NButton>
+        </div>
+      </template>
+    </NModal>
+  </div>
+</template>
+
+<style scoped>
+.env-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.host {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+}
+.empty {
+  padding: 32px 0;
+}
+.error-state {
+  padding: 32px 16px;
+  text-align: center;
+}
+.error-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.card-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.card-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.card-pending {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.svc {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.svc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.svc.active {
+  color: var(--success);
+}
+.svc.active .svc-dot {
+  background: var(--success);
+}
+.svc.failed {
+  color: var(--danger);
+}
+.svc.failed .svc-dot {
+  background: var(--danger);
+}
+.card-path {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.install-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+.install-version {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.install-version-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.config-path {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+.config-hint {
+  font-size: 11px;
+  color: var(--warning);
+  margin: 0 0 8px;
+}
+.config-editor :deep(textarea) {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+</style>

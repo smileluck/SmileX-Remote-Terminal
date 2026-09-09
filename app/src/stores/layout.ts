@@ -4,7 +4,7 @@ import { ref, watch } from 'vue'
 const STORAGE_KEY = 'smilex-layout-v1'
 
 /** 右栏面板页签（单页签显示，切换制，不同时叠加多个面板） */
-export type RightPanelTab = 'agent' | 'monitor' | 'alerts' | 'snippets' | 'docker' | 'crontab'
+export type RightPanelTab = 'agent' | 'monitor' | 'alerts' | 'snippets' | 'docker' | 'crontab' | 'env'
 
 /** 侧栏列表页签（SSH 会话 / 远程桌面） */
 export type SidebarTab = 'ssh' | 'desktop'
@@ -66,6 +66,8 @@ export const useLayoutStore = defineStore('layout', () => {
   const filesView = ref<'simple' | 'detail'>(initial.filesView)
   /** 终端文件面板（SFTP）是否打开（与右栏三面板互斥；不持久化） */
   const filesVisible = ref(false)
+  /** 文件面板一次性外部导航目标路径（FilePanel 消费后自行清除；不持久化） */
+  const filesNavPath = ref<string | null>(null)
 
   /** 切换左栏折叠 */
   function toggleSidebar() {
@@ -120,6 +122,13 @@ export const useLayoutStore = defineStore('layout', () => {
     }
   }
 
+  /** 打开文件面板并定位到指定路径（与右栏互斥；定位由 FilePanel watch navPath 完成） */
+  function openFilesAt(path: string) {
+    filesNavPath.value = path
+    filesVisible.value = true
+    monitorVisible.value = false
+  }
+
   // 持久化（watch 深度变化写入 localStorage）
   watch(
     [sidebarCollapsed, sidebarTab, monitorVisible, monitorWidth, rightTab, filesWidth, filesView],
@@ -153,6 +162,7 @@ export const useLayoutStore = defineStore('layout', () => {
     filesWidth,
     filesView,
     filesVisible,
+    filesNavPath,
     toggleSidebar,
     toggleSidebarTab,
     toggleMonitor,
@@ -160,5 +170,6 @@ export const useLayoutStore = defineStore('layout', () => {
     openRightPanel,
     toggleRightPanel,
     toggleFiles,
+    openFilesAt,
   }
 })
