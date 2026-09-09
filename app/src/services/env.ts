@@ -192,8 +192,10 @@ const DETECT_SCRIPT = [
   'first_file() { for f in "$@"; do if [ -f "$f" ]; then echo "$f"; return; fi; done; }',
   // 服务状态：优先 systemctl（输出 unit:state），无 systemd 时 pgrep 兜底
   'svc_state() { if command -v systemctl >/dev/null 2>&1; then for u in "$@"; do if systemctl list-unit-files "${u}.service" 2>/dev/null | grep -q "^${u}"; then st=$(systemctl is-active "$u" 2>/dev/null); echo "$u:${st:-unknown}"; return; fi; done; fi; for u in "$@"; do if pgrep -x "$u" >/dev/null 2>&1; then echo "$u:active"; return; fi; done; echo "$1:inactive"; }',
-  // python：pyenv 安装优先展示 ~/.pyenv；source 标记 pyenv / conda / system
-  'pp=$(command -v python3 2>/dev/null); if [ -n "$pp" ]; then pv=$(python3 -V 2>&1 | awk "{print \\$2}"); rpy=$(readlink -f "$pp" 2>/dev/null || echo "$pp"); if [ -d "$HOME/.pyenv" ] && [ "${rpy#$HOME/.pyenv}" != "$rpy" ]; then pdir="$HOME/.pyenv"; psrc="pyenv"; else case "$rpy" in *conda*) psrc="conda"; cbase="${rpy%%/envs/*}"; if [ "$cbase" != "$rpy" ]; then pdir="$cbase"; else pdir=$(dirname "$(dirname "$rpy")"); fi;; *) psrc="system"; pdir=$(dirname "$(dirname "$rpy")");; esac; fi; pcfg=""; [ -f "$HOME/.pyenv/version" ] && pcfg="$HOME/.pyenv/version"; emit python 1 "$pv" "$pdir" "-" "$pcfg" "" "$psrc"; else emit python 0 "" "" "-" ""; fi',
+  // python：优先级 pyenv > 系统包 > conda。.bashrc 里 conda init + 默认激活环境会
+  // 把 login shell 的 python3 指向 conda env，遮蔽系统包 Python——故显式探测
+  // /usr/bin/python3，conda 默认环境不影响系统包路径（conda 的 Python 由 Conda 卡片管理）
+  'sp=""; [ -x /usr/bin/python3 ] && sp=/usr/bin/python3; pp=$(command -v python3 2>/dev/null); if [ -n "$pp" ] || [ -n "$sp" ]; then rpy=$(readlink -f "$pp" 2>/dev/null || echo "$pp"); if [ -d "$HOME/.pyenv" ] && [ -n "$rpy" ] && [ "${rpy#$HOME/.pyenv}" != "$rpy" ]; then psrc="pyenv"; pdir="$HOME/.pyenv"; pv=$(python3 -V 2>&1 | awk "{print \\$2}"); elif [ -n "$sp" ]; then psrc="system"; pv=$("$sp" -V 2>&1 | awk "{print \\$2}"); pdir=$(dirname "$(dirname "$(readlink -f "$sp" 2>/dev/null || echo "$sp")")"); elif [ -n "$pp" ]; then pv=$(python3 -V 2>&1 | awk "{print \\$2}"); case "$rpy" in *conda*) psrc="conda"; cbase="${rpy%%/envs/*}"; if [ "$cbase" != "$rpy" ]; then pdir="$cbase"; else pdir=$(dirname "$(dirname "$rpy")"); fi;; *) psrc="system"; pdir=$(dirname "$(dirname "$rpy")");; esac; fi; pcfg=""; if [ "$psrc" = "pyenv" ] && [ -f "$HOME/.pyenv/version" ]; then pcfg="$HOME/.pyenv/version"; fi; emit python 1 "$pv" "$pdir" "-" "$pcfg" "" "$psrc"; else emit python 0 "" "" "-" ""; fi',
   // conda：command -v 可命中 login shell 里的 shell 函数；否则探测常见安装目录
   'cdir=""; cv=""; if command -v conda >/dev/null 2>&1; then cv=$(conda --version 2>/dev/null | awk "{print \\$2}"); cdir=$(conda info --base 2>/dev/null); elif [ -x "$HOME/miniconda3/bin/conda" ]; then cv=$("$HOME/miniconda3/bin/conda" --version 2>/dev/null | awk "{print \\$2}"); cdir="$HOME/miniconda3"; elif [ -x "$HOME/anaconda3/bin/conda" ]; then cv=$("$HOME/anaconda3/bin/conda" --version 2>/dev/null | awk "{print \\$2}"); cdir="$HOME/anaconda3"; elif [ -x /opt/conda/bin/conda ]; then cv=$(/opt/conda/bin/conda --version 2>/dev/null | awk "{print \\$2}"); cdir="/opt/conda"; fi; if [ -n "$cdir" ]; then ccfg=""; [ -f "$HOME/.condarc" ] && ccfg="$HOME/.condarc"; emit conda 1 "$cv" "$cdir" "-" "$ccfg"; else emit conda 0 "" "" "-" ""; fi',
   // go：GOROOT 为安装目录，GOENV 为 go env -w 持久化文件；source 标记 official（/usr/local/go）/ system
@@ -598,7 +600,7 @@ export async function switchVersion(sid: string, id: EnvId, version: string): Pr
         [
           'export PATH="$HOME/.pyenv/bin:$PATH"',
           'RPY=$(readlink -f "$(command -v python3 2>/dev/null)" 2>/dev/null)',
-          `if command -v pyenv >/dev/null 2>&1 && [ -n "$RPY" ] && [ "\${RPY#$HOME/.pyenv}" != "$RPY" ]; then pyenv install -s ${sq(v)} && pyenv global ${sq(v)}; elif command -v conda >/dev/null 2>&1; then conda install -y python=${sq(v)}; else echo "系统包安装的 Python 不支持一键切换版本；如需版本管理，请先卸载系统包后通过面板安装（pyenv/conda 管理）"; exit 1; fi`,
+          `if command -v pyenv >/dev/null 2>&1 && [ -n "$RPY" ] && [ "\${RPY#$HOME/.pyenv}" != "$RPY" ]; then pyenv install -s ${sq(v)} && pyenv global ${sq(v)}; elif command -v conda >/dev/null 2>&1; then conda install -y -n base python=${sq(v)}; else echo "系统包安装的 Python 不支持一键切换版本；如需版本管理，请先卸载系统包后通过面板安装（pyenv/conda 管理）"; exit 1; fi`,
         ].join('; '),
       )}`,
     )
