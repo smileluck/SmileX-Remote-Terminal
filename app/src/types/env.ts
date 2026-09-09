@@ -2,7 +2,7 @@
  * 环境管理面板类型定义
  *
  * 字段对齐 services/env.ts 的探测输出（SRT_ENV|<id>|<installed>|<version>|
- * <path>|<service>|<config> 分隔行逐行解析）。
+ * <path>|<service>|<config>|<bin> 分隔行逐行解析，bin 字段可选）。
  */
 
 /** 支持管理的环境 ID */
@@ -37,4 +37,6 @@ export interface EnvStatus {
   serviceName?: string
   /** 探测到的主配置文件路径（无配置文件的环境为空） */
   configPath?: string
+  /** 二进制所在目录（仅 nginx 等路径已指到配置目录的环境提供，供跳转选择） */
+  binPath?: string
 }

@@ -4,8 +4,8 @@
  * 复用 session_exec 静默通道管理远端主机的 8 种环境
  * （Python / Go / Java / MySQL / PostgreSQL / Redis / Nginx / OpenResty）：
  * - 探测：一次 exec 执行拼接脚本（bash -lc 包装以拿到 login shell PATH），
- *   每种环境输出 SRT_ENV|<id>|<installed>|<version>|<path>|<service>|<config>
- *   分隔行，前端逐行解析
+ *   每种环境输出 SRT_ENV|<id>|<installed>|<version>|<path>|<service>|
+ *   <config>|<bin 可选> 分隔行，前端逐行解析
  * - 安装：官方脚本 / 版本管理器 / 厂商官方源（退出码 42 = 无权限、
  *   43 = 缺 curl/wget、44 = 发行版不支持），官方源失败自动切国内镜像
  * - 配置：读取（512KB 上限）→ 面板编辑 → base64 回写（先 cp 备份；
@@ -166,10 +166,10 @@ async function runChecked(sid: string, cmd: string): Promise<string> {
 
 /**
  * 一次性探测脚本：每种环境输出一行 SRT_ENV|<id>|<installed>|<version>|
- * <path>|<unit:state 或 ->|<config>。emit 各字段不允许含 '|'。
+ * <path>|<unit:state 或 ->|<config>|<bin 可选>。emit 各字段不允许含 '|'。
  */
 const DETECT_SCRIPT = [
-  'emit() { echo "SRT_ENV|$1|$2|$3|$4|$5|$6"; }',
+  'emit() { echo "SRT_ENV|$1|$2|$3|$4|$5|$6|$7"; }',
   'first_file() { for f in "$@"; do if [ -f "$f" ]; then echo "$f"; return; fi; done; }',
   // 服务状态：优先 systemctl（输出 unit:state），无 systemd 时 pgrep 兜底
   'svc_state() { if command -v systemctl >/dev/null 2>&1; then for u in "$@"; do if systemctl list-unit-files "${u}.service" 2>/dev/null | grep -q "^${u}"; then st=$(systemctl is-active "$u" 2>/dev/null); echo "$u:${st:-unknown}"; return; fi; done; fi; for u in "$@"; do if pgrep -x "$u" >/dev/null 2>&1; then echo "$u:active"; return; fi; done; echo "$1:inactive"; }',
@@ -185,8 +185,8 @@ const DETECT_SCRIPT = [
   'qp=$(command -v psql 2>/dev/null); if [ -n "$qp" ]; then qv=$(psql --version 2>/dev/null | awk "{print \\$3}"); qcfg=$(psql -Atqc "show config_file" 2>/dev/null); { [ -n "$qcfg" ] && [ -f "$qcfg" ]; } || qcfg=$(ls /etc/postgresql/*/*/postgresql.conf /var/lib/pgsql/*/data/postgresql.conf /var/lib/pgsql/data/postgresql.conf 2>/dev/null | head -1); qdir=$(ls -d /usr/lib/postgresql/* /usr/pgsql-* 2>/dev/null | head -1); [ -n "$qdir" ] || qdir="/var/lib/postgresql"; emit postgresql 1 "$qv" "$qdir" "$(svc_state postgresql postgres)" "$qcfg"; else emit postgresql 0 "" "" "-" ""; fi',
   // redis
   'rp=$(command -v redis-server 2>/dev/null); if [ -n "$rp" ]; then rv=$(redis-server --version 2>/dev/null | sed -E "s/.*v=([0-9.]+).*/\\1/"); rdir=$(dirname "$rp"); rcfg=$(first_file /etc/redis/redis.conf /etc/redis.conf /usr/local/etc/redis.conf); emit redis 1 "$rv" "$rdir" "$(svc_state redis-server redis)" "$rcfg"; else emit redis 0 "" "" "-" ""; fi',
-  // nginx：从 nginx -V 解析 --conf-path；路径指到配置文件所在目录，无配置时 fallback --prefix
-  'np=$(command -v nginx 2>/dev/null); if [ -n "$np" ]; then nv=$(nginx -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); nvv=$(nginx -V 2>&1); ncfg=$(echo "$nvv" | sed -nE "s/.*--conf-path=([^ ]+).*/\\1/p"); { [ -n "$ncfg" ] && [ -f "$ncfg" ]; } || ncfg=$(first_file /etc/nginx/nginx.conf); if [ -n "$ncfg" ]; then ndir=$(dirname "$ncfg"); else ndir=$(echo "$nvv" | sed -nE "s/.*--prefix=([^ ]+).*/\\1/p"); [ -n "$ndir" ] || ndir=$(dirname "$np"); fi; emit nginx 1 "$nv" "$ndir" "$(svc_state nginx)" "$ncfg"; else emit nginx 0 "" "" "-" ""; fi',
+  // nginx：从 nginx -V 解析 --conf-path；路径指到配置文件所在目录，第 7 字段附二进制目录
+  'np=$(command -v nginx 2>/dev/null); if [ -n "$np" ]; then nv=$(nginx -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); nvv=$(nginx -V 2>&1); ncfg=$(echo "$nvv" | sed -nE "s/.*--conf-path=([^ ]+).*/\\1/p"); { [ -n "$ncfg" ] && [ -f "$ncfg" ]; } || ncfg=$(first_file /etc/nginx/nginx.conf); if [ -n "$ncfg" ]; then ndir=$(dirname "$ncfg"); else ndir=$(echo "$nvv" | sed -nE "s/.*--prefix=([^ ]+).*/\\1/p"); [ -n "$ndir" ] || ndir=$(dirname "$np"); fi; nbin=$(dirname "$(readlink -f "$np" 2>/dev/null || echo "$np")"); emit nginx 1 "$nv" "$ndir" "$(svc_state nginx)" "$ncfg" "$nbin"; else emit nginx 0 "" "" "-" "" ""; fi',
   // openresty：路径指到 nginx 配置文件所在目录，无配置时 fallback 安装前缀
   'op=$(command -v openresty 2>/dev/null); if [ -n "$op" ]; then ov=$(openresty -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); ovv=$(openresty -V 2>&1); ocfg=$(echo "$ovv" | sed -nE "s/.*--conf-path=([^ ]+).*/\\1/p"); { [ -n "$ocfg" ] && [ -f "$ocfg" ]; } || ocfg=$(first_file /usr/local/openresty/nginx/conf/nginx.conf /etc/openresty/nginx.conf); if [ -n "$ocfg" ]; then odir=$(dirname "$ocfg"); else odir="/usr/local/openresty"; [ -d "$odir" ] || odir=$(dirname "$(dirname "$op")"); fi; emit openresty 1 "$ov" "$odir" "$(svc_state openresty)" "$ocfg"; else emit openresty 0 "" "" "-" ""; fi',
 ].join('\n')
@@ -208,6 +208,7 @@ export async function detectAll(sid: string): Promise<EnvStatus[]> {
       serviceName: svc?.[0],
       serviceActive: svc ? ((svc[1] || 'unknown') as EnvStatus['serviceActive']) : undefined,
       configPath: p[6] || undefined,
+      binPath: p[7] || undefined,
     })
   }
   return list

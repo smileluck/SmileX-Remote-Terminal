@@ -23,6 +23,7 @@ import {
   NSpin,
   NTooltip,
   NTag,
+  NDropdown,
   useMessage,
 } from 'naive-ui'
 import {
@@ -210,6 +211,19 @@ function jumpTerminal(path: string) {
 function jumpFiles(path: string) {
   layout.openFilesAt(path)
 }
+
+/**
+ * 跳转目标选项：默认只有安装路径一项；nginx 等路径已指到配置目录、
+ * 且探测到二进制目录的环境，提供「配置目录 / 二进制目录」选择。
+ */
+function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
+  const list: Array<{ label: string; key: string }> = []
+  if (s.installPath) list.push({ label: s.binPath ? '配置目录' : '安装路径', key: s.installPath })
+  if (s.binPath && s.binPath !== s.installPath) {
+    list.push({ label: '二进制目录', key: s.binPath })
+  }
+  return list
+}
 </script>
 
 <template>
@@ -338,32 +352,56 @@ function jumpFiles(path: string) {
                   </template>
                   编辑配置
                 </NTooltip>
-                <NTooltip v-if="env.statuses[def.id]!.installPath">
-                  <template #trigger>
-                    <NButton
-                      quaternary
-                      circle
-                      size="tiny"
-                      @click="jumpFiles(env.statuses[def.id]!.installPath)"
-                    >
+                <template v-if="env.statuses[def.id]!.installPath">
+                  <NDropdown
+                    v-if="env.statuses[def.id]!.binPath"
+                    trigger="click"
+                    :options="jumpTargets(env.statuses[def.id]!)"
+                    @select="(p: string) => jumpFiles(p)"
+                  >
+                    <NButton quaternary circle size="tiny" title="文件面板定位（可选目录）">
                       <NIcon :component="Folder" :size="14" />
                     </NButton>
-                  </template>
-                  文件面板定位
-                </NTooltip>
-                <NTooltip v-if="env.statuses[def.id]!.installPath">
-                  <template #trigger>
-                    <NButton
-                      quaternary
-                      circle
-                      size="tiny"
-                      @click="jumpTerminal(env.statuses[def.id]!.installPath)"
-                    >
+                  </NDropdown>
+                  <NTooltip v-else>
+                    <template #trigger>
+                      <NButton
+                        quaternary
+                        circle
+                        size="tiny"
+                        @click="jumpFiles(env.statuses[def.id]!.installPath)"
+                      >
+                        <NIcon :component="Folder" :size="14" />
+                      </NButton>
+                    </template>
+                    文件面板定位
+                  </NTooltip>
+                </template>
+                <template v-if="env.statuses[def.id]!.installPath">
+                  <NDropdown
+                    v-if="env.statuses[def.id]!.binPath"
+                    trigger="click"
+                    :options="jumpTargets(env.statuses[def.id]!)"
+                    @select="(p: string) => jumpTerminal(p)"
+                  >
+                    <NButton quaternary circle size="tiny" title="终端 cd 跳转（可选目录）">
                       <NIcon :component="Terminal2" :size="14" />
                     </NButton>
-                  </template>
-                  终端 cd 跳转
-                </NTooltip>
+                  </NDropdown>
+                  <NTooltip v-else>
+                    <template #trigger>
+                      <NButton
+                        quaternary
+                        circle
+                        size="tiny"
+                        @click="jumpTerminal(env.statuses[def.id]!.installPath)"
+                      >
+                        <NIcon :component="Terminal2" :size="14" />
+                      </NButton>
+                    </template>
+                    终端 cd 跳转
+                  </NTooltip>
+                </template>
                 <NPopconfirm
                   @positive-click="onAction(() => env.uninstall(def.id), `${def.name} 已卸载`)"
                 >
