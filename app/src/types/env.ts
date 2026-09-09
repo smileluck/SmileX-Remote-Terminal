@@ -15,6 +15,7 @@ export type EnvId =
   | 'redis'
   | 'nginx'
   | 'openresty'
+  | 'docker'
 
 /** 环境操作错误分类 */
 export type EnvErrorKind = 'not-installed' | 'no-permission' | 'unsupported-os' | 'unknown'

@@ -24,6 +24,7 @@ export const useEnvStore = defineStore('env', () => {
     redis: null,
     nginx: null,
     openresty: null,
+    docker: null,
   })
   /** 探测进行中 */
   const detecting = ref(false)

@@ -27,8 +27,6 @@ export const useDockerStore = defineStore('docker', () => {
   const errorMessage = ref('')
   /** 变更操作进行中（按钮 loading / 防重入） */
   const acting = ref(false)
-  /** 一键安装进行中（安装耗时长，独立 loading） */
-  const installing = ref(false)
 
   let refreshing = false
   let timer: ReturnType<typeof setInterval> | null = null
@@ -143,20 +141,6 @@ export const useDockerStore = defineStore('docker', () => {
     return act((sid) => dockerService.runContainer(sid, image, opts))
   }
 
-  /** 一键安装 Docker（官方脚本，失败自动切阿里云镜像），完成后刷新 */
-  async function installDocker() {
-    const sid = activeSshSessionId()
-    if (!sid) throw new Error('无活跃的 SSH 会话')
-    if (installing.value) return
-    installing.value = true
-    try {
-      await dockerService.installDocker(sid)
-      await refresh()
-    } finally {
-      installing.value = false
-    }
-  }
-
   return {
     containers,
     images,
@@ -164,7 +148,6 @@ export const useDockerStore = defineStore('docker', () => {
     errorKind,
     errorMessage,
     acting,
-    installing,
     hasSession,
     refresh,
     startPolling,
@@ -175,6 +158,5 @@ export const useDockerStore = defineStore('docker', () => {
     removeContainer,
     removeImage,
     runContainer,
-    installDocker,
   }
 })

@@ -41,11 +41,13 @@ import {
 } from '@vicons/tabler'
 import { useDockerStore } from '@/stores/docker'
 import { useTabsStore } from '@/stores/tabs'
+import { useLayoutStore } from '@/stores/layout'
 import { segmentTabThemeOverrides } from '@/components/common/segmentTabTheme'
 import type { DockerContainer, DockerImage, RunContainerOptions } from '@/types/docker'
 
 const docker = useDockerStore()
 const tabs = useTabsStore()
+const layout = useLayoutStore()
 const message = useMessage()
 
 onMounted(() => docker.startPolling())
@@ -88,7 +90,7 @@ const tabsThemeOverrides = segmentTabThemeOverrides
 const errorText = computed(() => {
   switch (docker.errorKind) {
     case 'not-installed':
-      return '远端主机未安装 Docker'
+      return '远端主机未安装 Docker（可在「环境管理」面板一键安装）'
     case 'no-permission':
       return '当前用户无权限访问 Docker（可将用户加入 docker 用户组，或使用有权限的账号连接）'
     case 'daemon-down':
@@ -113,11 +115,6 @@ async function onAction(fn: () => Promise<unknown>, ok: string) {
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
   }
-}
-
-/** 一键安装 Docker（确认弹窗回调，store 内完成后自动刷新） */
-function onInstall() {
-  void onAction(() => docker.installDocker(), 'Docker 安装完成')
 }
 
 /* ---------------- 运行对话框 ---------------- */
@@ -200,15 +197,14 @@ async function submitRun() {
         <div v-else-if="docker.errorKind !== 'none'" class="error-state">
           <NIcon :component="BrandDocker" :size="32" class="error-icon" />
           <p class="error-text">{{ errorText }}</p>
-          <NPopconfirm v-if="docker.errorKind === 'not-installed'" @positive-click="onInstall">
-            <template #trigger>
-              <NButton size="small" type="primary" :loading="docker.installing">
-                一键安装 Docker
-              </NButton>
-            </template>
-            将通过 get.docker.com 官方脚本安装 Docker（失败自动切换阿里云镜像），需要 root 或免密
-            sudo 权限。确认安装？
-          </NPopconfirm>
+          <NButton
+            v-if="docker.errorKind === 'not-installed'"
+            size="small"
+            type="primary"
+            @click="layout.setRightTab('env')"
+          >
+            前往「环境管理」安装
+          </NButton>
         </div>
 
         <!-- 容器列表 -->

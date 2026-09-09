@@ -2,8 +2,8 @@
 /**
  * EnvPanel - 环境管理面板（右栏页签）
  *
- * 对当前 SSH 会话远端主机的 8 种环境（Python / Go / Java / MySQL /
- * PostgreSQL / Redis / Nginx / OpenResty）提供：
+ * 对当前 SSH 会话远端主机的 9 种环境（Python / Go / Java / MySQL /
+ * PostgreSQL / Redis / Nginx / OpenResty / Docker）提供：
  * - 安装（官方脚本 / 版本管理器，可选版本弹窗现场探测版本列表）
  * - 版本切换（python/go/java；仅版本管理器/官方包管理的运行时支持）
  * - 卸载（NPopconfirm 二次确认，注明数据目录影响范围）
@@ -37,6 +37,7 @@ import {
   Bolt,
   Server,
   BrandOpenSource,
+  BrandDocker,
   PlayerPlay,
   PlayerStop,
   RotateClockwise,
@@ -81,6 +82,7 @@ const ENV_ICONS: Record<EnvId, Component> = {
   redis: Bolt,
   nginx: Server,
   openresty: BrandOpenSource,
+  docker: BrandDocker,
 }
 
 /** 当前主机提示 */

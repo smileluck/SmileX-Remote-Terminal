@@ -1,8 +1,8 @@
 /**
  * 环境管理服务
  *
- * 复用 session_exec 静默通道管理远端主机的 8 种环境
- * （Python / Go / Java / MySQL / PostgreSQL / Redis / Nginx / OpenResty）：
+ * 复用 session_exec 静默通道管理远端主机的 9 种环境
+ * （Python / Go / Java / MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）：
  * - 探测：一次 exec 执行拼接脚本（bash -lc 包装以拿到 login shell PATH），
  *   每种环境输出 SRT_ENV|<id>|<installed>|<version>|<path>|<service>|
  *   <config>|<bin 可选> 分隔行，前端逐行解析
@@ -115,6 +115,15 @@ export const ENV_DEFS: EnvDef[] = [
     installNote: 'openresty.org 官方仓库安装（需 root 或免密 sudo）',
     uninstallNote: '仅移除软件包，配置文件保留',
   },
+  {
+    id: 'docker',
+    name: 'Docker',
+    service: true,
+    optionalVersion: false,
+    configValidate: false,
+    installNote: 'get.docker.com 官方脚本安装，失败自动切换阿里云镜像（需 root 或免密 sudo）',
+    uninstallNote: '仅移除软件包，镜像与容器数据 /var/lib/docker 保留',
+  },
 ]
 
 /** shell 单引号转义（' → '\''），用户输入一律经此包装防注入 */
@@ -190,6 +199,8 @@ const DETECT_SCRIPT = [
   'np=$(command -v nginx 2>/dev/null); if [ -n "$np" ]; then nv=$(nginx -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); nvv=$(nginx -V 2>&1); ncfg=$(echo "$nvv" | sed -nE "s/.*--conf-path=([^ ]+).*/\\1/p"); { [ -n "$ncfg" ] && [ -f "$ncfg" ]; } || ncfg=$(first_file /etc/nginx/nginx.conf); if [ -n "$ncfg" ]; then ndir=$(dirname "$ncfg"); else ndir=$(echo "$nvv" | sed -nE "s/.*--prefix=([^ ]+).*/\\1/p"); [ -n "$ndir" ] || ndir=$(dirname "$np"); fi; nbin=$(dirname "$(readlink -f "$np" 2>/dev/null || echo "$np")"); emit nginx 1 "$nv" "$ndir" "$(svc_state nginx)" "$ncfg" "$nbin"; else emit nginx 0 "" "" "-" "" ""; fi',
   // openresty：路径指到 nginx 配置文件所在目录，无配置时 fallback 安装前缀；第 7 字段附二进制目录
   'op=$(command -v openresty 2>/dev/null); if [ -n "$op" ]; then ov=$(openresty -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); ovv=$(openresty -V 2>&1); ocfg=$(echo "$ovv" | sed -nE "s/.*--conf-path=([^ ]+).*/\\1/p"); { [ -n "$ocfg" ] && [ -f "$ocfg" ]; } || ocfg=$(first_file /usr/local/openresty/nginx/conf/nginx.conf /etc/openresty/nginx.conf); if [ -n "$ocfg" ]; then odir=$(dirname "$ocfg"); else odir="/usr/local/openresty"; [ -d "$odir" ] || odir=$(dirname "$(dirname "$op")"); fi; obin=$(dirname "$(readlink -f "$op" 2>/dev/null || echo "$op")"); emit openresty 1 "$ov" "$odir" "$(svc_state openresty)" "$ocfg" "$obin"; else emit openresty 0 "" "" "-" "" ""; fi',
+  // docker：路径指到二进制目录，配置为 /etc/docker/daemon.json
+  'dp=$(command -v docker 2>/dev/null); if [ -n "$dp" ]; then dv=$(docker --version 2>/dev/null | sed -E "s/.*version ([0-9.]+).*/\\1/"); ddir=$(dirname "$(readlink -f "$dp" 2>/dev/null || echo "$dp")"); dcfg=""; [ -f /etc/docker/daemon.json ] && dcfg="/etc/docker/daemon.json"; emit docker 1 "$dv" "$ddir" "$(svc_state docker)" "$dcfg"; else emit docker 0 "" "" "-" ""; fi',
 ].join('\n')
 
 /** 探测全部环境（一次 exec，bash -lc 包装确保拿到 login shell 的 PATH） */
@@ -309,6 +320,18 @@ function installScript(id: EnvId, version: string): string {
         '[ $rc -eq 0 ] || exit $rc',
         '$SUDO systemctl enable --now openresty 2>/dev/null || true',
       ].join('; ')
+    // get.docker.com 官方脚本，失败自动切阿里云镜像（自 docker.ts 移入）
+    case 'docker':
+      return [
+        P_SUDO,
+        P_DL,
+        'DLF https://get.docker.com /tmp/srt-get-docker.sh && $SUDO sh /tmp/srt-get-docker.sh',
+        'rc=$?',
+        'if [ $rc -ne 0 ]; then echo "官方源安装失败，切换阿里云镜像重试..."; DLF https://get.docker.com /tmp/srt-get-docker.sh && $SUDO sh /tmp/srt-get-docker.sh --mirror Aliyun; rc=$?; fi',
+        'rm -f /tmp/srt-get-docker.sh',
+        '[ $rc -eq 0 ] || exit $rc',
+        '$SUDO systemctl enable --now docker 2>/dev/null || true',
+      ].join('; ')
   }
 }
 
@@ -372,6 +395,12 @@ function uninstallScript(id: EnvId): string {
         P_SUDO,
         P_PM,
         'if [ "$PM" = "apt" ]; then $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y openresty; else $SUDO $PM remove -y openresty; fi',
+      ].join('; ')
+    case 'docker':
+      return [
+        P_SUDO,
+        P_PM,
+        'if [ "$PM" = "apt" ]; then $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; else $SUDO $PM remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; fi',
       ].join('; ')
   }
 }
