@@ -343,12 +343,30 @@ function onMenuSelect(key: string) {
   if (menuTarget) onRowMenu(key, menuTarget)
 }
 
+/** 文件行右键菜单（按 操作/修改/危险 分组展示） */
 function rowMenuOptions(entry: SftpEntry) {
   return [
-    { label: entry.is_dir ? '下载（递归）' : '下载', key: 'download' },
-    { label: '重命名', key: 'rename' },
-    { label: '授权（chmod）', key: 'chmod' },
-    { label: entry.is_dir ? '删除（递归）' : '删除', key: 'remove' },
+    {
+      type: 'group',
+      label: '操作',
+      key: 'g-action',
+      children: [{ label: entry.is_dir ? '下载（递归）' : '下载', key: 'download' }],
+    },
+    {
+      type: 'group',
+      label: '修改',
+      key: 'g-edit',
+      children: [
+        { label: '重命名', key: 'rename' },
+        { label: '授权（chmod）', key: 'chmod' },
+      ],
+    },
+    {
+      type: 'group',
+      label: '危险操作',
+      key: 'g-danger',
+      children: [{ label: entry.is_dir ? '删除（递归）' : '删除', key: 'remove' }],
+    },
   ]
 }
 
@@ -439,13 +457,35 @@ const currentProfile = computed(() => {
   return profiles.profiles.find((p) => p.id === tab?.profileId) ?? null
 })
 
+/** 面包屑右键菜单（按 导航/打开方式/工具 分组展示） */
 const crumbMenuOptions = computed(() => [
-  { label: '打开会话所在目录', key: 'session-cwd' },
-  { label: '复制绝对路径', key: 'copy' },
-  { label: '保存到常用记录', key: 'save-snippet' },
-  { label: '会话跳转到该路径', key: 'cd' },
-  { label: '新会话打开该路径', key: 'new-session', disabled: !currentProfile.value },
-  { label: '新分屏打开该路径', key: 'new-split' },
+  {
+    type: 'group',
+    label: '导航',
+    key: 'g-nav',
+    children: [
+      { label: '打开会话所在目录', key: 'session-cwd' },
+      { label: '会话跳转到该路径', key: 'cd' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '打开方式',
+    key: 'g-open',
+    children: [
+      { label: '新会话打开该路径', key: 'new-session', disabled: !currentProfile.value },
+      { label: '新分屏打开该路径', key: 'new-split' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '工具',
+    key: 'g-tools',
+    children: [
+      { label: '复制绝对路径', key: 'copy' },
+      { label: '保存到常用记录', key: 'save-snippet' },
+    ],
+  },
 ])
 
 /**
