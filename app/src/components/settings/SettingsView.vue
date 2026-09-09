@@ -34,8 +34,9 @@ import {
   NSpin,
   useMessage,
 } from 'naive-ui'
-import { Plus, Palette, Robot, Key, CloudDownload, Folder as FolderIcon } from '@vicons/tabler'
+import { Plus, Palette, Robot, Key, CloudDownload, Folder as FolderIcon, InfoCircle } from '@vicons/tabler'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
+import { getVersion } from '@tauri-apps/api/app'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useTransferStore } from '@/stores/transfer'
 import KeyManager from '@/components/settings/KeyManager.vue'
@@ -62,8 +63,8 @@ const message = useMessage()
 const themeStore = useThemeStore()
 const transferStore = useTransferStore()
 
-/** 设置分区：外观 / llm 配置 / ssh 密钥 / 文件传输 */
-type Section = 'appearance' | 'llm' | 'keys' | 'transfer'
+/** 设置分区：外观 / llm 配置 / ssh 密钥 / 文件传输 / 关于我们 */
+type Section = 'appearance' | 'llm' | 'keys' | 'transfer' | 'about'
 const section = ref<Section>('llm')
 
 /** 分区元信息（左侧导航 + 内容区标题） */
@@ -96,6 +97,13 @@ const SECTIONS: { value: Section; label: string; icon: Component; title: string;
     title: '文件传输',
     desc: 'SFTP 上传下载的行为偏好。传输并发、进度与暂停/恢复见右下角传输管理。',
   },
+  {
+    value: 'about',
+    label: '关于我们',
+    icon: InfoCircle,
+    title: '关于我们',
+    desc: 'SmileX-Remote-Terminal 产品介绍与版本信息。',
+  },
 ]
 
 /** 选择下载目录（原生对话框） */
@@ -109,6 +117,12 @@ async function pickDownloadDir() {
 }
 
 const currentSection = computed(() => SECTIONS.find((s) => s.value === section.value)!)
+
+/** 应用版本（关于我们分区；Tauri 环境动态读取，vite 预览回退静态值） */
+const appVersion = ref('0.1.0')
+getVersion()
+  .then((v) => (appVersion.value = v))
+  .catch(() => {})
 
 /** 主题选项（外观分区） */
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -523,6 +537,50 @@ onMounted(() => {
         </section>
       </div>
 
+      <!-- 关于我们：产品介绍与版本信息 -->
+      <div v-else-if="section === 'about'" class="section-body">
+        <section class="settings-card about-card">
+          <div class="about-head">
+            <span class="about-logo">S</span>
+            <div>
+              <h3 class="about-name">SmileX-Remote-Terminal</h3>
+              <p class="about-version">版本 {{ appVersion }}</p>
+            </div>
+          </div>
+          <p class="about-desc">
+            SmileX-Remote-Terminal 是一款基于 Tauri 2.x + Vue 3 + Rust 构建的跨平台综合运维工具，
+            为运维工程师、开发者和系统管理员提供统一、高效的远程操作体验。
+          </p>
+          <div class="about-features">
+            <div class="about-feature">
+              <h4>SSH 终端</h4>
+              <p>多会话标签与分屏、xterm.js 渲染、密码 / 私钥认证、Host Key 校验与断线重连。</p>
+            </div>
+            <div class="about-feature">
+              <h4>文件管理</h4>
+              <p>SFTP 目录浏览、上传下载（断点续传）、重命名 / 删除 / 授权，路径直达与会话联动。</p>
+            </div>
+            <div class="about-feature">
+              <h4>AI 运维助手</h4>
+              <p>多 LLM 档案管理（OpenAI 兼容 / Claude / Ollama），流式输出，面向运维场景。</p>
+            </div>
+            <div class="about-feature">
+              <h4>监控与告警</h4>
+              <p>远端主机资源实时监控看板，自定义告警规则，异常及时感知。</p>
+            </div>
+            <div class="about-feature">
+              <h4>远程桌面</h4>
+              <p>Windows / Linux 走 RDP 协议，macOS 自研被控协议，Canvas 帧渲染与输入转发。</p>
+            </div>
+            <div class="about-feature">
+              <h4>效率工具</h4>
+              <p>常用命令记录、Docker 容器 / 镜像管理、远端 crontab 定时任务管理。</p>
+            </div>
+          </div>
+          <p class="about-footer">跨平台桌面应用 · 数据本地存储 · 凭据加密保存</p>
+        </section>
+      </div>
+
       <!-- LLM 配置 -->
       <template v-else>
         <NSpin v-if="loading && profiles.length === 0" class="loading" />
@@ -800,6 +858,76 @@ onMounted(() => {
 /* 文件传输：下载目录 */
 .transfer-card {
   max-width: 560px;
+}
+
+/* 关于我们 */
+.about-card {
+  max-width: 640px;
+}
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.about-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--primary);
+  flex-shrink: 0;
+}
+.about-name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.about-version {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.about-desc {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.about-features {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+.about-feature {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+}
+.about-feature h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.about-feature p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.about-footer {
+  margin: 16px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
 }
 .dir-picker {
   display: flex;
