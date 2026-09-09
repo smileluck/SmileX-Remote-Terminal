@@ -449,12 +449,11 @@ defineExpose({ reload: load })
 <template>
   <div class="file-panel" :style="{ width: layout.filesWidth + 'px' }">
     <div class="resize-handle" :class="{ dragging: resizing }" @mousedown="onResizeStart" />
-    <div class="fp-toolbar">
+    <div class="fp-toolbar" @contextmenu.prevent="(e: MouseEvent) => onCrumbContextMenu(e, cwd)">
       <div
         class="fp-crumbs"
         :title="cwd"
         @dblclick="startPathEdit"
-        @contextmenu.prevent="(e: MouseEvent) => onCrumbContextMenu(e, cwd)"
       >
         <NInput
           v-if="pathEditing"
