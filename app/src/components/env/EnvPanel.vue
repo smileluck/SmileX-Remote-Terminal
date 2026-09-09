@@ -44,11 +44,12 @@ import {
   Terminal2,
   Folder,
   Download,
+  SwitchHorizontal,
 } from '@vicons/tabler'
 import { useEnvStore } from '@/stores/env'
 import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
-import { ENV_DEFS, type EnvDef } from '@/services/env'
+import { ENV_DEFS, SWITCHABLE_ENVS, type EnvDef } from '@/services/env'
 import * as envService from '@/services/env'
 import * as sessionService from '@/services/session'
 import { shellQuote } from '@/utils/shell'
@@ -153,6 +154,65 @@ async function submitInstall() {
     await env.install(def.id, installVersion.value ?? undefined)
     message.success(`${def.name} 安装完成`)
     showInstall.value = false
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/* ---------------- 版本切换弹窗 ---------------- */
+
+const showSwitch = ref(false)
+const switchDef = ref<EnvDef | null>(null)
+const switchTarget = ref<string | null>(null)
+const switchOptions = ref<Array<{ label: string; value: string }>>([])
+const switchLoading = ref(false)
+
+/** 切换弹窗说明（按环境区分数据来源与切换方式） */
+const switchNote = computed(() => {
+  switch (switchDef.value?.id) {
+    case 'python':
+      return '选择本地已安装的 pyenv 版本直接切换；输入新版本号将先安装再切换（pyenv global 生效）'
+    case 'java':
+      return '选择本地已安装的 SDKMAN 版本直接切换；输入新版本号将先安装再切换（sdk default 生效）'
+    case 'go':
+      return '选择版本后下载 go.dev 官方包替换 /usr/local/go（需 root 或免密 sudo）'
+    default:
+      return ''
+  }
+})
+
+async function openSwitch(def: EnvDef) {
+  switchDef.value = def
+  switchTarget.value = null
+  switchOptions.value = []
+  showSwitch.value = true
+  const sid = env.activeSshSessionId()
+  if (!sid) return
+  switchLoading.value = true
+  try {
+    // go 列可下载的官方版本；python/java 列本地已装版本（均可手动输入）
+    const list =
+      def.id === 'go'
+        ? await envService.listVersions(sid, 'go')
+        : await envService.listLocalVersions(sid, def.id)
+    switchOptions.value = list.map((v) => ({ label: v, value: v }))
+  } catch {
+    // 版本列表探测失败不阻塞切换（可手动输入版本号）
+  } finally {
+    switchLoading.value = false
+  }
+}
+
+async function submitSwitch() {
+  const def = switchDef.value
+  if (!def || !switchTarget.value?.trim()) {
+    message.warning('请选择或输入目标版本')
+    return
+  }
+  try {
+    await env.switchVersion(def.id, switchTarget.value)
+    message.success(`${def.name} 已切换到 ${switchTarget.value}`)
+    showSwitch.value = false
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
   }
@@ -338,6 +398,20 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
                     重启
                   </NTooltip>
                 </template>
+                <NTooltip v-if="SWITCHABLE_ENVS.includes(def.id)">
+                  <template #trigger>
+                    <NButton
+                      quaternary
+                      circle
+                      size="tiny"
+                      :disabled="env.operating.has(def.id)"
+                      @click="openSwitch(def)"
+                    >
+                      <NIcon :component="SwitchHorizontal" :size="14" />
+                    </NButton>
+                  </template>
+                  切换版本
+                </NTooltip>
                 <NTooltip v-if="env.statuses[def.id]!.configPath">
                   <template #trigger>
                     <NButton
@@ -455,6 +529,44 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
             @click="submitInstall"
           >
             安装
+          </NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 版本切换弹窗 -->
+    <NModal
+      v-model:show="showSwitch"
+      preset="card"
+      :title="`切换 ${switchDef?.name ?? ''} 版本`"
+      style="width: 440px"
+      :bordered="false"
+    >
+      <p class="install-note">
+        当前版本：{{ env.statuses[switchDef!.id]?.version || '未知' }}。{{ switchNote }}
+      </p>
+      <div class="install-version">
+        <span class="install-version-label">目标版本</span>
+        <NSelect
+          v-model:value="switchTarget"
+          :options="switchOptions"
+          :loading="switchLoading"
+          filterable
+          tag
+          size="small"
+          placeholder="选择或输入版本号"
+        />
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <NButton size="small" @click="showSwitch = false">取消</NButton>
+          <NButton
+            size="small"
+            type="primary"
+            :loading="switchDef ? env.operating.has(switchDef.id) : false"
+            @click="submitSwitch"
+          >
+            切换
           </NButton>
         </div>
       </template>

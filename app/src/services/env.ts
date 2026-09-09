@@ -479,3 +479,72 @@ export async function listVersions(sid: string, id: EnvId): Promise<string[]> {
   }
   return []
 }
+
+
+/* ---------------- 版本切换 ---------------- */
+
+/** 支持切换版本的环境（python/java 走版本管理器，go 重装官方包替换） */
+export const SWITCHABLE_ENVS: readonly EnvId[] = ['python', 'go', 'java']
+
+/** 本地已安装版本列表（切换弹窗用；go 无本地多版本概念，返回空） */
+export async function listLocalVersions(sid: string, id: EnvId): Promise<string[]> {
+  if (id === 'python') {
+    const out = await runChecked(
+      sid,
+      'export PATH="$HOME/.pyenv/bin:$PATH"; if command -v pyenv >/dev/null 2>&1; then pyenv versions --bare 2>/dev/null; fi; true',
+    )
+    return out
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (id === 'java') {
+    const out = await runChecked(
+      sid,
+      'ls "$HOME/.sdkman/candidates/java" 2>/dev/null | grep -v "^current$"; true',
+    )
+    return out
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+/**
+ * 切换版本：
+ * - python：pyenv install -s（已装则跳过）+ pyenv global
+ * - java：本地已装走 sdk default，未装走 sdk install（yes 管道自动设为默认）
+ * - go：重新下载官方包替换 /usr/local/go（复用安装脚本，需 root 或免密 sudo）
+ * 切换可能耗时数分钟（exec 通道无超时），调用方需维护 loading 态。
+ */
+export async function switchVersion(sid: string, id: EnvId, version: string): Promise<void> {
+  const v = version.trim()
+  if (!v) throw new EnvError('unknown', '版本号不能为空')
+  if (id === 'python') {
+    await runChecked(
+      sid,
+      [
+        'export PATH="$HOME/.pyenv/bin:$PATH"',
+        'command -v pyenv >/dev/null 2>&1 || { echo "未检测到 pyenv"; exit 1; }',
+        `pyenv install -s ${sq(v)} && pyenv global ${sq(v)}`,
+      ].join('; '),
+    )
+    return
+  }
+  if (id === 'java') {
+    await runChecked(
+      sid,
+      [
+        'source "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || { echo "未检测到 SDKMAN"; exit 1; }',
+        `if [ -d "$HOME/.sdkman/candidates/java/${v.replace(/[^0-9a-zA-Z._-]/g, '')}" ]; then sdk default java ${sq(v)}; else yes | sdk install java ${sq(v)}; fi`,
+      ].join('; '),
+    )
+    return
+  }
+  if (id === 'go') {
+    await install(sid, 'go', v)
+    return
+  }
+  throw new EnvError('unknown', '该环境不支持切换版本')
+}

@@ -104,6 +104,11 @@ export const useEnvStore = defineStore('env', () => {
     return act(id, (sid) => envService.uninstall(sid, id))
   }
 
+  /** 切换版本（仅 python/go/java；完成后自动刷新探测） */
+  function switchVersion(id: EnvId, version: string) {
+    return act(id, (sid) => envService.switchVersion(sid, id, version))
+  }
+
   /** 服务启停 */
   function serviceAction(id: EnvId, action: 'start' | 'stop' | 'restart') {
     const svc = statuses.value[id]?.serviceName
@@ -155,6 +160,7 @@ export const useEnvStore = defineStore('env', () => {
     refresh,
     install,
     uninstall,
+    switchVersion,
     serviceAction,
     loadConfig,
     saveConfig,
