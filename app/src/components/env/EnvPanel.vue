@@ -6,6 +6,7 @@
  * MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）提供：
  * - 安装（官方脚本 / 版本管理器，可选版本弹窗现场探测版本列表）
  * - 版本切换（python/go/java；仅版本管理器/官方包管理的运行时支持）
+ * - Conda 环境管理（列表 / 新建 / 删除 / 终端激活）
  * - 卸载（NPopconfirm 二次确认，注明数据目录影响范围）
  * - 服务启停（仅服务类环境）
  * - 配置编辑（远程读取 → 面板文本编辑 → 带备份回写；nginx/openresty 校验失败自动回滚）
@@ -48,6 +49,7 @@ import {
   Folder,
   Download,
   SwitchHorizontal,
+  Versions,
 } from '@vicons/tabler'
 import { useEnvStore } from '@/stores/env'
 import { useTabsStore } from '@/stores/tabs'
@@ -282,6 +284,83 @@ async function submitSwitch() {
   }
 }
 
+/* ---------------- Conda 环境管理弹窗 ---------------- */
+
+const showCondaEnvs = ref(false)
+const condaEnvs = ref<envService.CondaEnv[]>([])
+const condaEnvsLoading = ref(false)
+/** 新建环境表单 */
+const newEnvName = ref('')
+const newEnvPy = ref('')
+const condaEnvOperating = ref(false)
+
+async function openCondaEnvs() {
+  showCondaEnvs.value = true
+  newEnvName.value = ''
+  newEnvPy.value = ''
+  await loadCondaEnvs()
+}
+
+async function loadCondaEnvs() {
+  const sid = env.activeSshSessionId()
+  if (!sid) return
+  condaEnvsLoading.value = true
+  try {
+    condaEnvs.value = await envService.listCondaEnvs(sid)
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    condaEnvsLoading.value = false
+  }
+}
+
+async function createCondaEnv() {
+  const sid = env.activeSshSessionId()
+  if (!sid || condaEnvOperating.value) return
+  if (!newEnvName.value.trim()) {
+    message.warning('请输入环境名')
+    return
+  }
+  condaEnvOperating.value = true
+  try {
+    await envService.createCondaEnv(sid, newEnvName.value, newEnvPy.value || undefined)
+    message.success(`环境 ${newEnvName.value} 已创建`)
+    newEnvName.value = ''
+    newEnvPy.value = ''
+    await loadCondaEnvs()
+    void env.refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    condaEnvOperating.value = false
+  }
+}
+
+async function removeCondaEnv(name: string) {
+  const sid = env.activeSshSessionId()
+  if (!sid || condaEnvOperating.value) return
+  condaEnvOperating.value = true
+  try {
+    await envService.removeCondaEnv(sid, name)
+    message.success(`环境 ${name} 已删除`)
+    await loadCondaEnvs()
+    void env.refresh()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    condaEnvOperating.value = false
+  }
+}
+
+/** 切换环境：向当前终端发送 conda activate（用户在终端可见） */
+function activateCondaEnv(name: string) {
+  const sid = env.activeSshSessionId()
+  if (!sid) return
+  void sessionService.input(sid, encoder.encode(`conda activate ${shellQuote(name)}\r`)).catch((e) => {
+    message.error(`发送失败：${e}`)
+  })
+}
+
 /* ---------------- 配置编辑弹窗 ---------------- */
 
 const showConfig = ref(false)
@@ -470,6 +549,20 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
                     重启
                   </NTooltip>
                 </template>
+                <NTooltip v-if="def.id === 'conda'">
+                  <template #trigger>
+                    <NButton
+                      quaternary
+                      circle
+                      size="tiny"
+                      :disabled="env.operating.has(def.id)"
+                      @click="openCondaEnvs"
+                    >
+                      <NIcon :component="Versions" :size="14" />
+                    </NButton>
+                  </template>
+                  管理 conda 环境
+                </NTooltip>
                 <NTooltip v-if="SWITCHABLE_ENVS.includes(def.id)">
                   <template #trigger>
                     <NButton
@@ -653,6 +746,61 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
       </template>
     </NModal>
 
+    <!-- Conda 环境管理弹窗 -->
+    <NModal
+      v-model:show="showCondaEnvs"
+      preset="card"
+      title="Conda 环境管理"
+      style="width: 480px"
+      :bordered="false"
+    >
+      <NSpin :show="condaEnvsLoading" size="small">
+        <div class="conda-envs">
+          <NEmpty v-if="!condaEnvs.length" description="暂无 conda 环境" class="empty" />
+          <div v-for="ce in condaEnvs" :key="ce.path" class="conda-env-row">
+            <span class="conda-env-name">
+              {{ ce.name }}
+              <NTag v-if="ce.isBase" size="tiny" type="info" :bordered="false">base</NTag>
+            </span>
+            <span class="conda-env-path" :title="ce.path">{{ ce.path }}</span>
+            <span class="conda-env-actions">
+              <NTooltip>
+                <template #trigger>
+                  <NButton
+                    quaternary
+                    circle
+                    size="tiny"
+                    @click="activateCondaEnv(ce.name)"
+                  >
+                    <NIcon :component="Terminal2" :size="14" />
+                  </NButton>
+                </template>
+                在终端激活
+              </NTooltip>
+              <NPopconfirm
+                :disabled="ce.isBase"
+                @positive-click="removeCondaEnv(ce.name)"
+              >
+                <template #trigger>
+                  <NButton quaternary circle size="tiny" :disabled="ce.isBase || condaEnvOperating">
+                    <NIcon :component="Trash" :size="14" />
+                  </NButton>
+                </template>
+                确认删除环境 {{ ce.name }}？该环境下的全部包将被移除。
+              </NPopconfirm>
+            </span>
+          </div>
+        </div>
+      </NSpin>
+      <div class="conda-create">
+        <NInput v-model:value="newEnvName" size="small" placeholder="环境名" class="conda-create-name" />
+        <NInput v-model:value="newEnvPy" size="small" placeholder="Python 版本（可选，如 3.12）" />
+        <NButton size="small" type="primary" :loading="condaEnvOperating" @click="createCondaEnv">
+          新建
+        </NButton>
+      </div>
+    </NModal>
+
     <!-- 配置编辑弹窗 -->
     <NModal
       v-model:show="showConfig"
@@ -827,5 +975,58 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+.conda-envs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.conda-env-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.conda-env-row:hover {
+  background: var(--bg-elevated);
+}
+.conda-env-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.conda-env-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conda-env-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.conda-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+.conda-create-name {
+  width: 140px;
+  flex-shrink: 0;
 }
 </style>

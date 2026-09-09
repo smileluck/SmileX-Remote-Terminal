@@ -624,3 +624,57 @@ export async function switchVersion(sid: string, id: EnvId, version: string): Pr
   }
   throw new EnvError('unknown', '该环境不支持切换版本')
 }
+
+
+/* ---------------- Conda 环境管理 ---------------- */
+
+/** 单个 conda 环境 */
+export interface CondaEnv {
+  /** 环境名（base 为基环境） */
+  name: string
+  /** 环境路径 */
+  path: string
+  /** 是否为 base 环境（不可删除） */
+  isBase: boolean
+}
+
+/** conda 未初始化进 shell 时的常见安装目录兜底 PATH */
+const CONDA_PATH = 'export PATH="$HOME/miniconda3/bin:$HOME/anaconda3/bin:/opt/conda/bin:$PATH"'
+
+/** 列出全部 conda 环境（bash -lc 包装以拿到 login shell 的 conda 函数） */
+export async function listCondaEnvs(sid: string): Promise<CondaEnv[]> {
+  const out = await runChecked(sid, `bash -lc ${sq(`${CONDA_PATH}; conda env list --json 2>/dev/null || true`)}`)
+  const m = out.match(/\{[\s\S]*"envs"[\s\S]*\}/)
+  if (!m) return []
+  try {
+    const paths = (JSON.parse(m[0]) as { envs?: string[] }).envs ?? []
+    return paths.map((p) => {
+      const isBase = !p.includes('/envs/')
+      return { name: isBase ? 'base' : p.replace(/\/$/, '').split('/').pop() ?? p, path: p, isBase }
+    })
+  } catch {
+    return []
+  }
+}
+
+/** 新建 conda 环境（pythonVersion 为空则不带 python 约束） */
+export async function createCondaEnv(sid: string, name: string, pythonVersion?: string): Promise<void> {
+  const n = name.trim()
+  if (!/^[0-9a-zA-Z._-]+$/.test(n)) throw new EnvError('unknown', '环境名仅支持字母、数字、点、下划线、连字符')
+  const py = pythonVersion?.trim()
+  if (py && !/^[0-9]+(\.[0-9]+){0,2}$/.test(py)) throw new EnvError('unknown', 'Python 版本格式不正确（如 3.12）')
+  await runChecked(
+    sid,
+    `bash -lc ${sq(`${CONDA_PATH}; conda create -y -n ${sq(n)}${py ? ` python=${sq(py)}` : ''}`)}`,
+  )
+}
+
+/** 删除 conda 环境（base 不允许；兼容旧版 conda 的 remove --all 写法） */
+export async function removeCondaEnv(sid: string, name: string): Promise<void> {
+  const n = name.trim()
+  if (!n || n === 'base') throw new EnvError('unknown', 'base 环境不允许删除')
+  await runChecked(
+    sid,
+    `bash -lc ${sq(`${CONDA_PATH}; conda env remove -y -n ${sq(n)} || conda remove --all -y -n ${sq(n)}`)}`,
+  )
+}
