@@ -424,7 +424,7 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
   const list: Array<{ label: string; key: string }> = []
   const mainLabel =
     s.id === 'docker' ? '数据目录' : s.id === 'nginx' || s.id === 'openresty' ? '配置目录' : '安装路径'
-  if (s.installPath) list.push({ label: s.binPath ? mainLabel : mainLabel, key: s.installPath })
+  if (s.installPath) list.push({ label: mainLabel, key: s.installPath })
   if (s.binPath && s.binPath !== s.installPath) {
     list.push({ label: '二进制目录', key: s.binPath })
   }
