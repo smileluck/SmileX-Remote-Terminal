@@ -42,6 +42,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import * as sftp from '@/services/sftp'
 import type { SftpEntry } from '@/services/sftp'
 import * as sessionService from '@/services/session'
+import { execInTerminal } from '@/services/termExec'
 import { connectProfile } from '@/composables/useSshConnect'
 import { shellQuote } from '@/utils/shell'
 import { fmtTime, fmtMode } from '@/utils/format'
@@ -439,6 +440,7 @@ const currentProfile = computed(() => {
 })
 
 const crumbMenuOptions = computed(() => [
+  { label: '打开会话所在目录', key: 'session-cwd' },
   { label: '复制绝对路径', key: 'copy' },
   { label: '保存到常用记录', key: 'save-snippet' },
   { label: '会话跳转到该路径', key: 'cd' },
@@ -446,9 +448,35 @@ const crumbMenuOptions = computed(() => [
   { label: '新分屏打开该路径', key: 'new-split' },
 ])
 
+/**
+ * 打开会话所在目录：通过 termExec 标记协议在终端 PTY 中执行 pwd 并捕获
+ * 输出（命令在终端可见），文件面板定位到该目录。终端处于全屏程序
+ * （vim 等）时捕获会失败，提示用户。
+ */
+async function openSessionCwd() {
+  try {
+    const out = await execInTerminal(props.sessionId, 'pwd')
+    const path = out
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.startsWith('/'))
+    if (!path) {
+      message.warning('未能获取会话当前目录（终端可能正处于全屏程序中）')
+      return
+    }
+    await load(path)
+  } catch (e) {
+    message.error(`获取会话目录失败：${e}`)
+  }
+}
+
 function onCrumbMenuSelect(key: string) {
   crumbMenuShow.value = false
   const path = crumbMenuPath.value
+  if (key === 'session-cwd') {
+    void openSessionCwd()
+    return
+  }
   if (!path) return
   switch (key) {
     case 'copy':
