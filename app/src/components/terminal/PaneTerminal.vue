@@ -8,7 +8,7 @@
  */
 import { ref, watch, nextTick, computed } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
-import { NButton, NIcon, NSelect, NDropdown, useMessage } from 'naive-ui'
+import { NButton, NIcon, NSelect, NDropdown, NModal, useMessage } from 'naive-ui'
 import { Terminal2, X, Plus } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
 import { useTabsStore } from '@/stores/tabs'
@@ -87,7 +87,7 @@ async function copySelection() {
   }
 }
 
-/** 粘贴：走 term.paste() 经 onData 转发（如同键入，支持 bracketed paste） */
+/** 粘贴：读取剪贴板后走统一粘贴入口 */
 async function pasteClipboard() {
   let text = ''
   try {
@@ -96,7 +96,54 @@ async function pasteClipboard() {
     message.warning('粘贴失败：无法读取剪贴板')
     return
   }
+  if (text) queuePaste(text)
+}
+
+/**
+ * 拦截 webview 原生粘贴（Cmd/Ctrl+V 触发 textarea 的 paste DOM 事件）：
+ * capture 阶段在容器上截获，阻止 xterm 默认粘贴处理，统一走规范化流程。
+ */
+function onNativePaste(e: ClipboardEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  const text = e.clipboardData?.getData('text') ?? ''
+  if (text) queuePaste(text)
+}
+
+/* ---------------- 规范化粘贴 ---------------- */
+
+const showPasteConfirm = ref(false)
+const pastePending = ref('')
+
+/**
+ * 粘贴统一入口：CRLF/孤 CR 一律归一为 LF（CRLF 进 PTY 会变成双重换行、
+ * 孤 CR 在 bracketed paste 下显示为 ^M 乱行）；多行内容先弹确认，
+ * 防止 shell 未启用 bracketed paste 时逐行立即执行造成错乱。
+ */
+function queuePaste(raw: string) {
+  const text = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  if (!text) return
+  if (text.includes('\n')) {
+    pastePending.value = text
+    showPasteConfirm.value = true
+    return
+  }
+  term.value?.paste(text)
+}
+
+const pasteLineCount = computed(() => pastePending.value.split('\n').length)
+const pastePreview = computed(() => {
+  const lines = pastePending.value.split('\n')
+  const head = lines.slice(0, 6).join('\n')
+  return lines.length > 6 ? `${head}\n…（共 ${lines.length} 行）` : head
+})
+
+function confirmPaste() {
+  showPasteConfirm.value = false
+  const text = pastePending.value
+  pastePending.value = ''
   if (text) term.value?.paste(text)
+  term.value?.focus()
 }
 
 /** 添加到常用记录：优先选中文本，否则当前输入行；加入「未分组」 */
@@ -136,6 +183,7 @@ watch(
   async (el) => {
     if (el && !term.value) {
       init(el)
+      el.addEventListener('paste', onNativePaste, true)
       await nextTick()
       fit()
       if (props.sessionId && props.sessionId !== ownSession.value) {
@@ -222,6 +270,26 @@ const pickedSession = ref<string | null>(null)
       @select="onMenuSelect"
       @clickoutside="menuShow = false"
     />
+
+    <!-- 多行粘贴确认 -->
+    <NModal
+      v-model:show="showPasteConfirm"
+      preset="card"
+      title="粘贴多行内容"
+      style="width: 480px"
+      :bordered="false"
+    >
+      <p class="paste-warn">
+        粘贴内容包含 {{ pasteLineCount }} 行，若远端 shell 未启用 bracketed paste 将逐行立即执行。请确认内容：
+      </p>
+      <pre class="paste-preview">{{ pastePreview }}</pre>
+      <template #footer>
+        <div class="dialog-footer">
+          <NButton size="small" @click="showPasteConfirm = false">取消</NButton>
+          <NButton size="small" type="primary" @click="confirmPaste">粘贴</NButton>
+        </div>
+      </template>
+    </NModal>
   </div>
 </template>
 
@@ -277,5 +345,30 @@ const pickedSession = ref<string | null>(null)
 }
 .picker-btn {
   align-self: flex-start;
+}
+.paste-warn {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 8px;
+}
+.paste-preview {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>
