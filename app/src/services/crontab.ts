@@ -106,3 +106,29 @@ function parseJob(s: string): { schedule: string; command: string } | null {
   if (parts.length < 6) return null
   return { schedule: parts.slice(0, 5).join(' '), command: parts.slice(5).join(' ') }
 }
+
+/* ---------------- 立即执行测试 ---------------- */
+
+/** 测试执行结果（rc 为命令退出码，非 0 不算服务层错误） */
+export interface CronRunResult {
+  rc: number
+  output: string
+}
+
+/**
+ * 立即执行测试：以 cron 风格最小环境（env -i，/bin/sh，PATH=/usr/bin:/bin）
+ * 运行任务命令并捕获输出（尾部 8KB 截断），便于提前暴露 cron 下的 PATH 类问题。
+ * 退出码经 SRT_RUN_RC 标记回传（非 0 是正常结果，不抛错）。
+ */
+export async function runJob(sid: string, command: string): Promise<CronRunResult> {
+  const script = [
+    `OUT=$(env -i HOME="$HOME" LOGNAME="$(id -un 2>/dev/null || echo "$USER")" SHELL=/bin/sh PATH=/usr/bin:/bin /bin/sh -c ${sq(command)} 2>&1)`,
+    'RC=$?',
+    'printf \'%s\' "$OUT" | tail -c 8192',
+    'echo "SRT_RUN_RC=$RC"',
+  ].join('; ')
+  const out = await sessionService.exec(sid, script)
+  const m = out.match(/SRT_RUN_RC=(\d+)\s*$/)
+  if (!m) throw new CrontabError('unknown', '测试执行失败：未取到退出码')
+  return { rc: Number(m[1]), output: out.slice(0, m.index).replace(/\n$/, '') }
+}

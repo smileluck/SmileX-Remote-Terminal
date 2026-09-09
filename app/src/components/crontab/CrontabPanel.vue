@@ -26,10 +26,11 @@ import {
   NTooltip,
   useMessage,
 } from 'naive-ui'
-import { Refresh, Plus, Edit, Trash, CalendarTime } from '@vicons/tabler'
+import { Refresh, Plus, Edit, Trash, CalendarTime, PlayerPlay } from '@vicons/tabler'
 import { useCrontabStore } from '@/stores/crontab'
 import { useTabsStore } from '@/stores/tabs'
 import { nextRuns } from '@/utils/cron'
+import * as crontabService from '@/services/crontab'
 import type { CronLine } from '@/types/crontab'
 
 const crontab = useCrontabStore()
@@ -64,6 +65,34 @@ async function onAction(fn: () => Promise<unknown>, ok: string) {
     message.success(ok)
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/* ---------------- 立即执行测试 ---------------- */
+
+/** 正在测试的任务行下标（-1 = 无） */
+const runningIndex = ref(-1)
+const showRun = ref(false)
+const runCmd = ref('')
+const runRc = ref(0)
+const runOutput = ref('')
+
+/** 以 cron 风格最小环境执行任务命令，弹窗展示退出码与输出 */
+async function runNow(job: CronLine) {
+  const t = tabs.activeTab
+  const sid = t?.kind === 'ssh' && t.sessionId && !t.disconnected ? t.sessionId : null
+  if (!sid || runningIndex.value >= 0 || !job.command) return
+  runningIndex.value = job.index
+  try {
+    const r = await crontabService.runJob(sid, job.command)
+    runCmd.value = job.command
+    runRc.value = r.rc
+    runOutput.value = r.output
+    showRun.value = true
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    runningIndex.value = -1
   }
 }
 
@@ -277,6 +306,21 @@ async function submitForm() {
               </NTooltip>
               <NTooltip>
                 <template #trigger>
+                  <NButton
+                    quaternary
+                    circle
+                    size="tiny"
+                    :loading="runningIndex === job.index"
+                    :disabled="crontab.acting || runningIndex >= 0"
+                    @click="runNow(job)"
+                  >
+                    <NIcon :component="PlayerPlay" :size="14" />
+                  </NButton>
+                </template>
+                立即执行测试（模拟 cron 最小环境）
+              </NTooltip>
+              <NTooltip>
+                <template #trigger>
                   <NButton quaternary circle size="tiny" :disabled="crontab.acting" @click="openEdit(job)">
                     <NIcon :component="Edit" :size="14" />
                   </NButton>
@@ -381,6 +425,28 @@ async function submitForm() {
           <NButton size="small" type="primary" :loading="crontab.acting" @click="submitForm">
             {{ editingIndex < 0 ? '新增' : '保存' }}
           </NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <!-- 测试执行结果弹窗 -->
+    <NModal
+      v-model:show="showRun"
+      preset="card"
+      title="测试执行结果"
+      style="width: 560px"
+      :bordered="false"
+    >
+      <div class="run-cmd">{{ runCmd }}</div>
+      <p class="run-meta">
+        退出码：
+        <span :class="runRc === 0 ? 'run-ok' : 'run-fail'">{{ runRc }}</span>
+        <span class="run-note">以 cron 风格最小环境执行（/bin/sh，PATH=/usr/bin:/bin）</span>
+      </p>
+      <pre class="run-output">{{ runOutput || '（无输出）' }}</pre>
+      <template #footer>
+        <div class="dialog-footer">
+          <NButton size="small" @click="showRun = false">关闭</NButton>
         </div>
       </template>
     </NModal>
@@ -517,6 +583,46 @@ async function submitForm() {
 }
 .next-run {
   font-family: var(--font-mono);
+}
+.run-cmd {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+.run-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 8px;
+}
+.run-ok {
+  color: var(--success);
+  font-weight: 500;
+}
+.run-fail {
+  color: var(--danger);
+  font-weight: 500;
+}
+.run-note {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.run-output {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .dialog-footer {
   display: flex;
