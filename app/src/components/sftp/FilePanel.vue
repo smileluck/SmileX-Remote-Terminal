@@ -107,10 +107,16 @@ async function load(path?: string) {
 }
 
 /** 外部导航（layout.openFilesAt 写入）：一次性定位到目标路径，消费后清除 */
+// 本地标志：watcher 消费 navPath 时会同步清空 store，onMounted 时 prop 可能
+// 已被父组件更新为 null，不能再用 props.navPath 判断是否跳过默认 home 加载
+let navHandled = false
 watch(
   () => props.navPath,
   (p) => {
     if (!p) return
+    // 多 tab 并存时只有活跃会话的面板消费导航目标（其余等待自己的目标）
+    if (tabsStore.activeTab?.sessionId !== props.sessionId) return
+    navHandled = true
     layout.filesNavPath = null
     void load(p)
   },
@@ -119,7 +125,7 @@ watch(
 
 onMounted(async () => {
   // 有外部导航目标时跳过默认 home 加载（navPath watch 已按目标路径加载）
-  if (!props.navPath) {
+  if (!navHandled) {
     loading.value = true
     try {
       // path 省略 → 后端进入远端 home；从返回条目 path 推断 cwd
