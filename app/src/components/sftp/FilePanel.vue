@@ -933,6 +933,7 @@ defineExpose({ reload: load })
 }
 .fp-line {
   display: flex;
+  flex: 1;
   align-items: center;
   gap: 6px;
   min-width: 0;
