@@ -170,17 +170,6 @@ async function submitRun() {
         <NTabPane name="containers" :tab="`容器（${docker.containers.length}）`" />
         <NTabPane name="images" :tab="`镜像（${docker.images.length}）`" />
       </NTabs>
-      <NInput
-        v-model:value="keyword"
-        size="small"
-        clearable
-        :placeholder="activeTab === 'containers' ? '筛选容器' : '筛选镜像'"
-        class="filter-input"
-      >
-        <template #prefix>
-          <NIcon :component="Search" :size="13" />
-        </template>
-      </NInput>
       <NTooltip>
         <template #trigger>
           <NButton quaternary circle size="small" :loading="docker.loading" @click="docker.refresh()">
@@ -190,6 +179,17 @@ async function submitRun() {
         刷新
       </NTooltip>
     </div>
+    <NInput
+      v-model:value="keyword"
+      size="small"
+      clearable
+      :placeholder="activeTab === 'containers' ? '筛选容器' : '筛选镜像'"
+      class="filter-input"
+    >
+      <template #prefix>
+        <NIcon :component="Search" :size="13" />
+      </template>
+    </NInput>
 
     <NSpin :show="docker.loading" size="small">
       <div class="panel-content">
@@ -418,7 +418,7 @@ async function submitRun() {
   min-width: 0;
 }
 .filter-input {
-  width: 140px;
+  width: 100%;
   flex-shrink: 0;
 }
 /* 压缩 segment 页签轨道，与刷新按钮高度对齐 */
