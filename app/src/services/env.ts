@@ -187,8 +187,8 @@ const DETECT_SCRIPT = [
   'rp=$(command -v redis-server 2>/dev/null); if [ -n "$rp" ]; then rv=$(redis-server --version 2>/dev/null | sed -E "s/.*v=([0-9.]+).*/\\1/"); rdir=$(dirname "$rp"); rcfg=$(first_file /etc/redis/redis.conf /etc/redis.conf /usr/local/etc/redis.conf); emit redis 1 "$rv" "$rdir" "$(svc_state redis-server redis)" "$rcfg"; else emit redis 0 "" "" "-" ""; fi',
   // nginx：从 nginx -V 解析 --conf-path；路径指到配置文件所在目录，无配置时 fallback --prefix
   'np=$(command -v nginx 2>/dev/null); if [ -n "$np" ]; then nv=$(nginx -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); nvv=$(nginx -V 2>&1); ncfg=$(echo "$nvv" | sed -nE "s/.*--conf-path=([^ ]+).*/\\1/p"); { [ -n "$ncfg" ] && [ -f "$ncfg" ]; } || ncfg=$(first_file /etc/nginx/nginx.conf); if [ -n "$ncfg" ]; then ndir=$(dirname "$ncfg"); else ndir=$(echo "$nvv" | sed -nE "s/.*--prefix=([^ ]+).*/\\1/p"); [ -n "$ndir" ] || ndir=$(dirname "$np"); fi; emit nginx 1 "$nv" "$ndir" "$(svc_state nginx)" "$ncfg"; else emit nginx 0 "" "" "-" ""; fi',
-  // openresty
-  'op=$(command -v openresty 2>/dev/null); if [ -n "$op" ]; then ov=$(openresty -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); ocfg=$(first_file /usr/local/openresty/nginx/conf/nginx.conf /etc/openresty/nginx.conf); odir="/usr/local/openresty"; [ -d "$odir" ] || odir=$(dirname "$(dirname "$op")"); emit openresty 1 "$ov" "$odir" "$(svc_state openresty)" "$ocfg"; else emit openresty 0 "" "" "-" ""; fi',
+  // openresty：路径指到 nginx 配置文件所在目录，无配置时 fallback 安装前缀
+  'op=$(command -v openresty 2>/dev/null); if [ -n "$op" ]; then ov=$(openresty -v 2>&1 | sed -E "s#.*/([0-9.]+)#\\1#"); ovv=$(openresty -V 2>&1); ocfg=$(echo "$ovv" | sed -nE "s/.*--conf-path=([^ ]+).*/\\1/p"); { [ -n "$ocfg" ] && [ -f "$ocfg" ]; } || ocfg=$(first_file /usr/local/openresty/nginx/conf/nginx.conf /etc/openresty/nginx.conf); if [ -n "$ocfg" ]; then odir=$(dirname "$ocfg"); else odir="/usr/local/openresty"; [ -d "$odir" ] || odir=$(dirname "$(dirname "$op")"); fi; emit openresty 1 "$ov" "$odir" "$(svc_state openresty)" "$ocfg"; else emit openresty 0 "" "" "-" ""; fi',
 ].join('\n')
 
 /** 探测全部环境（一次 exec，bash -lc 包装确保拿到 login shell 的 PATH） */
