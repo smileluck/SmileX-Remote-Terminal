@@ -653,7 +653,7 @@ export async function listCondaEnvs(sid: string): Promise<CondaEnv[]> {
   const script = [
     CONDA_PATH,
     // conda env list 文本输出：name [*] path（激活环境带 * 列），path 取最后一列
-    'conda env list 2>/dev/null | grep -vE "^\\s*(#|$)" | awk "{print $1\\"|\\"$NF}" | while IFS="|" read -r name path; do pv=""; if [ -x "$path/bin/python" ]; then pv=$("$path/bin/python" --version 2>&1 | awk "{print \\$2}"); fi; echo "SRT_CONDA_ENV|$name|$path|$pv"; done',
+    'conda env list 2>/dev/null | grep -vE "^\\s*(#|$)" | awk "{print \\$1\\"|\\"\\$NF}" | while IFS="|" read -r name path; do pv=""; if [ -x "$path/bin/python" ]; then pv=$("$path/bin/python" --version 2>&1 | awk "{print \\$2}"); fi; echo "SRT_CONDA_ENV|$name|$path|$pv"; done',
     'true',
   ].join('; ')
   const out = await runChecked(sid, `bash -lc ${sq(script)}`)
