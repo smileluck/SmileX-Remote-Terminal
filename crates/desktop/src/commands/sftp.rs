@@ -87,3 +87,18 @@ pub async fn sftp_rename(
         .await
         .map_err(|e| AppError::session(e.to_string()))
 }
+
+/// 修改文件/目录权限（chmod，mode 为八进制位如 0o755）
+#[tauri::command]
+pub async fn sftp_chmod(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    mode: u32,
+) -> Result<(), AppError> {
+    let client = client_of(&state, &session_id).await?;
+    client
+        .chmod(&path, mode)
+        .await
+        .map_err(|e| AppError::session(e.to_string()))
+}

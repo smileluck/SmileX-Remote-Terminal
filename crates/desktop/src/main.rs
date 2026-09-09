@@ -90,6 +90,7 @@ fn main() {
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_rename,
+            commands::sftp::sftp_chmod,
             // SFTP 传输队列（上传/下载/暂停/恢复/取消）
             commands::transfer::sftp_transfer_upload,
             commands::transfer::sftp_transfer_download,

@@ -55,6 +55,8 @@ pub struct SftpEntry {
     pub size: u64,
     /// 修改时间（Unix 秒）
     pub mtime: Option<u64>,
+    /// 权限位（含文件类型位；取低 12 位为 rwx/setuid 等模式位）
+    pub permissions: Option<u32>,
 }
 
 /// 由 DirEntry 构建 SftpEntry
@@ -68,6 +70,7 @@ fn to_entry(entry: &DirEntry) -> SftpEntry {
         is_symlink: ft.is_symlink(),
         size: meta.size.unwrap_or(0),
         mtime: meta.mtime.map(|v| v as u64),
+        permissions: meta.permissions,
     }
 }
 
@@ -173,6 +176,7 @@ impl SftpClient {
                 is_symlink: true,
                 size: 0,
                 mtime: lstat.mtime.map(|v| v as u64),
+                permissions: lstat.permissions,
             });
         }
         let attrs = sftp
@@ -186,7 +190,21 @@ impl SftpClient {
             is_symlink: false,
             size: attrs.size.unwrap_or(0),
             mtime: attrs.mtime.map(|v| v as u64),
+            permissions: attrs.permissions,
         })
+    }
+
+    /// 修改文件/目录权限（chmod，mode 为八进制位如 0o755）
+    pub async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
+        let attrs = russh_sftp::protocol::FileAttributes {
+            permissions: Some(mode),
+            ..Default::default()
+        };
+        self.sess()
+            .await
+            .set_metadata(path.to_string(), attrs)
+            .await
+            .map_err(|e| Error::Terminal(format!("修改 {path} 权限失败: {e}")))
     }
 
     /// 递归列举目录下所有文件（跳过符号链接条目，防止环）

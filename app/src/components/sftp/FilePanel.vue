@@ -16,6 +16,8 @@ import {
   NSpin,
   NEmpty,
   NTooltip,
+  NModal,
+  NCheckbox,
   useDialog,
   useMessage,
 } from 'naive-ui'
@@ -319,6 +321,7 @@ function rowMenuOptions(entry: SftpEntry) {
   return [
     { label: entry.is_dir ? '下载（递归）' : '下载', key: 'download' },
     { label: '重命名', key: 'rename' },
+    { label: '授权（chmod）', key: 'chmod' },
     { label: entry.is_dir ? '删除（递归）' : '删除', key: 'remove' },
   ]
 }
@@ -326,7 +329,68 @@ function rowMenuOptions(entry: SftpEntry) {
 function onRowMenu(key: string, entry: SftpEntry) {
   if (key === 'download') handleDownload(entry)
   else if (key === 'rename') startRename(entry)
+  else if (key === 'chmod') startChmod(entry)
   else if (key === 'remove') handleRemove(entry)
+}
+
+/* ---------------- 授权（chmod）对话框 ---------------- */
+
+const chmodTarget = ref<SftpEntry | null>(null)
+/** 模式位（仅低 9 位 rwxrwxrwx 参与编辑） */
+const chmodBits = ref(0o644)
+/** 八进制文本（与 chmodBits 双向同步） */
+const chmodOctal = ref('644')
+const chmodSaving = ref(false)
+
+const CHMOD_GROUPS = [
+  { label: '所有者', shift: 6 },
+  { label: '用户组', shift: 3 },
+  { label: '其他', shift: 0 },
+] as const
+const CHMOD_PERMS = [
+  { label: '读', bit: 4 },
+  { label: '写', bit: 2 },
+  { label: '执行', bit: 1 },
+] as const
+
+function startChmod(entry: SftpEntry) {
+  chmodTarget.value = entry
+  const bits =
+    entry.permissions != null ? entry.permissions & 0o777 : entry.is_dir ? 0o755 : 0o644
+  chmodBits.value = bits
+  chmodOctal.value = bits.toString(8).padStart(3, '0')
+}
+
+function chmodBit(shift: number, bit: number): boolean {
+  return (chmodBits.value & (bit << shift)) !== 0
+}
+
+function setChmodBit(shift: number, bit: number, on: boolean) {
+  const mask = bit << shift
+  chmodBits.value = on ? chmodBits.value | mask : chmodBits.value & ~mask
+  chmodOctal.value = chmodBits.value.toString(8).padStart(3, '0')
+}
+
+/** 八进制输入：合法（3 位 0-7）时同步到勾选 */
+function onOctalInput(v: string) {
+  chmodOctal.value = v
+  if (/^[0-7]{3}$/.test(v)) chmodBits.value = parseInt(v, 8)
+}
+
+async function confirmChmod() {
+  const target = chmodTarget.value
+  if (!target) return
+  chmodSaving.value = true
+  try {
+    await sftp.chmod(props.sessionId, target.path, chmodBits.value)
+    message.success(`已将 ${target.name} 权限改为 ${chmodOctal.value}`)
+    chmodTarget.value = null
+    load()
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    chmodSaving.value = false
+  }
 }
 
 /** 面包屑右键菜单（手动定位，与文件行菜单相互独立） */
@@ -611,6 +675,49 @@ defineExpose({ reload: load })
       @select="onCrumbMenuSelect"
       @clickoutside="crumbMenuShow = false"
     />
+    <!-- 授权（chmod）对话框 -->
+    <NModal
+      :show="chmodTarget !== null"
+      preset="card"
+      title="修改权限"
+      style="width: 380px"
+      :bordered="false"
+      @update:show="(v: boolean) => { if (!v) chmodTarget = null }"
+    >
+      <div class="chmod-file" :title="chmodTarget?.path">{{ chmodTarget?.name }}</div>
+      <div class="chmod-grid">
+        <span class="chmod-head" />
+        <span v-for="p in CHMOD_PERMS" :key="p.bit" class="chmod-head">{{ p.label }}</span>
+        <template v-for="g in CHMOD_GROUPS" :key="g.shift">
+          <span class="chmod-group">{{ g.label }}</span>
+          <NCheckbox
+            v-for="p in CHMOD_PERMS"
+            :key="p.bit"
+            :checked="chmodBit(g.shift, p.bit)"
+            size="small"
+            @update:checked="(on: boolean) => setChmodBit(g.shift, p.bit, on)"
+          />
+        </template>
+      </div>
+      <div class="chmod-octal">
+        <span class="chmod-group">八进制</span>
+        <NInput
+          :value="chmodOctal"
+          size="small"
+          class="chmod-octal-input"
+          placeholder="如 755"
+          @update:value="onOctalInput"
+        />
+      </div>
+      <template #footer>
+        <div class="chmod-footer">
+          <NButton size="small" @click="chmodTarget = null">取消</NButton>
+          <NButton size="small" type="primary" :loading="chmodSaving" @click="confirmChmod">
+            应用
+          </NButton>
+        </div>
+      </template>
+    </NModal>
   </div>
 </template>
 
@@ -691,6 +798,44 @@ defineExpose({ reload: load })
   gap: 4px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border-color);
+}
+.chmod-file {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 10px;
+}
+.chmod-grid {
+  display: grid;
+  grid-template-columns: 56px repeat(3, 1fr);
+  gap: 6px 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.chmod-head {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.chmod-group {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.chmod-octal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chmod-octal-input {
+  width: 90px;
+}
+.chmod-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .fp-body {
   flex: 1;

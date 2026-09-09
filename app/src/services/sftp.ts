@@ -16,6 +16,8 @@ export interface SftpEntry {
   is_symlink: boolean
   size: number
   mtime: number | null
+  /** 权限位（含文件类型位；低 12 位为模式位），可能缺失 */
+  permissions: number | null
 }
 
 /** 读取远端目录（path 省略时进入远端 home） */
@@ -36,6 +38,11 @@ export function remove(sessionId: string, path: string): Promise<void> {
 /** 重命名 / 移动 */
 export function rename(sessionId: string, oldPath: string, newPath: string): Promise<void> {
   return invoke<void>('sftp_rename', { sessionId, oldPath, newPath })
+}
+
+/** 修改文件/目录权限（mode 为八进制位如 0o755） */
+export function chmod(sessionId: string, path: string, mode: number): Promise<void> {
+  return invoke<void>('sftp_chmod', { sessionId, path, mode })
 }
 
 /** 上传本地文件/文件夹到远端目录（入队，返回传输组 ID） */
