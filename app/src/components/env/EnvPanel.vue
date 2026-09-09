@@ -110,6 +110,27 @@ function serviceLabel(s: EnvStatus): string {
   }
 }
 
+/** 安装来源展示（python/go/java；空串表示未探测来源） */
+function sourceLabel(s: EnvStatus): string {
+  switch (s.source) {
+    case 'pyenv':
+      return 'pyenv'
+    case 'sdkman':
+      return 'SDKMAN'
+    case 'official':
+      return '官方包'
+    case 'system':
+      return '系统安装'
+    default:
+      return ''
+  }
+}
+
+/** 系统包安装的 python/go/java 禁用一键卸载（避免误删系统依赖，提示手动卸载） */
+function uninstallBlocked(id: EnvId): boolean {
+  return env.statuses[id]?.source === 'system'
+}
+
 async function onAction(fn: () => Promise<unknown>, ok: string) {
   try {
     await fn()
@@ -330,6 +351,14 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
                 }}
               </NTag>
               <span v-else class="card-pending">…</span>
+              <NTag
+                v-if="env.statuses[def.id]?.installed && sourceLabel(env.statuses[def.id]!)"
+                size="tiny"
+                type="info"
+                :bordered="false"
+              >
+                {{ sourceLabel(env.statuses[def.id]!) }}
+              </NTag>
               <span
                 v-if="def.service && env.statuses[def.id]?.installed"
                 class="svc"
@@ -477,7 +506,16 @@ function jumpTargets(s: EnvStatus): Array<{ label: string; key: string }> {
                     终端 cd 跳转
                   </NTooltip>
                 </template>
+                <NTooltip v-if="uninstallBlocked(def.id)">
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" disabled>
+                      <NIcon :component="Trash" :size="14" />
+                    </NButton>
+                  </template>
+                  系统包安装，为避免破坏系统请用包管理器手动卸载
+                </NTooltip>
                 <NPopconfirm
+                  v-else
                   @positive-click="onAction(() => env.uninstall(def.id), `${def.name} 已卸载`)"
                 >
                   <template #trigger>

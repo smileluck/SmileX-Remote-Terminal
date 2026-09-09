@@ -166,19 +166,20 @@ async function runChecked(sid: string, cmd: string): Promise<string> {
 
 /**
  * 一次性探测脚本：每种环境输出一行 SRT_ENV|<id>|<installed>|<version>|
- * <path>|<unit:state 或 ->|<config>|<bin 可选>。emit 各字段不允许含 '|'。
+ * <path>|<unit:state 或 ->|<config>|<bin 可选>|<source 可选>。
+ * emit 各字段不允许含 '|'。source：pyenv / sdkman / official / system。
  */
 const DETECT_SCRIPT = [
-  'emit() { echo "SRT_ENV|$1|$2|$3|$4|$5|$6|$7"; }',
+  'emit() { echo "SRT_ENV|$1|$2|$3|$4|$5|$6|$7|$8"; }',
   'first_file() { for f in "$@"; do if [ -f "$f" ]; then echo "$f"; return; fi; done; }',
   // 服务状态：优先 systemctl（输出 unit:state），无 systemd 时 pgrep 兜底
   'svc_state() { if command -v systemctl >/dev/null 2>&1; then for u in "$@"; do if systemctl list-unit-files "${u}.service" 2>/dev/null | grep -q "^${u}"; then st=$(systemctl is-active "$u" 2>/dev/null); echo "$u:${st:-unknown}"; return; fi; done; fi; for u in "$@"; do if pgrep -x "$u" >/dev/null 2>&1; then echo "$u:active"; return; fi; done; echo "$1:inactive"; }',
-  // python：pyenv 安装优先展示 ~/.pyenv
-  'pp=$(command -v python3 2>/dev/null); if [ -n "$pp" ]; then pv=$(python3 -V 2>&1 | awk "{print \\$2}"); if [ -d "$HOME/.pyenv" ] && [ "${pp#$HOME/.pyenv}" != "$pp" ]; then pdir="$HOME/.pyenv"; else rpy=$(readlink -f "$pp" 2>/dev/null || echo "$pp"); pdir=$(dirname "$(dirname "$rpy")"); fi; pcfg=""; [ -f "$HOME/.pyenv/version" ] && pcfg="$HOME/.pyenv/version"; emit python 1 "$pv" "$pdir" "-" "$pcfg"; else emit python 0 "" "" "-" ""; fi',
-  // go：GOROOT 为安装目录，GOENV 为 go env -w 持久化文件
-  'gp=$(command -v go 2>/dev/null); if [ -n "$gp" ]; then gv=$(go version 2>/dev/null | awk "{print \\$3}"); gv=${gv#go}; gdir=$(go env GOROOT 2>/dev/null); [ -n "$gdir" ] || gdir="/usr/local/go"; gcfg=$(go env GOENV 2>/dev/null); { [ -n "$gcfg" ] && [ -f "$gcfg" ]; } || gcfg=""; emit go 1 "$gv" "$gdir" "-" "$gcfg"; else emit go 0 "" "" "-" ""; fi',
-  // java
-  'jp=$(command -v java 2>/dev/null); if [ -n "$jp" ]; then jv=$(java -version 2>&1 | head -1 | sed -E "s/.*\\"([^\\"]+)\\".*/\\1/"); rj=$(readlink -f "$jp" 2>/dev/null || echo "$jp"); jdir=$(dirname "$(dirname "$rj")"); jcfg=""; [ -f "$HOME/.sdkman/etc/config" ] && jcfg="$HOME/.sdkman/etc/config"; emit java 1 "$jv" "$jdir" "-" "$jcfg"; else emit java 0 "" "" "-" ""; fi',
+  // python：pyenv 安装优先展示 ~/.pyenv；source 标记 pyenv / system
+  'pp=$(command -v python3 2>/dev/null); if [ -n "$pp" ]; then pv=$(python3 -V 2>&1 | awk "{print \\$2}"); if [ -d "$HOME/.pyenv" ] && [ "${pp#$HOME/.pyenv}" != "$pp" ]; then pdir="$HOME/.pyenv"; psrc="pyenv"; else rpy=$(readlink -f "$pp" 2>/dev/null || echo "$pp"); pdir=$(dirname "$(dirname "$rpy")"); psrc="system"; fi; pcfg=""; [ -f "$HOME/.pyenv/version" ] && pcfg="$HOME/.pyenv/version"; emit python 1 "$pv" "$pdir" "-" "$pcfg" "" "$psrc"; else emit python 0 "" "" "-" ""; fi',
+  // go：GOROOT 为安装目录，GOENV 为 go env -w 持久化文件；source 标记 official（/usr/local/go）/ system
+  'gp=$(command -v go 2>/dev/null); if [ -n "$gp" ]; then gv=$(go version 2>/dev/null | awk "{print \\$3}"); gv=${gv#go}; gdir=$(go env GOROOT 2>/dev/null); [ -n "$gdir" ] || gdir="/usr/local/go"; gcfg=$(go env GOENV 2>/dev/null); { [ -n "$gcfg" ] && [ -f "$gcfg" ]; } || gcfg=""; if [ "$gdir" = "/usr/local/go" ]; then gsrc="official"; else gsrc="system"; fi; emit go 1 "$gv" "$gdir" "-" "$gcfg" "" "$gsrc"; else emit go 0 "" "" "-" ""; fi',
+  // java；source 标记 sdkman / system
+  'jp=$(command -v java 2>/dev/null); if [ -n "$jp" ]; then jv=$(java -version 2>&1 | head -1 | sed -E "s/.*\\"([^\\"]+)\\".*/\\1/"); rj=$(readlink -f "$jp" 2>/dev/null || echo "$jp"); jdir=$(dirname "$(dirname "$rj")"); jcfg=""; [ -f "$HOME/.sdkman/etc/config" ] && jcfg="$HOME/.sdkman/etc/config"; case "$rj" in *sdkman*) jsrc="sdkman";; *) jsrc="system";; esac; emit java 1 "$jv" "$jdir" "-" "$jcfg" "" "$jsrc"; else emit java 0 "" "" "-" ""; fi',
   // mysql：路径展示数据目录（跳转更有意义）
   'mp=$(command -v mysqld 2>/dev/null || command -v mysql 2>/dev/null); if [ -n "$mp" ]; then mv=$(mysql --version 2>/dev/null | sed -E "s/.*Ver ([0-9.]+).*/\\1/"); [ -n "$mv" ] || mv=$(mysqld --version 2>/dev/null | sed -E "s/.*Ver ([0-9.]+).*/\\1/"); mdir="/var/lib/mysql"; [ -d "$mdir" ] || mdir=$(dirname "$mp"); mcfg=$(first_file /etc/mysql/my.cnf /etc/my.cnf /etc/mysql/mysql.conf.d/mysqld.cnf); emit mysql 1 "$mv" "$mdir" "$(svc_state mysqld mysql)" "$mcfg"; else emit mysql 0 "" "" "-" ""; fi',
   // postgresql：配置优先 psql show config_file，fallback 常见路径
@@ -209,6 +210,7 @@ export async function detectAll(sid: string): Promise<EnvStatus[]> {
       serviceActive: svc ? ((svc[1] || 'unknown') as EnvStatus['serviceActive']) : undefined,
       configPath: p[6] || undefined,
       binPath: p[7] || undefined,
+      source: p[8] || undefined,
     })
   }
   return list
@@ -323,17 +325,21 @@ function uninstallScript(id: EnvId): string {
   switch (id) {
     case 'python':
       return [
+        'if [ ! -d "$HOME/.pyenv" ]; then echo "未检测到 pyenv 安装（可能为系统包或其他方式安装），为避免破坏系统依赖，请手动卸载"; exit 1; fi',
         'export PATH="$HOME/.pyenv/bin:$PATH"',
         'if command -v pyenv >/dev/null 2>&1; then CUR=$(cat "$HOME/.pyenv/version" 2>/dev/null); [ -n "$CUR" ] && yes | pyenv uninstall -f "$CUR"; fi',
         'rm -rf "$HOME/.pyenv"',
       ].join('; ')
     case 'go':
-      return [P_SUDO, '$SUDO rm -rf /usr/local/go', '$SUDO rm -f /usr/local/bin/go /usr/local/bin/gofmt'].join(
-        '; ',
-      )
+      return [
+        'if [ ! -d /usr/local/go ]; then echo "未检测到 /usr/local/go（可能为系统包或其他方式安装），请通过包管理器手动卸载"; exit 1; fi',
+        P_SUDO,
+        '$SUDO rm -rf /usr/local/go',
+        '$SUDO rm -f /usr/local/bin/go /usr/local/bin/gofmt',
+      ].join('; ')
     case 'java':
       return [
-        'source "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || { echo "未检测到 SDKMAN"; exit 1; }',
+        'source "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || { echo "未检测到 SDKMAN（可能为系统包或其他方式安装），请通过包管理器手动卸载"; exit 1; }',
         'CUR=$(sdk current java 2>/dev/null | awk "{print \\$NF}")',
         '[ -n "$CUR" ] && yes | sdk uninstall java "$CUR" || true',
       ].join('; ')
