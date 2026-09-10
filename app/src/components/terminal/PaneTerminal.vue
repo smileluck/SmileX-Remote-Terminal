@@ -362,7 +362,7 @@ const pickedSession = ref<string | null>(null)
       </NButton>
     </div>
 
-    <div v-else class="pane-picker">
+    <div v-if="!sessionId" class="pane-picker">
       <template v-if="sessionOptions.length">
         <p class="picker-label">绑定现有会话</p>
         <NSelect
