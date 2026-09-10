@@ -158,6 +158,23 @@ pub struct AlertFiredPayload {
     pub timestamp_ms: u64,
 }
 
+/// `tunnel_event` 事件 payload（隧道状态变更）
+///
+/// 前端（app/src/stores/tunnel.ts）读 camelCase，收到后刷新当前会话隧道列表。
+/// state 取值：running / stopped / failed（failed 时 error 带原因）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelEventPayload {
+    /// 隧道 ID
+    pub tunnel_id: String,
+    /// 会话 ID
+    pub session_id: String,
+    /// 状态串（running / stopped / failed）
+    pub state: String,
+    /// 失败原因（仅 failed 时有值）
+    pub error: Option<String>,
+}
+
 /// 传输方向（`transfer_event` payload 内嵌，值为 "upload" / "download"）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

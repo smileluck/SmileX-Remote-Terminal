@@ -27,6 +27,10 @@ pub enum Error {
     #[error("密钥错误: {0}")]
     Key(String),
 
+    /// 端口转发隧道错误（监听绑定 / direct-tcpip / tcpip-forward）
+    #[error("隧道错误: {0}")]
+    Tunnel(String),
+
     /// IO 错误
     #[error("IO 错误: {0}")]
     Io(#[from] std::io::Error),

@@ -118,6 +118,10 @@ fn main() {
             commands::ssh_key::ssh_key_import,
             commands::ssh_key::ssh_key_delete,
             commands::ssh_key::ssh_key_get_private,
+            // 端口转发隧道
+            commands::tunnel::tunnel_start,
+            commands::tunnel::tunnel_stop,
+            commands::tunnel::tunnel_list,
             // 会话配置命令组
             commands::session_profile::session_profile_save,
             commands::session_profile::session_profile_list,

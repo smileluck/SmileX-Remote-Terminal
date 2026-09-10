@@ -84,6 +84,8 @@ pub struct AppState {
     pub terminal_scrollback: Mutex<HashMap<String, Arc<Mutex<String>>>>,
     /// sessionId → 服务器身份（"user@host:port"，AI 上下文注入用）
     pub session_meta: Mutex<HashMap<String, String>>,
+    /// 端口转发隧道管理器（tunnelId → 隧道句柄；会话断开/应用退出时级联停止）
+    pub tunnels: Arc<ssh_core::tunnel::TunnelManager>,
 }
 
 impl AppState {
@@ -103,6 +105,7 @@ impl AppState {
             transfer_manager: Arc::new(transfer::TransferManager::new()),
             terminal_scrollback: Mutex::new(HashMap::new()),
             session_meta: Mutex::new(HashMap::new()),
+            tunnels: Arc::new(ssh_core::tunnel::TunnelManager::new()),
         }
     }
 
@@ -126,6 +129,8 @@ impl AppState {
         self.transfer_manager.cancel_all().await;
         self.terminal_scrollback.lock().await.clear();
         self.session_meta.lock().await.clear();
+        // 停止所有端口转发隧道（含 remote 转发的 cancel_tcpip_forward）
+        self.tunnels.stop_all().await;
         tracing::info!("会话清理完成");
     }
 }

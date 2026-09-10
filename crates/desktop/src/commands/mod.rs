@@ -15,3 +15,4 @@ pub mod sftp;
 pub mod snippet;
 pub mod ssh_key;
 pub mod transfer;
+pub mod tunnel;

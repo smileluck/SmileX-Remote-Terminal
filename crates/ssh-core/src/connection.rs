@@ -20,7 +20,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use russh::client;
 use russh::keys::key::PublicKey;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
@@ -102,6 +102,22 @@ pub struct HostKeyChallenge {
     pub fingerprint: String,
 }
 
+/// Remote 转发（tcpip-forward）的入站连接
+///
+/// 服务器接受一条到远端监听端口的 TCP 连接后，通过
+/// `forwarded-tcpip` 通道回调（`server_channel_open_forwarded_tcpip`）
+/// 交给客户端；tunnel 模块据此把通道桥接到本地目标。
+pub struct ForwardedConn {
+    /// russh 真实通道（`into_stream` 后与本地 TCP 连接双向拷贝）
+    pub channel: russh::Channel<client::Msg>,
+    /// 连接到达的远端监听端口（用于按端口分发给对应隧道）
+    pub connected_port: u32,
+    /// 连接来源地址（日志用）
+    pub originator_address: String,
+    /// 连接来源端口（日志用）
+    pub originator_port: u32,
+}
+
 /// host key 交互式确认回调的返回 Future
 pub type ConfirmFuture = Pin<Box<dyn Future<Output = bool> + Send>>;
 
@@ -131,6 +147,8 @@ struct HostKeyHandler {
     store: Arc<dyn KnownHostsStore>,
     /// 未知主机交互式确认回调（应用层注入，可选）
     confirm: Option<HostKeyConfirm>,
+    /// Remote 转发入站连接投递口（connect 时创建，receiver 存于 SshSession）
+    forwarded_tx: mpsc::Sender<ForwardedConn>,
 }
 
 #[async_trait]
@@ -240,6 +258,36 @@ impl client::Handler for HostKeyHandler {
 
         Ok(accepted)
     }
+
+    /// Remote 转发（tcpip-forward）的入站通道回调
+    ///
+    /// russh 默认实现为 no-op（直接丢弃通道）。这里把通道与来源信息
+    /// 投递到 forwarded channel，由 tunnel 模块消费并桥接到本地目标。
+    /// 投递失败（无接收方：未启用 remote 隧道）时仅记日志，通道随作用域关闭。
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        _session: &mut client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        let conn = ForwardedConn {
+            channel,
+            connected_port,
+            originator_address: originator_address.to_string(),
+            originator_port,
+        };
+        if let Err(e) = self.forwarded_tx.send(conn).await {
+            tracing::warn!(
+                connected_port,
+                error = %e,
+                "forwarded-tcpip 入站通道无接收方（remote 隧道未就绪），已丢弃"
+            );
+        }
+        Ok(())
+    }
 }
 
 /// 单个已建立的 SSH 会话
@@ -255,6 +303,9 @@ pub struct SshSession {
     handle: Mutex<client::Handle<HostKeyHandler>>,
     /// 是否已主动断开
     closed: Mutex<bool>,
+    /// Remote 转发入站连接接收端（connect 时创建；首条 remote 隧道取走后
+    /// 由 TunnelManager 的按端口分发器持有，故只能 take 一次）
+    forwarded_rx: Mutex<Option<mpsc::Receiver<ForwardedConn>>>,
     /// 连接配置与已知主机存储的副本（SFTP 大流量轮换重连用）
     pub(crate) reconnect: (
         ConnectionConfig,
@@ -292,13 +343,16 @@ impl SshSession {
             .ok_or_else(|| Error::Connect(format!("无法解析地址: {addr_str}")))?;
 
         // 2) russh client 配置 + HostKeyHandler（注入 store）
+        //    forwarded channel：remote 转发入站连接回调 → 隧道分发（容量 64 防突发堆积）
         let ssh_config = Arc::new(client::Config::default());
+        let (forwarded_tx, forwarded_rx) = mpsc::channel::<ForwardedConn>(64);
         let handler = HostKeyHandler {
             host: config.host.clone(),
             port: config.port,
             policy: HostKeyPolicy::from_accept_first(config.accept_first_host_key),
             store: known_hosts.clone(),
             confirm,
+            forwarded_tx,
         };
 
         // 3) TCP + SSH 协议握手
@@ -382,6 +436,7 @@ impl SshSession {
             addr: addr_str,
             handle: Mutex::new(handle),
             closed: Mutex::new(false),
+            forwarded_rx: Mutex::new(Some(forwarded_rx)),
             reconnect: (config.clone(), known_hosts.clone()),
         })
     }
@@ -532,6 +587,51 @@ impl SshSession {
         russh_sftp::client::SftpSession::new(channel.into_stream())
             .await
             .map_err(|e| Error::Terminal(format!("SFTP 协议初始化失败: {e}")))
+    }
+
+    /// 打开 direct-tcpip 通道（Local / Dynamic 转发的数据面出口）
+    ///
+    /// 让 SSH 服务器代连 `host:port`，返回的通道经 `into_stream()`
+    /// 与本地 TCP 连接双向桥接。originator 填回环地址（仅协议字段）。
+    pub async fn open_direct_tcpip(
+        &self,
+        host: &str,
+        port: u32,
+    ) -> Result<russh::Channel<client::Msg>> {
+        let handle = self.handle.lock().await;
+        handle
+            .channel_open_direct_tcpip(host, port, "127.0.0.1", 0)
+            .await
+            .map_err(|e| Error::Tunnel(format!("打开 direct-tcpip 通道失败 {host}:{port}: {e}")))
+    }
+
+    /// 请求服务器在 `address:port` 上监听并把连接转发回本端（Remote 转发）
+    ///
+    /// `port = 0` 表示由服务器分配端口，返回实际监听的端口号。
+    /// 入站连接经 [`SshSession::take_forwarded_rx`] 取出后消费。
+    pub async fn tcpip_forward(&self, address: &str, port: u32) -> Result<u32> {
+        let mut handle = self.handle.lock().await;
+        handle
+            .tcpip_forward(address, port)
+            .await
+            .map_err(|e| Error::Tunnel(format!("请求远端转发失败 {address}:{port}: {e}")))
+    }
+
+    /// 取消 Remote 转发监听（隧道停止时调用；失败仅记录，不阻断清理）
+    pub async fn cancel_tcpip_forward(&self, address: &str, port: u32) -> Result<()> {
+        let handle = self.handle.lock().await;
+        handle
+            .cancel_tcpip_forward(address, port)
+            .await
+            .map_err(|e| Error::Tunnel(format!("取消远端转发失败 {address}:{port}: {e}")))
+    }
+
+    /// 取走 Remote 转发入站连接接收端（仅首次调用成功）
+    ///
+    /// 全局只有一个接收端，由 TunnelManager 的按端口分发器持有，
+    /// 各 remote 隧道向分发器注册自己的监听端口获取连接。
+    pub async fn take_forwarded_rx(&self) -> Option<mpsc::Receiver<ForwardedConn>> {
+        self.forwarded_rx.lock().await.take()
     }
 
     /// 主动断开会话（幂等：多次调用安全）

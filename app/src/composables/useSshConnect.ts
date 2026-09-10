@@ -6,6 +6,7 @@
  */
 import * as profileService from '@/services/profile'
 import * as sessionService from '@/services/session'
+import * as tunnelService from '@/services/tunnel'
 import { getPrivateKey } from '@/services/sshKeys'
 import { decodeExtra } from '@/types/profile'
 import type { SessionProfile } from '@/types/profile'
@@ -51,5 +52,18 @@ export async function buildConfig(
 /** 连接档案对应的主机，返回 sessionId */
 export async function connectProfile(profile: SessionProfile): Promise<string> {
   const config = await buildConfig(profile)
-  return sessionService.connect(config, 80, 24)
+  const sessionId = await sessionService.connect(config, 80, 24)
+  // 档案配置的端口转发隧道自动启动：失败仅警告，不阻塞已建立的连接
+  const tunnels = decodeExtra(profile.extra).tunnels ?? []
+  for (const t of tunnels) {
+    try {
+      await tunnelService.start(sessionId, t)
+    } catch (e) {
+      const { createDiscreteApi } = await import('naive-ui')
+      createDiscreteApi(['message']).message.warning(
+        `隧道 ${t.local_host}:${t.local_port} 启动失败：${e instanceof Error ? e.message : e}`,
+      )
+    }
+  }
+  return sessionId
 }

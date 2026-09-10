@@ -367,6 +367,8 @@ pub async fn session_disconnect<R: tauri::Runtime>(
     state.terminal_scrollback.lock().await.remove(&session_id);
     // 清理服务器身份
     state.session_meta.lock().await.remove(&session_id);
+    // 级联停止该会话的全部端口转发隧道（依赖的 SSH 连接即将关闭）
+    state.tunnels.stop_session(&session_id).await;
 
     // 断开并移除会话
     state

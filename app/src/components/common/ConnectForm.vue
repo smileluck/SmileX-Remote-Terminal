@@ -28,15 +28,18 @@ import {
   NCheckbox,
   NButton,
   NSelect,
+  NIcon,
   useMessage,
   type FormInst,
   type FormRules,
 } from 'naive-ui'
+import { Plus, Trash } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import * as sshKeys from '@/services/sshKeys'
 import * as sessionService from '@/services/session'
 import { decodeExtra, encodeExtra } from '@/types/profile'
 import type { SessionProfile, AuthType } from '@/types/profile'
+import { emptyTunnelConfig, type TunnelConfig, type TunnelKind } from '@/types/tunnel'
 import { useConnectFlow } from '@/composables/useConnectFlow'
 import { buildConfig } from '@/composables/useSshConnect'
 
@@ -68,6 +71,34 @@ const form = reactive({
   group: '',
   acceptFirstHostKey: false,
 })
+
+/** 端口转发隧道配置（连接成功后自动启动；编辑模式从 extra.tunnels 回填） */
+const tunnels = ref<TunnelConfig[]>([])
+
+/** 隧道类型选项（档案编辑区用，标签精简） */
+const tunnelKindOptions = [
+  { label: '本地转发', value: 'local' },
+  { label: '远端转发', value: 'remote' },
+  { label: '动态 SOCKS5', value: 'dynamic' },
+]
+
+function addTunnel() {
+  tunnels.value.push(emptyTunnelConfig('local'))
+}
+
+function removeTunnel(idx: number) {
+  tunnels.value.splice(idx, 1)
+}
+
+/** 切换隧道类型时重置地址端口默认值（避免残留的 dynamic 配置混入） */
+function onTunnelKindChange(t: TunnelConfig, kind: TunnelKind) {
+  const fresh = emptyTunnelConfig(kind)
+  t.kind = fresh.kind
+  t.local_host = fresh.local_host
+  t.local_port = fresh.local_port
+  t.remote_host = fresh.remote_host
+  t.remote_port = fresh.remote_port
+}
 
 /** 密钥管理器中的可选密钥 */
 const keyOptions = ref<{ label: string; value: string }[]>([])
@@ -152,6 +183,7 @@ function buildProfile(id?: string): SessionProfile {
       ssh_key_id: form.authType === 'private_key_mem' ? form.sshKeyId : undefined,
       group: profilesStore.normalizeGroupName(form.group),
       accept_first_host_key: form.acceptFirstHostKey,
+      tunnels: tunnels.value.length ? tunnels.value : undefined,
     }),
     created_at: now,
     last_used_at: 0,
@@ -239,6 +271,8 @@ async function loadForEdit() {
   form.sshKeyId = extra.ssh_key_id || ''
   form.group = extra.group || ''
   form.acceptFirstHostKey = extra.accept_first_host_key ?? false
+  // 深拷贝避免直接改到 store 中的档案对象
+  tunnels.value = (extra.tunnels ?? []).map((t) => ({ ...t }))
 }
 
 onMounted(() => {
@@ -342,6 +376,39 @@ onMounted(() => {
           自动接受首次 host key（开发模式，跳过指纹校验）
         </NCheckbox>
       </NFormItem>
+
+      <!-- 端口转发隧道（连接成功后自动启动；local=本地监听→远端目标，remote=远端监听→本地目标） -->
+      <NFormItem label="端口转发（可选，连接后自动启动）" class="col-span-2" :show-feedback="false">
+        <div class="tunnel-list">
+          <div v-for="(t, idx) in tunnels" :key="t.id" class="tunnel-row">
+            <div class="tunnel-row-head">
+              <NSelect
+                :value="t.kind"
+                :options="tunnelKindOptions"
+                size="small"
+                class="tunnel-kind"
+                @update:value="(k: TunnelKind) => onTunnelKindChange(t, k)"
+              />
+              <NButton quaternary circle size="tiny" @click="removeTunnel(idx)">
+                <template #icon><NIcon :component="Trash" :size="14" /></template>
+              </NButton>
+            </div>
+            <div class="tunnel-row-fields">
+              <NInput v-model:value="t.local_host" size="small" placeholder="本地地址" class="tunnel-host" />
+              <NInputNumber v-model:value="t.local_port" size="small" :min="0" :max="65535" placeholder="本地端口" class="tunnel-port" />
+              <template v-if="t.kind !== 'dynamic'">
+                <span class="tunnel-arrow">→</span>
+                <NInput v-model:value="t.remote_host" size="small" placeholder="远端地址" class="tunnel-host" />
+                <NInputNumber v-model:value="t.remote_port" size="small" :min="0" :max="65535" placeholder="远端端口" class="tunnel-port" />
+              </template>
+            </div>
+          </div>
+          <NButton size="small" dashed block @click="addTunnel">
+            <template #icon><NIcon :component="Plus" /></template>
+            添加隧道
+          </NButton>
+        </div>
+      </NFormItem>
     </NForm>
 
     <div class="actions">
@@ -371,5 +438,44 @@ onMounted(() => {
   gap: 8px;
   margin-top: 8px;
   flex-wrap: wrap;
+}
+.tunnel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.tunnel-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+.tunnel-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tunnel-kind {
+  width: 140px;
+}
+.tunnel-row-fields {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tunnel-host {
+  flex: 1;
+  min-width: 0;
+}
+.tunnel-port {
+  width: 96px;
+  flex-shrink: 0;
+}
+.tunnel-arrow {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 </style>

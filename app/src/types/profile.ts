@@ -5,6 +5,8 @@
  * 敏感字段（密码/私钥口令）不在此结构中，单独通过 Keyring 存取。
  */
 
+import type { TunnelConfig } from './tunnel'
+
 /** 会话种类 */
 export type ProfileKind = 'ssh' | 'rdp' | 'host'
 
@@ -27,6 +29,8 @@ export interface ProfileExtra {
   height?: number
   /** 远程桌面色深（仅 rdp/host） */
   color_depth?: number
+  /** 端口转发隧道配置（仅 ssh；连接成功后自动启动） */
+  tunnels?: TunnelConfig[]
 }
 
 /** 会话配置（前端可读可写） */

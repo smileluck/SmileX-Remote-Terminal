@@ -19,6 +19,7 @@ import SnippetPanel from '@/components/terminal/SnippetPanel.vue'
 import DockerPanel from '@/components/docker/DockerPanel.vue'
 import CrontabPanel from '@/components/crontab/CrontabPanel.vue'
 import EnvPanel from '@/components/env/EnvPanel.vue'
+import TunnelPanel from '@/components/tunnel/TunnelPanel.vue'
 
 const layout = useLayoutStore()
 const tabs = useTabsStore()
@@ -40,6 +41,7 @@ const panelTitles: Record<RightPanelTab, string> = {
   docker: 'Docker 管理',
   crontab: '定时任务',
   env: '环境管理',
+  tunnel: '端口转发',
 }
 const title = computed(() => panelTitles[layout.rightTab])
 
@@ -82,6 +84,7 @@ function onDragStart(e: MouseEvent) {
       <DockerPanel v-else-if="layout.rightTab === 'docker'" />
       <CrontabPanel v-else-if="layout.rightTab === 'crontab'" />
       <EnvPanel v-else-if="layout.rightTab === 'env'" />
+      <TunnelPanel v-else-if="layout.rightTab === 'tunnel'" />
     </div>
   </aside>
 </template>
