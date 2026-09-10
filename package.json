@@ -13,6 +13,9 @@
     "dev": "pnpm --filter app dev",
     "build": "pnpm --filter app build",
     "preview": "pnpm --filter app preview",
-    "tauri": "app/node_modules/.bin/tauri"
+    "tauri": "app/node_modules/.bin/tauri",
+    "build:mac": "app/node_modules/.bin/tauri build",
+    "build:mac-universal": "app/node_modules/.bin/tauri build --target universal-apple-darwin",
+    "build:linux": "bash scripts/build-linux-docker.sh"
   }
 }

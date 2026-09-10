@@ -136,15 +136,46 @@ cargo tauri dev
 
 首次启动会编译全部 Rust crates，耗时较长（约 3-5 分钟）。后续启动增量编译，通常在 30 秒内。
 
-### 5. 生产构建
+### 5. 生产构建（安装包）
 
-打包为各平台原生安装包（Windows 为 `.msi` / `.exe`）：
+Tauri 不能交叉编译安装包，各平台产物需在对应环境构建（或走 CI）。
+
+**macOS（本机）**：
 
 ```bash
-pnpm tauri build
+# 当前架构（arm64）dmg + app
+pnpm build:mac
+
+# 通用包（arm64 + x86_64，首次需 rustup target add x86_64-apple-darwin）
+pnpm build:mac-universal
 ```
 
-构建产物位于 `crates/desktop/target/release/bundle/`。
+产物位于 `target/release/bundle/`（workspace 统一 target 目录）。
+
+**Linux（本机 macOS，经 Docker）**：
+
+```bash
+# 需先安装并启动 Docker Desktop；构建基于当前 git 已提交状态
+pnpm build:linux
+```
+
+产物位于 `dist-linux/bundle/`（`.deb` + `.AppImage`），构建环境见
+`scripts/Dockerfile.linux-builder`。
+
+**Windows**：macOS 上无法本机构建（依赖 MSVC + WebView2 + WiX/NSIS），
+请在 Windows 机器上执行 `pnpm install && pnpm tauri build`
+（产物 `target/release/bundle/` 下的 `.msi` 与 nsis `.exe`），或使用 CI。
+
+**CI 三平台（推荐）**：仓库自带 `.github/workflows/release.yml`，
+推送 tag 即自动构建 macOS universal dmg、Windows msi/exe、Linux deb/AppImage
+并挂到 GitHub Release：
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+未签名包在 macOS / Windows 上会被首次打开的安全提示拦截，如需消除请配置
+Apple Developer 与 Windows 代码签名证书（workflow 中对应 secrets）。
 
 ## 🛠️ 开发常用命令
 
