@@ -31,6 +31,9 @@ importers:
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)
+      '@xterm/addon-search':
+        specifier: ^0.16.0
+        version: 0.16.0
       '@xterm/xterm':
         specifier: ^5.5.0
         version: 5.5.0
@@ -875,6 +878,10 @@ packages:
       '@xterm/xterm': ^5.0.0
     dependencies:
       '@xterm/xterm': 5.5.0
+    dev: false
+
+  /@xterm/addon-search@0.16.0:
+    resolution: {integrity: sha512-9OeuBFu0/uZJPu+9AHKY6g/w0Czyb/Ut0A5t79I4ULoU4IfU5BEpPFVGQxP4zTTMdfZEYkVIRYbHBX1xWwjeSA==}
     dev: false
 
   /@xterm/xterm@5.5.0:

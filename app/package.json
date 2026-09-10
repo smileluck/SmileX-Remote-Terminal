@@ -17,6 +17,7 @@
     "@vicons/tabler": "^0.13.0",
     "@vueuse/core": "^14.3.0",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.16.0",
     "@xterm/xterm": "^5.5.0",
     "highlight.js": "^11.10.0",
     "markdown-it": "^14.1.0",

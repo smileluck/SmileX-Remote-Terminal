@@ -8,8 +8,8 @@
  */
 import { ref, watch, nextTick, computed } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
-import { NButton, NIcon, NSelect, NDropdown, NModal, useMessage } from 'naive-ui'
-import { Terminal2, X, Plus } from '@vicons/tabler'
+import { NButton, NIcon, NSelect, NDropdown, NModal, NInput, useMessage } from 'naive-ui'
+import { Terminal2, X, Plus, ArrowUp, ArrowDown } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
@@ -32,7 +32,7 @@ const tabs = useTabsStore()
 const ui = useUiStore()
 const message = useMessage()
 const snippets = useSnippetsStore()
-const { term, sessionId: ownSession, init, bind, fit, getInputLine } = useTerminal()
+const { term, searchAddon, sessionId: ownSession, init, bind, fit, getInputLine } = useTerminal()
 
 const containerRef = ref<HTMLDivElement | null>(null)
 
@@ -146,6 +146,66 @@ function confirmPaste() {
   term.value?.focus()
 }
 
+/* ---------------- 终端内搜索（Ctrl/⌘F） ---------------- */
+
+const searchShow = ref(false)
+const searchText = ref('')
+const searchInputRef = ref<InstanceType<typeof NInput> | null>(null)
+
+/** 匹配高亮配色（琥珀色系，深/浅主题均可读） */
+const SEARCH_OPTS = {
+  incremental: true,
+  decorations: {
+    matchBackground: '#6b5300',
+    matchOverviewRuler: '#e0a000',
+    activeMatchBackground: '#b57614',
+    activeMatchColorOverviewRuler: '#ffc400',
+  },
+} as const
+
+/** ⌘/Ctrl+F 打开搜索（事件从 xterm textarea 冒泡到 .pane 容器） */
+function onPaneKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    openSearch()
+  }
+}
+
+function openSearch() {
+  searchShow.value = true
+  void nextTick(() => searchInputRef.value?.focus())
+}
+
+function closeSearch() {
+  searchShow.value = false
+  searchText.value = ''
+  searchAddon.value?.clearDecorations()
+  term.value?.focus()
+}
+
+function searchNext() {
+  if (searchText.value) searchAddon.value?.findNext(searchText.value, SEARCH_OPTS)
+}
+
+function searchPrev() {
+  if (searchText.value) searchAddon.value?.findPrevious(searchText.value, SEARCH_OPTS)
+}
+
+// 输入即增量查找
+watch(searchText, (t) => {
+  if (t) searchAddon.value?.findNext(t, SEARCH_OPTS)
+})
+
+function onSearchKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    if (e.shiftKey) searchPrev()
+    else searchNext()
+  } else if (e.key === 'Escape') {
+    closeSearch()
+  }
+}
+
 /** 添加到常用记录：优先选中文本，否则当前输入行；加入「未分组」 */
 async function addToSnippets() {
   const command = (menuSelection.value || menuLine.value).trim()
@@ -221,7 +281,7 @@ const pickedSession = ref<string | null>(null)
 </script>
 
 <template>
-  <div class="pane" :class="{ active }" @mousedown="emit('focus')">
+  <div class="pane" :class="{ active }" @mousedown="emit('focus')" @keydown="onPaneKeydown">
     <div class="pane-head">
       <span class="pane-title">
         <NIcon :component="Terminal2" :size="12" />
@@ -238,6 +298,27 @@ const pickedSession = ref<string | null>(null)
       class="pane-term"
       @contextmenu.prevent="onContextMenu"
     ></div>
+
+    <!-- 终端内搜索框（Ctrl/⌘F 唤起，Esc 关闭） -->
+    <div v-if="sessionId && searchShow" class="term-search" @mousedown.stop @keydown.stop>
+      <NInput
+        ref="searchInputRef"
+        v-model:value="searchText"
+        size="tiny"
+        placeholder="搜索终端内容"
+        class="term-search-input"
+        @keydown="onSearchKeydown"
+      />
+      <NButton quaternary circle size="tiny" title="上一个（Shift+Enter）" @click="searchPrev">
+        <NIcon :component="ArrowUp" :size="13" />
+      </NButton>
+      <NButton quaternary circle size="tiny" title="下一个（Enter）" @click="searchNext">
+        <NIcon :component="ArrowDown" :size="13" />
+      </NButton>
+      <NButton quaternary circle size="tiny" title="关闭（Esc）" @click="closeSearch">
+        <NIcon :component="X" :size="13" />
+      </NButton>
+    </div>
 
     <div v-else class="pane-picker">
       <template v-if="sessionOptions.length">
@@ -345,6 +426,23 @@ const pickedSession = ref<string | null>(null)
 }
 .picker-btn {
   align-self: flex-start;
+}
+.term-search {
+  position: absolute;
+  top: 34px;
+  right: 10px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.term-search-input {
+  width: 180px;
 }
 .paste-warn {
   font-size: 12px;

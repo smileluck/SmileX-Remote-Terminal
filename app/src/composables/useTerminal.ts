@@ -6,6 +6,7 @@
 import { ref, onUnmounted, watch, type Ref } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 
 import * as sessionService from '@/services/session'
@@ -17,6 +18,7 @@ export function useTerminal() {
   const themeStore = useThemeStore()
   const term = ref<Terminal | null>(null)
   const fitAddon = ref<FitAddon | null>(null)
+  const searchAddon = ref<SearchAddon | null>(null)
   const sessionId = ref<string | null>(null)
   const error = ref<string | null>(null)
 
@@ -29,11 +31,14 @@ export function useTerminal() {
       theme: themeStore.resolved === 'dark' ? xtermThemeDark : xtermThemeLight,
     })
     const fit = new FitAddon()
+    const search = new SearchAddon()
     t.loadAddon(fit)
+    t.loadAddon(search)
     t.open(container)
     fit.fit()
     term.value = t
     fitAddon.value = fit
+    searchAddon.value = search
   }
 
   /** 主题切换时更新已创建终端的配色 */
@@ -177,6 +182,7 @@ export function useTerminal() {
 
   return {
     term: term as Ref<Terminal | null>,
+    searchAddon,
     sessionId,
     error,
     init,
