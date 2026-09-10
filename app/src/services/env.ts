@@ -1,8 +1,8 @@
 /**
  * 环境管理服务
  *
- * 复用 session_exec 静默通道管理远端主机的 11 种环境
- * （Python / Conda / uv / Go / Java / MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）：
+ * 复用 session_exec 静默通道管理远端主机的 12 种环境
+ * （Python / Conda / uv / Go / Node / Java / MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）：
  * - 探测：一次 exec 执行拼接脚本（bash -lc 包装以拿到 login shell PATH），
  *   每种环境输出 SRT_ENV|<id>|<installed>|<version>|<path>|<service>|
  *   <config>|<bin 可选> 分隔行，前端逐行解析
@@ -78,6 +78,15 @@ export const ENV_DEFS: EnvDef[] = [
     configValidate: false,
     installNote: 'go.dev 官方二进制包，解压到 /usr/local/go（需 root 或免密 sudo）',
     uninstallNote: '将删除 /usr/local/go 目录与 /usr/local/bin/go 软链',
+  },
+  {
+    id: 'node',
+    name: 'Node.js',
+    service: false,
+    optionalVersion: true,
+    configValidate: false,
+    installNote: '通过 nvm 官方 installer 安装到用户目录（无需 root），失败切换 gitee 镜像',
+    uninstallNote: '将移除 ~/.nvm 及其中安装的全部 Node 版本（shell rc 中的 nvm 初始化行有存在性保护，不受影响）',
   },
   {
     id: 'java',
@@ -212,6 +221,8 @@ const DETECT_SCRIPT = [
   'up=$(command -v uv 2>/dev/null); if [ -n "$up" ]; then uvv=$(uv --version 2>/dev/null | awk "{print \\$2}"); udir=$(dirname "$(readlink -f "$up" 2>/dev/null || echo "$up")"); ucfg=$(first_file "$HOME/.config/uv/uv.toml" /etc/uv/uv.toml); case "$udir" in "$HOME/.local/bin"|"$HOME/.cargo/bin") usrc="official";; *) usrc="system";; esac; emit uv 1 "$uvv" "$udir" "-" "$ucfg" "" "$usrc"; else emit uv 0 "" "" "-" ""; fi',
   // go：GOROOT 为安装目录，GOENV 为 go env -w 持久化文件；source 标记 official（/usr/local/go）/ system
   'gp=$(command -v go 2>/dev/null); if [ -n "$gp" ]; then gv=$(go version 2>/dev/null | awk "{print \\$3}"); gv=${gv#go}; gdir=$(go env GOROOT 2>/dev/null); [ -n "$gdir" ] || gdir="/usr/local/go"; gcfg=$(go env GOENV 2>/dev/null); { [ -n "$gcfg" ] && [ -f "$gcfg" ]; } || gcfg=""; if [ "$gdir" = "/usr/local/go" ]; then gsrc="official"; else gsrc="system"; fi; emit go 1 "$gv" "$gdir" "-" "$gcfg" "" "$gsrc"; else emit go 0 "" "" "-" ""; fi',
+  // node：source 标记 nvm（路径含 .nvm）/ system；配置探测 ~/.npmrc
+  'ndp=$(command -v node 2>/dev/null); if [ -n "$ndp" ]; then ndv=$(node --version 2>/dev/null); ndv=${ndv#v}; rnd=$(readlink -f "$ndp" 2>/dev/null || echo "$ndp"); case "$rnd" in */.nvm/*) nsrc="nvm"; ndd="$HOME/.nvm";; *) nsrc="system"; ndd=$(dirname "$rnd");; esac; ndc=""; [ -f "$HOME/.npmrc" ] && ndc="$HOME/.npmrc"; emit node 1 "$ndv" "$ndd" "-" "$ndc" "" "$nsrc"; else emit node 0 "" "" "-" ""; fi',
   // java；source 标记 sdkman / system
   'jp=$(command -v java 2>/dev/null); if [ -n "$jp" ]; then jv=$(java -version 2>&1 | head -1 | sed -E "s/.*\\"([^\\"]+)\\".*/\\1/"); rj=$(readlink -f "$jp" 2>/dev/null || echo "$jp"); jdir=$(dirname "$(dirname "$rj")"); jcfg=""; [ -f "$HOME/.sdkman/etc/config" ] && jcfg="$HOME/.sdkman/etc/config"; case "$rj" in *sdkman*) jsrc="sdkman";; *) jsrc="system";; esac; emit java 1 "$jv" "$jdir" "-" "$jcfg" "" "$jsrc"; else emit java 0 "" "" "-" ""; fi',
   // mysql：路径展示数据目录（跳转更有意义）
@@ -304,6 +315,17 @@ function installScript(id: EnvId, version: string): string {
         '$SUDO rm -rf /usr/local/go && $SUDO tar -C /usr/local -xzf /tmp/srt-go.tgz',
         '$SUDO ln -sf /usr/local/go/bin/go /usr/local/bin/go',
         'rm -f /tmp/srt-go.tgz',
+      ].join('; ')
+    // nvm 官方 installer（用户目录，无需 root），失败切 gitee 镜像（gitee.com/mirrors/nvm-sh）
+    case 'node':
+      return [
+        P_DL,
+        'if [ ! -s "$HOME/.nvm/nvm.sh" ]; then DLF https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh /tmp/srt-nvm.sh && bash /tmp/srt-nvm.sh; rc=$?; if [ $rc -ne 0 ]; then echo "官方源失败，切换 gitee 镜像重试..."; rm -rf "$HOME/.nvm"; git clone --depth 1 https://gitee.com/mirrors/nvm-sh.git "$HOME/.nvm"; rc=$?; fi; rm -f /tmp/srt-nvm.sh; [ $rc -eq 0 ] || exit $rc; fi',
+        'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"',
+        'hash -r; command -v nvm >/dev/null 2>&1 || { echo "nvm 安装失败"; exit 1; }',
+        version
+          ? `nvm install ${sq(version)} && nvm alias default ${sq(version)}`
+          : 'nvm install --lts && nvm alias default "lts/*"',
       ].join('; ')
     // SDKMAN 官方脚本；装完可选 sdk install java <version>
     case 'java':
@@ -416,6 +438,11 @@ function uninstallScript(id: EnvId): string {
         P_SUDO,
         '$SUDO rm -rf /usr/local/go',
         '$SUDO rm -f /usr/local/bin/go /usr/local/bin/gofmt',
+      ].join('; ')
+    case 'node':
+      return [
+        'if [ ! -s "$HOME/.nvm/nvm.sh" ]; then echo "未检测到 nvm 安装（可能为系统包或其他方式安装），为避免破坏系统依赖，请手动卸载"; exit 1; fi',
+        'rm -rf "$HOME/.nvm"',
       ].join('; ')
     case 'java':
       return [
@@ -560,6 +587,17 @@ export async function listVersions(sid: string, id: EnvId): Promise<string[]> {
     }
     return seen.size ? [...seen] : ['1.25.1', '1.24.7', '1.23.12']
   }
+  if (id === 'node') {
+    const out = await runChecked(
+      sid,
+      `bash -lc ${sq('export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; if command -v nvm >/dev/null 2>&1; then nvm ls-remote --no-colors 2>/dev/null | grep -oE "v[0-9]+\\.[0-9]+\\.[0-9]+" | tail -12; fi; true')}`,
+    )
+    const versions = out
+      .split('\n')
+      .map((s) => s.trim().replace(/^v/, ''))
+      .filter(Boolean)
+    return versions.length ? versions : ['22.14.0', '20.18.3', '18.20.7']
+  }
   if (id === 'java') {
     const out = await runChecked(
       sid,
@@ -577,8 +615,8 @@ export async function listVersions(sid: string, id: EnvId): Promise<string[]> {
 
 /* ---------------- 版本切换 ---------------- */
 
-/** 支持切换版本的环境（python/java 走版本管理器，go 重装官方包替换） */
-export const SWITCHABLE_ENVS: readonly EnvId[] = ['python', 'go', 'java']
+/** 支持切换版本的环境（python/java/node 走版本管理器，go 重装官方包替换） */
+export const SWITCHABLE_ENVS: readonly EnvId[] = ['python', 'go', 'node', 'java']
 
 /** 本地已安装版本列表（切换弹窗用；go 无本地多版本概念，返回空） */
 export async function listLocalVersions(sid: string, id: EnvId): Promise<string[]> {
@@ -590,6 +628,16 @@ export async function listLocalVersions(sid: string, id: EnvId): Promise<string[
     return out
       .split('\n')
       .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  if (id === 'node') {
+    const out = await runChecked(
+      sid,
+      'ls "$HOME/.nvm/versions/node" 2>/dev/null; true',
+    )
+    return out
+      .split('\n')
+      .map((s) => s.trim().replace(/^v/, ''))
       .filter(Boolean)
   }
   if (id === 'java') {
@@ -611,6 +659,8 @@ export async function listLocalVersions(sid: string, id: EnvId): Promise<string[
  *   conda install python=<v>（作用于 base 环境）；系统包安装报错拒绝
  * - java：本地已装版本走 sdk default，未装走 sdk install（yes 管道自动
  *   设为默认）；无 SDKMAN 直接报错拒绝
+ * - node：nvm 管理走 nvm install + nvm alias default；无 nvm（系统包
+ *   安装）直接报错拒绝
  * - go：重新下载官方包替换 /usr/local/go；/usr/local/go 不存在
  *   （系统包安装）直接报错拒绝
  * 切换可能耗时数分钟（exec 通道无超时），调用方需维护 loading 态。
@@ -639,6 +689,21 @@ export async function switchVersion(sid: string, id: EnvId, version: string): Pr
         'source "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || { echo "系统包安装的 Java 不支持一键切换版本；如需版本管理，请先卸载系统包后通过面板安装（SDKMAN 管理）"; exit 1; }',
         `if [ -d "$HOME/.sdkman/candidates/java/${v.replace(/[^0-9a-zA-Z._-]/g, '')}" ]; then sdk default java ${sq(v)}; else yes | sdk install java ${sq(v)}; fi`,
       ].join('; '),
+    )
+    return
+  }
+  if (id === 'node') {
+    // bash -lc 包装：nvm 是 shell 函数，需 source nvm.sh 后调用；未安装则报错拒绝
+    const nv = v.startsWith('v') ? v : `v${v}`
+    await runChecked(
+      sid,
+      `bash -lc ${sq(
+        [
+          'export NVM_DIR="$HOME/.nvm"',
+          '. "$NVM_DIR/nvm.sh" 2>/dev/null || { echo "系统包安装的 Node.js 不支持一键切换版本；如需版本管理，请先卸载系统包后通过面板安装（nvm 管理）"; exit 1; }',
+          `nvm install ${sq(nv)} && nvm alias default ${sq(nv)}`,
+        ].join('; '),
+      )}`,
     )
     return
   }

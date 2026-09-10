@@ -20,6 +20,7 @@ export const useEnvStore = defineStore('env', () => {
     conda: null,
     uv: null,
     go: null,
+    node: null,
     java: null,
     mysql: null,
     postgresql: null,

@@ -2,7 +2,7 @@
 /**
  * EnvPanel - 环境管理面板（右栏页签）
  *
- * 对当前 SSH 会话远端主机的 11 种环境（Python / Conda / uv / Go / Java /
+ * 对当前 SSH 会话远端主机的 12 种环境（Python / Conda / uv / Go / Node / Java /
  * MySQL / PostgreSQL / Redis / Nginx / OpenResty / Docker）提供：
  * - 安装（官方脚本 / 版本管理器，可选版本弹窗现场探测版本列表）
  * - 版本切换（python/go/java；仅版本管理器/官方包管理的运行时支持）
@@ -51,6 +51,7 @@ import {
   SwitchHorizontal,
   Versions,
   Rocket,
+  BrandJavascript,
 } from '@vicons/tabler'
 import { useEnvStore } from '@/stores/env'
 import { useTabsStore } from '@/stores/tabs'
@@ -82,6 +83,7 @@ const ENV_ICONS: Record<EnvId, Component> = {
   conda: Box,
   uv: Rocket,
   go: Hexagon,
+  node: BrandJavascript,
   java: Coffee,
   mysql: Database,
   postgresql: DatabaseExport,
@@ -127,6 +129,8 @@ function sourceLabel(s: EnvStatus): string {
       return 'conda'
     case 'sdkman':
       return 'SDKMAN'
+    case 'nvm':
+      return 'nvm'
     case 'official':
       return '官方包'
     case 'system':
@@ -145,6 +149,7 @@ const MANAGED_SOURCES: Partial<Record<EnvId, string[]>> = {
   java: ['sdkman'],
   go: ['official'],
   uv: ['official'],
+  node: ['nvm'],
 }
 
 /** 切换版本额外允许 conda 管理的 python（conda install python=<v>） */
@@ -152,6 +157,7 @@ const SWITCH_SOURCES: Partial<Record<EnvId, string[]>> = {
   python: ['pyenv', 'conda'],
   java: ['sdkman'],
   go: ['official'],
+  node: ['nvm'],
 }
 
 function sourceOf(id: EnvId): string {
@@ -245,6 +251,8 @@ const switchNote = computed(() => {
       return '选择本地已安装的 SDKMAN 版本直接切换；输入新版本号将先安装再切换（sdk default 生效，不影响系统自带 JDK）'
     case 'go':
       return '选择版本后下载 go.dev 官方包替换 /usr/local/go（需 root 或免密 sudo）'
+    case 'node':
+      return '选择本地已装版本直接切换（nvm alias default 生效，新终端生效）；输入新版本号将先安装再切换'
     default:
       return ''
   }

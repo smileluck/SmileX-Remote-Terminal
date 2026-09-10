@@ -11,6 +11,7 @@ export type EnvId =
   | 'conda'
   | 'uv'
   | 'go'
+  | 'node'
   | 'java'
   | 'mysql'
   | 'postgresql'
