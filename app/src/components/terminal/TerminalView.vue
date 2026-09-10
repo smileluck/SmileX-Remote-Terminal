@@ -11,7 +11,7 @@
  *   分割方向）+ 四面板入口（文件管理 / 监控 / Agent / 告警），
  *   四面板互斥切换（同一时间只开一个，再点同一个收起）
  */
-import { ref, computed, onUnmounted, watch, h, type Component } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, h, type Component } from 'vue'
 import { NButton, NDropdown, NIcon, NTooltip, useMessage } from 'naive-ui'
 import {
   Refresh,
@@ -33,6 +33,7 @@ import { shellQuote } from '@/utils/shell'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
 import { useLayoutStore } from '@/stores/layout'
+import { useTabsStore } from '@/stores/tabs'
 import FilePanel from '@/components/sftp/FilePanel.vue'
 import PaneTerminal from './PaneTerminal.vue'
 import {
@@ -53,6 +54,7 @@ const props = defineProps<{ tab: TabItem }>()
 const profiles = useProfilesStore()
 const monitor = useMonitorStore()
 const layout = useLayoutStore()
+const tabs = useTabsStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
 
@@ -232,8 +234,46 @@ function disconnectIfOwn(sessionId: string | null) {
 
 /** tab 卸载：清理 pane 独立建立的会话（tab 主会话由 closeTab 负责） */
 onUnmounted(() => {
+  window.removeEventListener('keydown', onPaneKeydown)
   for (const sid of [...ownSessions]) disconnectIfOwn(sid)
 })
+
+/* ---------------- 分屏快捷键（仅 metaKey 系，避让 shell 的 Ctrl 控制字符） ---------------- */
+
+/** 按 DFS 顺序循环切换 pane */
+function cyclePane(delta: number) {
+  const panes = collectPanes(root.value)
+  if (panes.length < 2) return
+  const idx = panes.findIndex((p) => p.id === activePaneId.value)
+  const next = ((idx < 0 ? 0 : idx) + delta + panes.length) % panes.length
+  activePaneId.value = panes[next].id
+}
+
+/**
+ * 分屏快捷键（window 监听 + 本 tab 活跃门控：多 TerminalView 实例 v-show 并存时防串扰）：
+ * ⌘D 向右分屏 / ⌘⇧D 向下分屏 / ⌘⇧W 关闭当前分屏 / ⌘⌥←→↑↓ 切换分屏
+ */
+function onPaneKeydown(e: KeyboardEvent) {
+  if (tabs.activeId !== props.tab.id) return
+  if (!e.metaKey) return
+  const key = e.key.toLowerCase()
+  if (key === 'd') {
+    e.preventDefault()
+    void addPane(e.shiftKey ? 'column' : 'row')
+  } else if (key === 'w' && e.shiftKey) {
+    // App.vue 的全局 ⌘W 已跳过 Shift 组合（见 onKeydown）
+    e.preventDefault()
+    closePane(activePaneId.value)
+  } else if (e.altKey && (key === 'arrowleft' || key === 'arrowup')) {
+    e.preventDefault()
+    cyclePane(-1)
+  } else if (e.altKey && (key === 'arrowright' || key === 'arrowdown')) {
+    e.preventDefault()
+    cyclePane(1)
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onPaneKeydown))
 
 /** 重新连接（基于档案，复用当前 tab） */
 async function handleReconnect() {

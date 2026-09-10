@@ -58,6 +58,18 @@ function onKeydown(e: KeyboardEvent) {
   const mod = e.metaKey || e.ctrlKey
   if (!mod) return
   const key = e.key.toLowerCase()
+  // Ctrl+Tab / Ctrl+Shift+Tab：循环切换标签（e.key 为 'Tab'）
+  if (key === 'tab') {
+    e.preventDefault()
+    tabsStore.cycleActive(e.shiftKey ? -1 : 1)
+    return
+  }
+  // ⌘/Ctrl + 1~9：按序号切换标签（9 跳到最后一个）
+  if (/^[1-9]$/.test(key)) {
+    e.preventDefault()
+    tabsStore.setActiveByIndex(Number(key) - 1)
+    return
+  }
   if (key === 'b') {
     e.preventDefault()
     layoutStore.toggleSidebar()
@@ -76,6 +88,8 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     uiStore.openConnectDialog()
   } else if (key === 'w') {
+    // ⌘⇧W 留给 TerminalView 关闭当前分屏，此处只响应不带 Shift 的关闭标签
+    if (e.shiftKey) return
     e.preventDefault()
     if (tabsStore.activeId) tabsStore.closeTab(tabsStore.activeId)
   }

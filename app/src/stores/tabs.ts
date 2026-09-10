@@ -87,6 +87,23 @@ export const useTabsStore = defineStore('tabs', () => {
     activeId.value = id
   }
 
+  /** 按序号切换（快捷键 ⌘1~9；index 越界时钳制到边界，9 常用于跳到最后一个） */
+  function setActiveByIndex(index: number) {
+    const n = tabs.value.length
+    if (!n) return
+    const i = Math.max(0, Math.min(index, n - 1))
+    setActive(tabs.value[i].id)
+  }
+
+  /** 循环切换（快捷键 Ctrl+Tab / Ctrl+Shift+Tab；delta=±1） */
+  function cycleActive(delta: number) {
+    const n = tabs.value.length
+    if (n < 2) return
+    const cur = tabs.value.findIndex((t) => t.id === activeId.value)
+    const next = ((cur < 0 ? 0 : cur) + delta + n) % n
+    setActive(tabs.value[next].id)
+  }
+
   /** 更新标签字段（如 sessionId/error） */
   function updateTab(id: string, patch: Partial<TabItem>) {
     const tab = tabs.value.find((t) => t.id === id)
@@ -104,6 +121,8 @@ export const useTabsStore = defineStore('tabs', () => {
     closeAllTabs,
     closeOtherTabs,
     setActive,
+    setActiveByIndex,
+    cycleActive,
     updateTab,
   }
 })
