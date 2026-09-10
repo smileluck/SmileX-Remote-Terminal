@@ -116,13 +116,64 @@ const showPasteConfirm = ref(false)
 const pastePending = ref('')
 
 /**
- * 粘贴统一入口：CRLF/孤 CR 一律归一为 LF（CRLF 进 PTY 会变成双重换行、
- * 孤 CR 在 bracketed paste 下显示为 ^M 乱行）；多行内容先弹确认，
+ * 剥离剪贴板夹带的 ANSI 转义序列（CSI/OSC/两字节 ESC 序列）与 C0 控制字符
+ * （保留 \t 与 \n）。从终端输出/网页复制的内容常带肉眼不可见的转义序列，
+ * 粘贴进 PTY 后会直接改变终端模式（如应用光标键模式）或 readline 状态，
+ * 导致之后方向键、回显错乱。用 charCode 实现，避免在源码中写转义字面量。
+ */
+function sanitizePaste(raw: string): { text: string; stripped: boolean } {
+  let out = ''
+  let i = 0
+  while (i < raw.length) {
+    const code = raw.charCodeAt(i)
+    if (code === 0x1b) {
+      const next = raw[i + 1]
+      if (next === '[') {
+        // CSI 序列：跳到收尾字节（0x40–0x7e）
+        i += 2
+        while (i < raw.length && (raw.charCodeAt(i) < 0x40 || raw.charCodeAt(i) > 0x7e)) i++
+        i++
+        continue
+      }
+      if (next === ']') {
+        // OSC 序列：到 BEL 或 ESC\ 结束
+        i += 2
+        while (i < raw.length) {
+          if (raw.charCodeAt(i) === 0x07) {
+            i++
+            break
+          }
+          if (raw.charCodeAt(i) === 0x1b && raw[i + 1] === '\\') {
+            i += 2
+            break
+          }
+          i++
+        }
+        continue
+      }
+      i += 2 // 两字节 ESC 序列
+      continue
+    }
+    // 剔除其余 C0 控制字符（保留 0x09 \t 与 0x0a \n）与 DEL
+    if ((code < 0x20 && code !== 0x09 && code !== 0x0a) || code === 0x7f) {
+      i++
+      continue
+    }
+    out += raw[i]
+    i++
+  }
+  return { text: out, stripped: out !== raw }
+}
+
+/**
+ * 粘贴统一入口：CRLF/孤 CR 归一为 LF → 剥离转义/控制字符；多行内容先弹确认，
  * 防止 shell 未启用 bracketed paste 时逐行立即执行造成错乱。
  */
 function queuePaste(raw: string) {
-  const text = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const { text, stripped } = sanitizePaste(normalized)
   if (!text) return
+  if (stripped) message.info('已剔除粘贴内容中的转义/控制字符')
   if (text.includes('\n')) {
     pastePending.value = text
     showPasteConfirm.value = true
