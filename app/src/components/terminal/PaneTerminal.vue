@@ -99,17 +99,6 @@ async function pasteClipboard() {
   if (text) queuePaste(text)
 }
 
-/**
- * 拦截 webview 原生粘贴（Cmd/Ctrl+V 触发 textarea 的 paste DOM 事件）：
- * capture 阶段在容器上截获，阻止 xterm 默认粘贴处理，统一走规范化流程。
- */
-function onNativePaste(e: ClipboardEvent) {
-  e.preventDefault()
-  e.stopPropagation()
-  const text = e.clipboardData?.getData('text') ?? ''
-  if (text) queuePaste(text)
-}
-
 /* ---------------- 规范化粘贴 ---------------- */
 
 const showPasteConfirm = ref(false)
@@ -166,7 +155,10 @@ function sanitizePaste(raw: string): { text: string; stripped: boolean } {
 }
 
 /**
- * 粘贴统一入口：CRLF/孤 CR 归一为 LF → 剥离转义/控制字符；多行内容先弹确认，
+ * 粘贴统一入口（仅右键菜单路径；⌘/Ctrl+V 原生粘贴走 xterm 默认处理，
+ * 其内部已做 CRLF 归一与 bracketed paste——勿再拦截 paste DOM 事件：
+ * 拦截会绕开 xterm 内部 textarea 状态管理，导致残留文本在后续按键被重发）：
+ * CRLF/孤 CR 归一为 LF → 剥离转义/控制字符；多行内容先弹确认，
  * 防止 shell 未启用 bracketed paste 时逐行立即执行造成错乱。
  */
 function queuePaste(raw: string) {
@@ -294,7 +286,6 @@ watch(
   async (el) => {
     if (el && !term.value) {
       init(el)
-      el.addEventListener('paste', onNativePaste, true)
       await nextTick()
       fit()
       if (props.sessionId && props.sessionId !== ownSession.value) {
