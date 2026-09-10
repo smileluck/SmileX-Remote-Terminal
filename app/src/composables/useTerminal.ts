@@ -10,7 +10,6 @@ import '@xterm/xterm/css/xterm.css'
 
 import * as sessionService from '@/services/session'
 import * as snippetsService from '@/services/snippets'
-import { Suggester } from '@/composables/useAutocomplete'
 import { useThemeStore, xtermThemeDark, xtermThemeLight } from '@/stores/theme'
 import type { SshConfig, TerminalOutputPayload } from '@/types/session'
 
@@ -20,8 +19,6 @@ export function useTerminal() {
   const fitAddon = ref<FitAddon | null>(null)
   const sessionId = ref<string | null>(null)
   const error = ref<string | null>(null)
-  /** 命令补全（一个终端实例一个） */
-  let suggester: Suggester | null = null
 
   /** 初始化 xterm 实例 */
   function init(container: HTMLElement) {
@@ -37,7 +34,6 @@ export function useTerminal() {
     fit.fit()
     term.value = t
     fitAddon.value = fit
-    suggester = new Suggester(t, container)
   }
 
   /** 主题切换时更新已创建终端的配色 */
@@ -59,8 +55,6 @@ export function useTerminal() {
     attachOutput(id, t)
     attachInput(t)
     sessionId.value = id
-    // 异步拉取远端命令表（不阻塞终端）
-    suggester?.bindSession(id)
   }
 
   /** 建立 SSH 连接并绑定数据双向转发 */
@@ -77,7 +71,6 @@ export function useTerminal() {
     try {
       sessionId.value = await sessionService.connect(config, cols, rows)
       attachOutput(sessionId.value, t)
-      suggester?.bindSession(sessionId.value)
     } catch (e) {
       error.value = String(e)
       throw e
@@ -114,14 +107,9 @@ export function useTerminal() {
   function attachInput(t: Terminal) {
     if (inputAttached) return
     inputAttached = true
-    // 用户输入 → 后端（经补全器维护行缓冲/展示候选；补全器不拦截按键，
-    // Tab/方向键全部透传给 shell，避免吞掉 shell 的补全与历史翻找）
+    // 用户输入 → 后端
     t.onData((data) => {
       if (sessionId.value) {
-        if (suggester) {
-          suggester.currentSessionId = sessionId.value
-          suggester.feed(data)
-        }
         const encoder = new TextEncoder()
         sessionService.input(sessionId.value, encoder.encode(data)).catch((e) => {
           error.value = String(e)
@@ -184,7 +172,6 @@ export function useTerminal() {
 
   onUnmounted(() => {
     detachOutput()
-    suggester?.destroy()
     term.value?.dispose()
   })
 
