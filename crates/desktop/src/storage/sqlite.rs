@@ -149,6 +149,13 @@ pub struct FavoriteDir {
     #[serde(default)]
     pub sort_order: i64,
     pub created_at: i64,
+    /// 作用范围：global = 所有主机共享；host = 仅 profile_id 对应主机
+    #[serde(default = "default_dir_scope")]
+    pub scope: String,
+}
+
+fn default_dir_scope() -> String {
+    "host".to_string()
 }
 
 /// 监控告警规则
@@ -327,14 +334,15 @@ impl SqliteStorage {
             CREATE INDEX IF NOT EXISTS idx_command_history_time
                 ON command_history(created_at DESC);
 
-            -- 常用目录（常用记录面板「目录」Tab，按主机档案区分）
+            -- 常用目录（常用记录面板「目录」Tab，按主机档案区分；scope=global 全主机共享）
             CREATE TABLE IF NOT EXISTS favorite_dirs (
                 id            TEXT    PRIMARY KEY NOT NULL,
                 profile_id    TEXT    NOT NULL DEFAULT '',
                 name          TEXT    NOT NULL,
                 path          TEXT    NOT NULL,
                 sort_order    INTEGER NOT NULL DEFAULT 0,
-                created_at    INTEGER NOT NULL
+                created_at    INTEGER NOT NULL,
+                scope         TEXT    NOT NULL DEFAULT 'host'
             );
 
             CREATE INDEX IF NOT EXISTS idx_favorite_dirs_profile
@@ -429,6 +437,12 @@ impl SqliteStorage {
             "agent_chats",
             "profile_id",
             "ALTER TABLE agent_chats ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "favorite_dirs",
+            "scope",
+            "ALTER TABLE favorite_dirs ADD COLUMN scope TEXT NOT NULL DEFAULT 'host'",
         )?;
         Ok(())
     }
@@ -821,17 +835,17 @@ impl SqliteStorage {
     pub async fn save_favorite_dir(&self, dir: &FavoriteDir) -> Result<()> {
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT OR REPLACE INTO favorite_dirs (id, profile_id, name, path, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![dir.id, dir.profile_id, dir.name, dir.path, dir.sort_order, dir.created_at],
+            "INSERT OR REPLACE INTO favorite_dirs (id, profile_id, name, path, sort_order, created_at, scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![dir.id, dir.profile_id, dir.name, dir.path, dir.sort_order, dir.created_at, dir.scope],
         )?;
         Ok(())
     }
 
-    /// 指定主机档案的常用目录（按排序序号，旧数据退化为创建时间）
+    /// 指定主机档案可见的常用目录（本机项 + 全局共享项；按排序序号，旧数据退化为创建时间）
     pub async fn list_favorite_dirs(&self, profile_id: &str) -> Result<Vec<FavoriteDir>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, profile_id, name, path, sort_order, created_at FROM favorite_dirs WHERE profile_id = ?1 ORDER BY sort_order, created_at",
+            "SELECT id, profile_id, name, path, sort_order, created_at, scope FROM favorite_dirs WHERE scope = 'global' OR (scope = 'host' AND profile_id = ?1) ORDER BY sort_order, created_at",
         )?;
         let rows = stmt.query_map(params![profile_id], |row| {
             Ok(FavoriteDir {
@@ -841,6 +855,7 @@ impl SqliteStorage {
                 path: row.get(3)?,
                 sort_order: row.get(4)?,
                 created_at: row.get(5)?,
+                scope: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1436,31 +1451,43 @@ mod tests {
             path: path.into(),
             sort_order: sort,
             created_at: 100,
+            scope: "host".into(),
         };
 
         storage.save_favorite_dir(&mk("d1", "p-a", "/var/log", 0)).await.unwrap();
         storage.save_favorite_dir(&mk("d2", "p-a", "/opt/app", 1)).await.unwrap();
         storage.save_favorite_dir(&mk("d3", "p-b", "/home/u", 0)).await.unwrap();
+        // 全局目录：任意 profile 可见
+        let mut g = mk("d4", "p-a", "/tmp", 2);
+        g.scope = "global".into();
+        storage.save_favorite_dir(&g).await.unwrap();
 
-        // 按 profile 隔离
+        // 按 profile 隔离 + 全局合并
         let a = storage.list_favorite_dirs("p-a").await.unwrap();
-        assert_eq!(a.len(), 2);
+        assert_eq!(a.len(), 3);
         assert_eq!(a[0].path, "/var/log");
         assert_eq!(a[1].path, "/opt/app");
+        assert_eq!(a[2].path, "/tmp");
+        assert_eq!(a[2].scope, "global");
         assert_eq!(a[0].name, "log");
         let b = storage.list_favorite_dirs("p-b").await.unwrap();
-        assert_eq!(b.len(), 1);
-        assert!(storage.list_favorite_dirs("p-c").await.unwrap().is_empty());
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[0].path, "/home/u");
+        assert_eq!(b[1].path, "/tmp");
+        // 无 host 项的 profile 仍可见全局项
+        let c = storage.list_favorite_dirs("p-c").await.unwrap();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].scope, "global");
 
         // UPSERT 重命名
         let mut d1 = mk("d1", "p-a", "/var/log", 0);
         d1.name = "日志".into();
         storage.save_favorite_dir(&d1).await.unwrap();
         let a = storage.list_favorite_dirs("p-a").await.unwrap();
-        assert_eq!(a.len(), 2);
+        assert_eq!(a.len(), 3);
         assert_eq!(a[0].name, "日志");
 
-        // 重排
+        // 重排（倒序后落库）
         let a = storage.list_favorite_dirs("p-a").await.unwrap();
         let reordered: Vec<FavoriteDir> = a
             .iter()
@@ -1470,11 +1497,12 @@ mod tests {
             .collect();
         storage.reorder_favorite_dirs(&reordered).await.unwrap();
         let a = storage.list_favorite_dirs("p-a").await.unwrap();
-        assert_eq!(a[0].path, "/opt/app");
+        assert_eq!(a[0].path, "/tmp");
+        assert_eq!(a[2].path, "/var/log");
 
         // 删除
         assert!(storage.delete_favorite_dir("d1").await.unwrap());
         assert!(!storage.delete_favorite_dir("d1").await.unwrap());
-        assert_eq!(storage.list_favorite_dirs("p-a").await.unwrap().len(), 1);
+        assert_eq!(storage.list_favorite_dirs("p-a").await.unwrap().len(), 2);
     }
 }

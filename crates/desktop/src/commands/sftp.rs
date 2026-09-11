@@ -48,6 +48,17 @@ pub async fn sftp_list(
     client.list(&path).await.map_err(|e| AppError::session(e.to_string()))
 }
 
+/// 获取远端路径元信息（用于存在性检查等；不存在时返回错误）
+#[tauri::command]
+pub async fn sftp_stat(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<SftpEntry, AppError> {
+    let client = client_of(&state, &session_id).await?;
+    client.stat(&path).await.map_err(|e| AppError::session(e.to_string()))
+}
+
 /// 创建目录
 #[tauri::command]
 pub async fn sftp_mkdir(

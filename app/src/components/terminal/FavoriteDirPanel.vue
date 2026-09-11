@@ -2,10 +2,12 @@
 /**
  * FavoriteDirPanel - 常用记录面板「目录」Tab
  *
- * 常用目录按主机档案（profileId）隔离（favoriteDirs store）。
+ * 常用目录按主机档案（profileId）隔离 + 全局共享（scope，favoriteDirs store）。
  * 树形下钻：点击目录节点懒加载展开（SFTP list，目录优先 + 名称排序），
  * 文件仅展示；目录行附「终端 cd 到此」（raw input，终端可见，同 FilePanel）。
  * 懒加载失败行内展示错误，点击重试。
+ * 存在性检查：会话就绪时对每个根目录 sftp.stat，当前主机不存在的
+ * 目录置灰标注（禁展开/禁 cd，仍可重命名/删除）；切换会话后重新检查。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
@@ -15,6 +17,9 @@ import {
   NInput,
   NModal,
   NPopconfirm,
+  NRadioButton,
+  NRadioGroup,
+  NTag,
   useMessage,
 } from 'naive-ui'
 import {
@@ -32,7 +37,7 @@ import type { SftpEntry } from '@/services/sftp'
 import * as sessionService from '@/services/session'
 import { shellQuote } from '@/utils/shell'
 import { fmtBytes } from '@/utils/format'
-import type { FavoriteDir } from '@/services/snippets'
+import type { DirScope, FavoriteDir } from '@/services/snippets'
 
 const store = useFavoriteDirsStore()
 const tabs = useTabsStore()
@@ -40,18 +45,34 @@ const message = useMessage()
 
 const encoder = new TextEncoder()
 
-onMounted(() => void store.load())
+onMounted(async () => {
+  await store.load()
+  void checkAllRoots()
+})
 
-// 激活 Tab 的主机档案变化 → 重新加载对应列表
+// 激活 Tab 的主机档案变化 → 重新加载对应列表并重新检查存在性
 watch(
   () => tabs.activeTab?.profileId,
-  () => void store.load(),
+  async () => {
+    await store.load()
+    void checkAllRoots()
+  },
 )
 
 /** 当前可执行/浏览目标：激活的、未断开的 SSH 会话 */
 const activeSessionId = computed(() => {
   const t = tabs.activeTab
   return t?.kind === 'ssh' && t.sessionId && !t.disconnected ? t.sessionId : null
+})
+
+// 会话切换/断开：远端路径缓存不可跨会话复用，清空树缓存并重新检查存在性
+watch(activeSessionId, (sid, prev) => {
+  if (sid === prev) return
+  expanded.clear()
+  childrenMap.clear()
+  loadingPaths.clear()
+  errorPaths.clear()
+  void checkAllRoots()
 })
 
 /* ---------------- 树形展开 ---------------- */
@@ -64,6 +85,33 @@ const childrenMap = reactive(new Map<string, SftpEntry[]>())
 const loadingPaths = reactive(new Set<string>())
 /** 加载失败：path → 错误信息 */
 const errorPaths = reactive(new Map<string, string>())
+
+/** 当前会话中不存在的根目录路径（不落库，随会话切换重查） */
+const missingPaths = reactive(new Set<string>())
+/** 存在性检查中的路径 */
+const checkingPaths = reactive(new Set<string>())
+
+/** 对当前列表所有根目录做存在性检查（stat 失败或非目录 → 标注不存在） */
+async function checkAllRoots() {
+  const sid = activeSessionId.value
+  missingPaths.clear()
+  if (!sid) return
+  await Promise.allSettled(
+    store.dirs.map(async (d) => {
+      checkingPaths.add(d.path)
+      try {
+        const entry = await sftpService.stat(sid, d.path)
+        // 防串会话：回调时会话已切换则丢弃结果
+        if (activeSessionId.value !== sid) return
+        if (!entry.is_dir) missingPaths.add(d.path)
+      } catch {
+        if (activeSessionId.value === sid) missingPaths.add(d.path)
+      } finally {
+        checkingPaths.delete(d.path)
+      }
+    }),
+  )
+}
 
 /** 拉取并缓存子目录（目录优先 + 名称排序） */
 async function loadChildren(path: string) {
@@ -89,8 +137,9 @@ async function loadChildren(path: string) {
   }
 }
 
-/** 点击目录节点：展开（必要时懒加载）/ 折叠 */
+/** 点击目录节点：展开（必要时懒加载）/ 折叠；当前主机不存在的根目录不可展开 */
 function toggleDir(path: string) {
+  if (missingPaths.has(path)) return
   if (expanded.has(path)) {
     expanded.delete(path)
     return
@@ -109,6 +158,8 @@ interface TreeRow {
   root?: FavoriteDir
   entry?: SftpEntry
   error?: string
+  /** 根目录：当前会话中不存在 */
+  missing?: boolean
 }
 
 const rows = computed<TreeRow[]>(() => {
@@ -136,7 +187,7 @@ const rows = computed<TreeRow[]>(() => {
     }
   }
   for (const d of store.dirs) {
-    out.push({ key: d.id, depth: 0, kind: 'root', name: d.name, path: d.path, root: d })
+    out.push({ key: d.id, depth: 0, kind: 'root', name: d.name, path: d.path, root: d, missing: missingPaths.has(d.path) })
     if (expanded.has(d.path)) pushChildren(d.path, 1)
   }
   return out
@@ -169,20 +220,20 @@ async function removeDir(d: FavoriteDir) {
 
 const showForm = ref(false)
 const editingId = ref<string | null>(null)
-const draft = ref({ name: '', path: '' })
+const draft = ref({ name: '', path: '', scope: 'host' as DirScope })
 
 const formTitle = computed(() => (editingId.value ? '重命名目录' : '新增目录'))
 
 /** 打开新增弹窗（供 SnippetPanel「新增」下拉调用） */
 function openCreate() {
   editingId.value = null
-  draft.value = { name: '', path: '' }
+  draft.value = { name: '', path: '', scope: 'host' }
   showForm.value = true
 }
 
 function openRename(d: FavoriteDir) {
   editingId.value = d.id
-  draft.value = { name: d.name, path: d.path }
+  draft.value = { name: d.name, path: d.path, scope: d.scope }
   showForm.value = true
 }
 
@@ -207,9 +258,12 @@ async function submitForm() {
       path,
       sortOrder: old?.sortOrder ?? store.dirs.length,
       createdAt: old?.createdAt ?? Math.floor(Date.now() / 1000),
+      scope: draft.value.scope,
     })
     showForm.value = false
     message.success('已保存')
+    // 新增/改路径后重查存在性
+    void checkAllRoots()
   } catch (e) {
     message.error(String(e))
   }
@@ -231,7 +285,7 @@ defineExpose({ openCreate })
       v-for="r in rows"
       :key="r.key"
       class="fd-row"
-      :class="[`fd-${r.kind}`]"
+      :class="[`fd-${r.kind}`, { 'fd-missing': r.missing }]"
       :style="{ paddingLeft: `${8 + r.depth * 16}px` }"
       @click="r.kind === 'root' || r.kind === 'dir' ? toggleDir(r.path) : r.kind === 'error' ? loadChildren(r.path) : undefined"
     >
@@ -256,6 +310,10 @@ defineExpose({ openCreate })
           :size="14"
         />
         <span class="fd-name" :title="r.path">{{ r.name }}</span>
+        <NTag v-if="r.root?.scope === 'global'" size="tiny" :bordered="false" class="fd-tag">全局</NTag>
+        <NTag v-if="r.missing" size="tiny" type="error" :bordered="false" class="fd-tag">
+          当前主机不存在
+        </NTag>
         <span v-if="r.kind === 'file'" class="fd-size">{{ fmtBytes(r.entry?.size ?? 0) }}</span>
 
         <span class="fd-ops" @click.stop>
@@ -263,7 +321,7 @@ defineExpose({ openCreate })
             v-if="r.kind !== 'file'"
             class="fd-op"
             title="终端 cd 到此"
-            :disabled="!activeSessionId"
+            :disabled="!activeSessionId || r.missing"
             @click="cdTo(r.path)"
           >
             <NIcon :component="Terminal2" :size="13" />
@@ -305,6 +363,10 @@ defineExpose({ openCreate })
           placeholder="显示名（可选，默认路径末段）"
           @keydown.enter="submitForm"
         />
+        <NRadioGroup v-model:value="draft.scope" size="small">
+          <NRadioButton value="host">本机</NRadioButton>
+          <NRadioButton value="global">全局</NRadioButton>
+        </NRadioGroup>
         <div class="fd-form-ops">
           <NButton @click="showForm = false">取消</NButton>
           <NButton type="primary" @click="submitForm">保存</NButton>
@@ -372,6 +434,22 @@ defineExpose({ openCreate })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 当前主机不存在的根目录：整行置灰，不可展开 */
+.fd-missing .fd-name,
+.fd-missing .fd-icon,
+.fd-missing .fd-arrow {
+  color: var(--text-tertiary);
+  opacity: 0.6;
+}
+
+.fd-missing.fd-root {
+  cursor: not-allowed;
+}
+
+.fd-tag {
+  flex-shrink: 0;
 }
 
 .fd-root .fd-name {

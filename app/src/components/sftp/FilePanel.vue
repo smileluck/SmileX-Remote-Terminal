@@ -734,6 +734,7 @@ async function saveCrumbFavoriteDir(path: string) {
       path,
       sortOrder: favDirs.dirs.length,
       createdAt: Math.floor(Date.now() / 1000),
+      scope: 'host',
     })
     message.success('已收藏到常用目录')
   } catch (e) {

@@ -87,6 +87,7 @@ fn main() {
             commands::monitor::monitor_list,
             // SFTP 命令组
             commands::sftp::sftp_list,
+            commands::sftp::sftp_stat,
             commands::sftp::sftp_mkdir,
             commands::sftp::sftp_remove,
             commands::sftp::sftp_rename,

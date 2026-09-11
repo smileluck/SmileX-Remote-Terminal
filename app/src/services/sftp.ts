@@ -25,6 +25,11 @@ export function list(sessionId: string, path?: string): Promise<SftpEntry[]> {
   return invoke<SftpEntry[]>('sftp_list', { sessionId, path: path ?? null })
 }
 
+/** 获取远端路径元信息（存在性检查用；不存在时 reject） */
+export function stat(sessionId: string, path: string): Promise<SftpEntry> {
+  return invoke<SftpEntry>('sftp_stat', { sessionId, path })
+}
+
 /** 创建目录 */
 export function mkdir(sessionId: string, path: string): Promise<void> {
   return invoke<void>('sftp_mkdir', { sessionId, path })

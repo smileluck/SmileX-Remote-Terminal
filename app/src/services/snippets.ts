@@ -34,6 +34,9 @@ export interface CommandHistory {
   createdAt: number
 }
 
+/** 常用目录作用范围：global = 所有主机共享；host = 仅 profileId 对应主机 */
+export type DirScope = 'global' | 'host'
+
 /** 常用目录（按主机档案区分；常用记录面板「目录」Tab） */
 export interface FavoriteDir {
   id: string
@@ -45,6 +48,8 @@ export interface FavoriteDir {
   path: string
   sortOrder: number
   createdAt: number
+  /** 作用范围（默认 'host'） */
+  scope: DirScope
 }
 
 export function snippetList(): Promise<CommandSnippet[]> {
