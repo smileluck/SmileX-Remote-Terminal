@@ -340,9 +340,63 @@ function onContextMenu(e: MouseEvent, entry: SftpEntry) {
   menuShow.value = true
 }
 
+/** 空白区右键：menuTarget 置空，复用同一浮层展示目录级菜单 */
+function onBlankContextMenu(e: MouseEvent) {
+  menuTarget = null
+  menuX.value = e.clientX
+  menuY.value = e.clientY
+  menuShow.value = true
+}
+
 function onMenuSelect(key: string) {
   menuShow.value = false
   if (menuTarget) onRowMenu(key, menuTarget)
+  else onBlankMenu(key)
+}
+
+/** 空白区（当前目录）右键菜单：粘贴 / 新建 / 上传 / 工具 */
+const blankMenuOptions = computed(() => [
+  {
+    type: 'group',
+    label: '剪贴板',
+    key: 'g-clip',
+    children: [
+      { label: pasteLabel.value, key: 'clip-paste', disabled: !clipboardUsable.value },
+    ],
+  },
+  {
+    type: 'group',
+    label: '新建',
+    key: 'g-new',
+    children: [{ label: '新建目录', key: 'mkdir' }],
+  },
+  {
+    type: 'group',
+    label: '传输',
+    key: 'g-transfer',
+    children: [
+      { label: '上传文件', key: 'upload-files' },
+      { label: '上传文件夹', key: 'upload-folder' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '工具',
+    key: 'g-tools',
+    children: [
+      { label: '复制绝对路径', key: 'copy-path' },
+      { label: '刷新', key: 'refresh' },
+    ],
+  },
+])
+
+function onBlankMenu(key: string) {
+  if (key === 'clip-paste') void pasteInto(cwd.value)
+  else if (key === 'mkdir') creatingDir.value = true
+  else if (key === 'upload-files') void pickFiles()
+  else if (key === 'upload-folder') void pickFolder()
+  else if (key === 'copy-path') void copyCrumbPath(cwd.value)
+  else if (key === 'refresh') load()
 }
 
 /* ---------------- 复制 / 剪切 / 粘贴（远端 cp -a / mv，session_exec 静默通道） ---------------- */
@@ -818,7 +872,12 @@ defineExpose({ reload: load })
       <NButton size="tiny" type="primary" @click="confirmMkdir">创建</NButton>
     </div>
 
-    <NSpin :show="loading" size="small" class="fp-body">
+    <NSpin
+      :show="loading"
+      size="small"
+      class="fp-body"
+      @contextmenu.prevent="onBlankContextMenu"
+    >
       <div v-if="!entries.length && !loading" class="fp-empty">
         <NEmpty size="small" description="空目录" />
       </div>
@@ -828,7 +887,7 @@ defineExpose({ reload: load })
         class="fp-row"
         :class="{ detail: layout.filesView === 'detail' }"
         @dblclick="enter(entry)"
-        @contextmenu.prevent="(e: MouseEvent) => onContextMenu(e, entry)"
+        @contextmenu.prevent.stop="(e: MouseEvent) => onContextMenu(e, entry)"
       >
         <div class="fp-line">
           <NIcon
@@ -892,7 +951,7 @@ defineExpose({ reload: load })
       :x="menuX"
       :y="menuY"
       placement="bottom-start"
-      :options="menuTarget ? rowMenuOptions(menuTarget) : []"
+      :options="menuTarget ? rowMenuOptions(menuTarget) : blankMenuOptions"
       @select="onMenuSelect"
       @clickoutside="menuShow = false"
     />
