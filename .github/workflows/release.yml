@@ -6,6 +6,10 @@ on:
   push:
     tags: ['v*']
 
+# tauri-action 创建 Release / 上传产物需要写权限（仓库默认 token 为只读时必须显式声明）
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -42,3 +46,5 @@ jobs:
         with:
           # macOS 打 universal 包；其他平台用默认 target
           args: ${{ matrix.os == 'macos-latest' && '--target universal-apple-darwin' || '' }}
+          # 直接发布正式 release（默认是草稿，容易误以为没生成）
+          releaseDraft: false
