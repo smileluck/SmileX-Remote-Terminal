@@ -44,6 +44,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # 显式传 tag 名：自动探测失败时会跳过上传（job 仍绿但 release 为空）
+          tagName: ${{ github.ref_name }}
+          releaseName: 'SmileX Remote Terminal ${{ github.ref_name }}'
           # macOS 打 universal 包；其他平台用默认 target
           args: ${{ matrix.os == 'macos-latest' && '--target universal-apple-darwin' || '' }}
           # 直接发布正式 release（默认是草稿，容易误以为没生成）
