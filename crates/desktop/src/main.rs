@@ -108,6 +108,11 @@ fn main() {
             commands::snippet::history_add,
             commands::snippet::history_list,
             commands::snippet::history_clear,
+            // 常用目录（按主机档案区分）
+            commands::snippet::favorite_dir_list,
+            commands::snippet::favorite_dir_save,
+            commands::snippet::favorite_dir_delete,
+            commands::snippet::favorite_dir_reorder,
             // 告警规则
             commands::alert::alert_rule_list,
             commands::alert::alert_rule_save,

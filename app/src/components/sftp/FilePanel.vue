@@ -52,6 +52,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useLayoutStore } from '@/stores/layout'
 import { useSnippetsStore } from '@/stores/snippets'
 import { useProfilesStore } from '@/stores/profiles'
+import { useFavoriteDirsStore } from '@/stores/favoriteDirs'
 import { useMonitorStore } from '@/stores/monitor'
 import TransferList from './TransferList.vue'
 import { fileClipboard } from './fileClipboard'
@@ -65,6 +66,7 @@ const tabsStore = useTabsStore()
 const layout = useLayoutStore()
 const snippets = useSnippetsStore()
 const profiles = useProfilesStore()
+const favDirs = useFavoriteDirsStore()
 const monitor = useMonitorStore()
 
 const encoder = new TextEncoder()
@@ -620,6 +622,7 @@ const crumbMenuOptions = computed(() => [
     children: [
       { label: '复制绝对路径', key: 'copy' },
       { label: '保存到常用记录', key: 'save-snippet' },
+      { label: '收藏到常用目录', key: 'fav-dir', disabled: !currentProfile.value },
     ],
   },
   {
@@ -669,6 +672,9 @@ function onCrumbMenuSelect(key: string) {
     case 'save-snippet':
       void saveCrumbSnippet(path)
       break
+    case 'fav-dir':
+      void saveCrumbFavoriteDir(path)
+      break
     case 'cd':
       void cdToPath(props.sessionId, path)
       break
@@ -712,6 +718,26 @@ async function saveCrumbSnippet(path: string) {
     message.success('已添加到常用记录')
   } catch (e) {
     message.error(`添加失败：${e}`)
+  }
+}
+
+/** 收藏到常用目录（按当前会话的 profile 归类；常用记录「目录」Tab 展示） */
+async function saveCrumbFavoriteDir(path: string) {
+  const profile = currentProfile.value
+  if (!profile) return
+  const name = path.replace(/\/+$/, '').split('/').pop() || path
+  try {
+    await favDirs.save({
+      id: crypto.randomUUID(),
+      profileId: profile.id,
+      name,
+      path,
+      sortOrder: favDirs.dirs.length,
+      createdAt: Math.floor(Date.now() / 1000),
+    })
+    message.success('已收藏到常用目录')
+  } catch (e) {
+    message.error(`收藏失败：${e}`)
   }
 }
 

@@ -134,6 +134,23 @@ pub struct CommandHistory {
     pub created_at: i64,
 }
 
+/// 常用目录（按主机档案区分；常用记录面板「目录」Tab）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoriteDir {
+    pub id: String,
+    /// 所属会话配置 ID（空串 = 无 profile 的临时会话）
+    #[serde(default)]
+    pub profile_id: String,
+    /// 显示名（默认取路径末段）
+    pub name: String,
+    /// 远端绝对路径
+    pub path: String,
+    #[serde(default)]
+    pub sort_order: i64,
+    pub created_at: i64,
+}
+
 /// 监控告警规则
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -309,6 +326,19 @@ impl SqliteStorage {
 
             CREATE INDEX IF NOT EXISTS idx_command_history_time
                 ON command_history(created_at DESC);
+
+            -- 常用目录（常用记录面板「目录」Tab，按主机档案区分）
+            CREATE TABLE IF NOT EXISTS favorite_dirs (
+                id            TEXT    PRIMARY KEY NOT NULL,
+                profile_id    TEXT    NOT NULL DEFAULT '',
+                name          TEXT    NOT NULL,
+                path          TEXT    NOT NULL,
+                sort_order    INTEGER NOT NULL DEFAULT 0,
+                created_at    INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_favorite_dirs_profile
+                ON favorite_dirs(profile_id, sort_order);
 
             -- 监控告警规则
             CREATE TABLE IF NOT EXISTS alert_rules (
@@ -785,6 +815,55 @@ impl SqliteStorage {
         let conn = self.conn.lock().await;
         conn.execute("DELETE FROM command_history", [])?;
         Ok(())
+    }
+
+    /// 保存/更新常用目录（id UPSERT）
+    pub async fn save_favorite_dir(&self, dir: &FavoriteDir) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO favorite_dirs (id, profile_id, name, path, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![dir.id, dir.profile_id, dir.name, dir.path, dir.sort_order, dir.created_at],
+        )?;
+        Ok(())
+    }
+
+    /// 指定主机档案的常用目录（按排序序号，旧数据退化为创建时间）
+    pub async fn list_favorite_dirs(&self, profile_id: &str) -> Result<Vec<FavoriteDir>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, profile_id, name, path, sort_order, created_at FROM favorite_dirs WHERE profile_id = ?1 ORDER BY sort_order, created_at",
+        )?;
+        let rows = stmt.query_map(params![profile_id], |row| {
+            Ok(FavoriteDir {
+                id: row.get(0)?,
+                profile_id: row.get(1)?,
+                name: row.get(2)?,
+                path: row.get(3)?,
+                sort_order: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 批量重排常用目录（单事务落库）
+    pub async fn reorder_favorite_dirs(&self, dirs: &[FavoriteDir]) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let tx = conn.unchecked_transaction()?;
+        for d in dirs {
+            tx.execute(
+                "UPDATE favorite_dirs SET sort_order = ?1 WHERE id = ?2",
+                params![d.sort_order, d.id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 删除常用目录（返回是否存在）
+    pub async fn delete_favorite_dir(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        Ok(conn.execute("DELETE FROM favorite_dirs WHERE id = ?1", params![id])? > 0)
     }
 
     /// 保存告警规则（id UPSERT）
@@ -1343,5 +1422,59 @@ mod tests {
         storage.clear_chat_messages("chat-1").await.unwrap();
         assert!(storage.list_chat_messages("chat-1").await.unwrap().is_empty());
         assert_eq!(storage.list_chats().await.unwrap().len(), 1);
+    }
+
+    /// 常用目录 CRUD + 按 profile 隔离 + 排序
+    #[tokio::test]
+    async fn test_favorite_dir_crud() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+
+        let mk = |id: &str, profile: &str, path: &str, sort: i64| FavoriteDir {
+            id: id.into(),
+            profile_id: profile.into(),
+            name: path.rsplit('/').next().unwrap_or(path).into(),
+            path: path.into(),
+            sort_order: sort,
+            created_at: 100,
+        };
+
+        storage.save_favorite_dir(&mk("d1", "p-a", "/var/log", 0)).await.unwrap();
+        storage.save_favorite_dir(&mk("d2", "p-a", "/opt/app", 1)).await.unwrap();
+        storage.save_favorite_dir(&mk("d3", "p-b", "/home/u", 0)).await.unwrap();
+
+        // 按 profile 隔离
+        let a = storage.list_favorite_dirs("p-a").await.unwrap();
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].path, "/var/log");
+        assert_eq!(a[1].path, "/opt/app");
+        assert_eq!(a[0].name, "log");
+        let b = storage.list_favorite_dirs("p-b").await.unwrap();
+        assert_eq!(b.len(), 1);
+        assert!(storage.list_favorite_dirs("p-c").await.unwrap().is_empty());
+
+        // UPSERT 重命名
+        let mut d1 = mk("d1", "p-a", "/var/log", 0);
+        d1.name = "日志".into();
+        storage.save_favorite_dir(&d1).await.unwrap();
+        let a = storage.list_favorite_dirs("p-a").await.unwrap();
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].name, "日志");
+
+        // 重排
+        let a = storage.list_favorite_dirs("p-a").await.unwrap();
+        let reordered: Vec<FavoriteDir> = a
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(i, d)| FavoriteDir { sort_order: i as i64, ..d.clone() })
+            .collect();
+        storage.reorder_favorite_dirs(&reordered).await.unwrap();
+        let a = storage.list_favorite_dirs("p-a").await.unwrap();
+        assert_eq!(a[0].path, "/opt/app");
+
+        // 删除
+        assert!(storage.delete_favorite_dir("d1").await.unwrap());
+        assert!(!storage.delete_favorite_dir("d1").await.unwrap());
+        assert_eq!(storage.list_favorite_dirs("p-a").await.unwrap().len(), 1);
     }
 }

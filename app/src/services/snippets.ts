@@ -34,6 +34,19 @@ export interface CommandHistory {
   createdAt: number
 }
 
+/** 常用目录（按主机档案区分；常用记录面板「目录」Tab） */
+export interface FavoriteDir {
+  id: string
+  /** 所属会话配置 ID（空串 = 无 profile 的临时会话） */
+  profileId: string
+  /** 显示名 */
+  name: string
+  /** 远端绝对路径 */
+  path: string
+  sortOrder: number
+  createdAt: number
+}
+
 export function snippetList(): Promise<CommandSnippet[]> {
   return invoke<CommandSnippet[]>('snippet_list')
 }
@@ -61,4 +74,21 @@ export function historyList(limit = 100): Promise<CommandHistory[]> {
 
 export function historyClear(): Promise<void> {
   return invoke<void>('history_clear')
+}
+
+export function favoriteDirList(profileId: string): Promise<FavoriteDir[]> {
+  return invoke<FavoriteDir[]>('favorite_dir_list', { profileId })
+}
+
+export function favoriteDirSave(dir: FavoriteDir): Promise<void> {
+  return invoke<void>('favorite_dir_save', { dir })
+}
+
+export function favoriteDirDelete(id: string): Promise<boolean> {
+  return invoke<boolean>('favorite_dir_delete', { id })
+}
+
+/** 批量重排常用目录 */
+export function favoriteDirReorder(dirs: FavoriteDir[]): Promise<void> {
+  return invoke<void>('favorite_dir_reorder', { dirs })
 }

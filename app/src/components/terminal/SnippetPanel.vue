@@ -46,6 +46,7 @@ import {
 import { useSnippetsStore, type SnippetGroup, type ServiceStatus } from '@/stores/snippets'
 import { useTabsStore } from '@/stores/tabs'
 import { segmentTabThemeOverrides } from '@/components/common/segmentTabTheme'
+import FavoriteDirPanel from '@/components/terminal/FavoriteDirPanel.vue'
 import type { CommandSnippet, SnippetKind } from '@/services/snippets'
 
 const store = useSnippetsStore()
@@ -67,8 +68,11 @@ watch(
 
 /* ---------------- Tab 过滤视图 ---------------- */
 
-/** 当前 Tab：命令 / 服务 */
-const activeKind = ref<SnippetKind>('command')
+/** 当前 Tab：命令 / 服务 / 目录 */
+const activeKind = ref<SnippetKind | 'directory'>('command')
+
+/** 目录 Tab 子组件引用（「新增目录」下拉触发其弹窗） */
+const favDirPanelRef = ref<InstanceType<typeof FavoriteDirPanel> | null>(null)
 
 /** 当前 Tab 可见的分组（仅含对应 kind 的条目；空组不显示） */
 const visibleGroups = computed<SnippetGroup[]>(() =>
@@ -113,6 +117,7 @@ const groupOptions = computed(() =>
 const createOptions = [
   { label: '新增命令', key: 'command' },
   { label: '新增服务', key: 'service' },
+  { label: '新增目录', key: 'directory' },
 ]
 
 /** 弹窗标题（类型由打开方式决定，编辑时 kind 不可改） */
@@ -122,6 +127,11 @@ const formTitle = computed(
 )
 
 function openCreate(kind: string | number) {
+  if (kind === 'directory') {
+    activeKind.value = 'directory'
+    favDirPanelRef.value?.openCreate()
+    return
+  }
   const k = (kind === 'service' ? 'service' : 'command') as SnippetKind
   editingId.value = null
   draft.value = { name: '', command: '', group: '', kind: k, checkCmd: '' }
@@ -244,7 +254,8 @@ async function runOne(s: CommandSnippet) {
 
 async function runGroup(g: SnippetGroup) {
   try {
-    await store.runGroup(g.key, activeKind.value)
+    // 仅从命令/服务 Tab 的分组列表触发，activeKind 在此必为 SnippetKind
+    await store.runGroup(g.key, activeKind.value as SnippetKind)
     message.success(`分组「${g.name}」执行完成`)
   } catch (e) {
     message.error(String(e))
@@ -439,6 +450,7 @@ async function applyDrop(
       >
         <NTab name="command" tab="命令" />
         <NTab name="service" tab="服务" />
+        <NTab name="directory" tab="目录" />
       </NTabs>
       <NDropdown trigger="click" :options="createOptions" @select="openCreate">
         <NButton size="tiny" quaternary circle title="新增">
@@ -447,6 +459,9 @@ async function applyDrop(
       </NDropdown>
     </div>
 
+    <FavoriteDirPanel v-if="activeKind === 'directory'" ref="favDirPanelRef" />
+
+    <template v-else>
     <NEmpty
       v-if="!visibleGroups.length"
       size="small"
@@ -590,6 +605,7 @@ async function applyDrop(
         </div>
       </div>
     </div>
+    </template>
 
     <!-- 新增 / 编辑条目（类型由打开方式决定，编辑时 kind 不可改） -->
     <NModal

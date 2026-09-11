@@ -6,7 +6,7 @@
 use tauri::State;
 
 use crate::error::AppError;
-use crate::storage::sqlite::{CommandHistory, CommandSnippet};
+use crate::storage::sqlite::{CommandHistory, CommandSnippet, FavoriteDir};
 use crate::AppState;
 
 /// 全部命令片段（新→旧）
@@ -96,4 +96,56 @@ pub async fn history_clear(state: State<'_, AppState>) -> Result<(), AppError> {
         .clear_history()
         .await
         .map_err(|e| AppError::storage(format!("清空命令历史失败: {e}")))
+}
+
+/// 指定主机档案的常用目录列表
+#[tauri::command]
+pub async fn favorite_dir_list(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<FavoriteDir>, AppError> {
+    state
+        .storage
+        .list_favorite_dirs(&profile_id)
+        .await
+        .map_err(|e| AppError::storage(format!("查询常用目录失败: {e}")))
+}
+
+/// 保存/更新常用目录
+#[tauri::command]
+pub async fn favorite_dir_save(
+    state: State<'_, AppState>,
+    dir: FavoriteDir,
+) -> Result<(), AppError> {
+    state
+        .storage
+        .save_favorite_dir(&dir)
+        .await
+        .map_err(|e| AppError::storage(format!("保存常用目录失败: {e}")))
+}
+
+/// 删除常用目录
+#[tauri::command]
+pub async fn favorite_dir_delete(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<bool, AppError> {
+    state
+        .storage
+        .delete_favorite_dir(&id)
+        .await
+        .map_err(|e| AppError::storage(format!("删除常用目录失败: {e}")))
+}
+
+/// 批量重排常用目录
+#[tauri::command]
+pub async fn favorite_dir_reorder(
+    state: State<'_, AppState>,
+    dirs: Vec<FavoriteDir>,
+) -> Result<(), AppError> {
+    state
+        .storage
+        .reorder_favorite_dirs(&dirs)
+        .await
+        .map_err(|e| AppError::storage(format!("重排常用目录失败: {e}")))
 }
