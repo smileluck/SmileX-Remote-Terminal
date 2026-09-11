@@ -3,8 +3,8 @@
  * FilePanel - SFTP 文件面板
  *
  * 终端右侧可折叠抽屉：远端目录浏览 / 上传（对话框 + 拖拽）/ 下载 /
- * 新建目录 / 递归删除 / 重命名。传输任务入全局队列，
- * 进度与继续/暂停/取消/重试在面板底部传输区直接查看操作。
+ * 新建目录 / 递归删除 / 重命名 / 复制 / 剪切粘贴（远端 cp -a / mv）。
+ * 传输任务入全局队列，进度与继续/暂停/取消/重试在面板底部传输区直接查看操作。
  * 由 TerminalView 持有（tab 须带 sessionId）。
  * 外部导航：navPath prop（layout.openFilesAt 写入的一次性目标路径），
  * 消费后清除 layout.filesNavPath。
@@ -35,6 +35,7 @@ import {
   ChevronRight,
   List,
   ListDetails,
+  Clipboard,
 } from '@vicons/tabler'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -53,6 +54,7 @@ import { useSnippetsStore } from '@/stores/snippets'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
 import TransferList from './TransferList.vue'
+import { fileClipboard } from './fileClipboard'
 
 const props = defineProps<{ sessionId: string; navPath?: string | null }>()
 const emit = defineEmits<{ (e: 'open-split-at', path: string): void }>()
@@ -343,6 +345,71 @@ function onMenuSelect(key: string) {
   if (menuTarget) onRowMenu(key, menuTarget)
 }
 
+/* ---------------- 复制 / 剪切 / 粘贴（远端 cp -a / mv，session_exec 静默通道） ---------------- */
+
+/** 剪贴板可用于本会话（同会话且非空） */
+const clipboardUsable = computed(() => fileClipboard.value?.sessionId === props.sessionId)
+
+/** 粘贴按钮/菜单的文案：带剪贴板条目名 */
+const pasteLabel = computed(() =>
+  clipboardUsable.value ? `粘贴到此目录（${fileClipboard.value!.name}）` : '粘贴到此目录',
+)
+
+/** 复制/剪切：仅记录路径与模式到共享剪贴板 */
+function stageClipboard(entry: SftpEntry, mode: 'copy' | 'cut') {
+  fileClipboard.value = {
+    sessionId: props.sessionId,
+    path: entry.path,
+    name: entry.name,
+    isDir: entry.is_dir,
+    mode,
+  }
+  message.success(mode === 'copy' ? `已复制：${entry.name}` : `已剪切：${entry.name}`)
+}
+
+/** 执行命令并校验退出码（SRT_RC 约定，同 docker/crontab 服务） */
+async function execChecked(sid: string, cmd: string): Promise<string> {
+  const out = await sessionService.exec(sid, `{ ${cmd} ; } 2>&1; echo "SRT_RC=$?"`)
+  const m = out.match(/SRT_RC=(\d+)\s*$/)
+  const rc = m ? Number(m[1]) : -1
+  const body = m ? out.slice(0, m.index).trim() : out.trim()
+  if (rc !== 0) throw new Error(body || `命令执行失败（退出码 ${rc}）`)
+  return body
+}
+
+/** 粘贴到指定目录：复制 cp -a / 移动 mv；目标已存在或落入自身内部时拒绝 */
+async function pasteInto(destDir: string) {
+  const item = fileClipboard.value
+  if (!item) return
+  if (item.sessionId !== props.sessionId) {
+    message.warning('暂不支持跨会话粘贴')
+    return
+  }
+  if (destDir === item.path || destDir.startsWith(item.path + '/')) {
+    message.warning('不能复制/移动到其自身内部')
+    return
+  }
+  const srcDir = item.path.slice(0, item.path.lastIndexOf('/')) || '/'
+  if (item.mode === 'cut' && destDir === srcDir) {
+    message.warning('源与目标目录相同')
+    return
+  }
+  const dst = `${destDir === '/' ? '' : destDir}/${item.name}`
+  const op = item.mode === 'copy' ? 'cp -a --' : 'mv --'
+  const cmd =
+    `if [ -e ${shellQuote(dst)} ]; then echo "目标已存在：${dst}"; exit 17; fi; ` +
+    `${op} ${shellQuote(item.path)} ${shellQuote(dst)}`
+  try {
+    await execChecked(props.sessionId, cmd)
+    message.success(item.mode === 'copy' ? `已复制到 ${destDir}` : `已移动到 ${destDir}`)
+    // 移动为一次性语义，粘贴后清空剪贴板；复制保留可连续粘贴
+    if (item.mode === 'cut') fileClipboard.value = null
+    load()
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
 /** 文件行右键菜单（按 操作/修改/危险 分组展示） */
 function rowMenuOptions(entry: SftpEntry) {
   return [
@@ -351,6 +418,18 @@ function rowMenuOptions(entry: SftpEntry) {
       label: '操作',
       key: 'g-action',
       children: [{ label: entry.is_dir ? '下载（递归）' : '下载', key: 'download' }],
+    },
+    {
+      type: 'group',
+      label: '剪贴板',
+      key: 'g-clip',
+      children: [
+        { label: '复制', key: 'clip-copy' },
+        { label: '剪切', key: 'clip-cut' },
+        ...(entry.is_dir
+          ? [{ label: pasteLabel.value, key: 'clip-paste', disabled: !clipboardUsable.value }]
+          : []),
+      ],
     },
     {
       type: 'group',
@@ -375,6 +454,9 @@ function onRowMenu(key: string, entry: SftpEntry) {
   else if (key === 'rename') startRename(entry)
   else if (key === 'chmod') startChmod(entry)
   else if (key === 'remove') handleRemove(entry)
+  else if (key === 'clip-copy') stageClipboard(entry, 'copy')
+  else if (key === 'clip-cut') stageClipboard(entry, 'cut')
+  else if (key === 'clip-paste') void pasteInto(entry.path)
 }
 
 /* ---------------- 授权（chmod）对话框 ---------------- */
@@ -486,6 +568,14 @@ const crumbMenuOptions = computed(() => [
       { label: '保存到常用记录', key: 'save-snippet' },
     ],
   },
+  {
+    type: 'group',
+    label: '剪贴板',
+    key: 'g-clip',
+    children: [
+      { label: pasteLabel.value, key: 'clip-paste', disabled: !clipboardUsable.value },
+    ],
+  },
 ])
 
 /**
@@ -533,6 +623,9 @@ function onCrumbMenuSelect(key: string) {
       break
     case 'new-split':
       emit('open-split-at', path)
+      break
+    case 'clip-paste':
+      void pasteInto(path)
       break
   }
 }
@@ -681,6 +774,20 @@ defineExpose({ reload: load })
             </NButton>
           </template>
           新建目录
+        </NTooltip>
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <NButton
+              quaternary
+              circle
+              size="tiny"
+              :disabled="!clipboardUsable"
+              @click="pasteInto(cwd)"
+            >
+              <NIcon :component="Clipboard" />
+            </NButton>
+          </template>
+          {{ clipboardUsable ? `粘贴到当前目录（${fileClipboard!.name}）` : '剪贴板为空' }}
         </NTooltip>
         <NTooltip placement="bottom">
           <template #trigger>
