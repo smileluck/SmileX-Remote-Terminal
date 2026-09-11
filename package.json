@@ -16,6 +16,7 @@
     "tauri": "app/node_modules/.bin/tauri",
     "build:mac": "app/node_modules/.bin/tauri build",
     "build:mac-universal": "app/node_modules/.bin/tauri build --target universal-apple-darwin",
-    "build:linux": "bash scripts/build-linux-docker.sh"
+    "build:linux": "bash scripts/build-linux-docker.sh",
+    "version:bump": "node scripts/sync-version.mjs"
   }
 }

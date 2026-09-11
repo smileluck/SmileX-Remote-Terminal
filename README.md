@@ -168,10 +168,17 @@ pnpm build:linux
 
 **CI 三平台（推荐）**：仓库自带 `.github/workflows/release.yml`，
 推送 tag 即自动构建 macOS universal dmg、Windows msi/exe、Linux deb/AppImage
-并挂到 GitHub Release：
+并挂到 GitHub Release。**版本号自动取自 tag**（构建前由
+`scripts/sync-version.mjs` 写入 `tauri.conf.json` 等配置，无需手动改版本）：
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+本地发版构建前先同步版本号（改完提交，再打同号 tag）：
+
+```bash
+pnpm version:bump 0.2.0
 ```
 
 未签名包在 macOS / Windows 上会被首次打开的安全提示拦截，如需消除请配置

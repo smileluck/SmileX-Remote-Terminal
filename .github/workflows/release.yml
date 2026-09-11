@@ -40,6 +40,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 从 tag 同步版本号（v0.2.0 → 0.2.0），产物文件名与「关于」版本随 tag 走
+      - name: 同步版本号
+        run: node scripts/sync-version.mjs "${{ github.ref_name }}"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
