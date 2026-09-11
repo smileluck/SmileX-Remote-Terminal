@@ -15,7 +15,7 @@ members = [
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/smilex/SmileX-Remote-Terminal"
-version = "0.1.0"
+version = "0.1.5"
 
 [workspace.dependencies]
 # 异步运行时

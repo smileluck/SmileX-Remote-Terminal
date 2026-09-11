@@ -1,6 +1,6 @@
 {
   "name": "smilex-remote-terminal",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "跨平台综合运维工具：SSH 终端 + 远程桌面 + AI 助手",
   "private": true,
   "license": "MIT",
