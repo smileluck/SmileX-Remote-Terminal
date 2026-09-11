@@ -6,7 +6,7 @@
  */
 
 import { invoke } from './invoke'
-import type { SessionProfile } from '@/types/profile'
+import type { ScannedHost, SessionProfile } from '@/types/profile'
 
 /** 保存或更新会话配置（含敏感字段同步到 Keyring） */
 export async function save(
@@ -39,4 +39,9 @@ export async function remove(id: string): Promise<boolean> {
 /** 标记会话为最近使用（连接成功后调用，影响侧栏排序） */
 export async function touch(id: string): Promise<void> {
   return invoke<void>('session_profile_touch', { id })
+}
+
+/** 扫描本机 ~/.ssh/known_hosts，返回可导入的主机列表（哈希条目无法还原已跳过） */
+export async function scanKnownHosts(): Promise<ScannedHost[]> {
+  return invoke<ScannedHost[]>('known_hosts_scan')
 }

@@ -129,6 +129,8 @@ fn main() {
             commands::session_profile::session_profile_get_secret,
             commands::session_profile::session_profile_delete,
             commands::session_profile::session_profile_touch,
+            // 本机 known_hosts 扫描导入
+            commands::known_hosts_import::known_hosts_scan,
             // 远程桌面命令组
             commands::desktop::desktop_connect,
             commands::desktop::desktop_input,

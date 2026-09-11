@@ -65,6 +65,14 @@ export interface SaveProfileRequest {
   secret?: string | null
 }
 
+/** 本机 known_hosts 扫描到的主机条目 */
+export interface ScannedHost {
+  /** 主机名 / IP */
+  host: string
+  /** 端口（[host]:port 方括号格式解析，默认 22） */
+  port: number
+}
+
 /**
  * 把 ProfileExtra 序列化为 extra 字段所需的 JSON 字符串
  */

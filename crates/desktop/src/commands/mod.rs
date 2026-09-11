@@ -7,6 +7,7 @@ pub mod ai;
 pub mod alert;
 pub mod common;
 pub mod desktop;
+pub mod known_hosts_import;
 pub mod llm_profile;
 pub mod monitor;
 pub mod session;

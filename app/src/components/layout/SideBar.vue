@@ -23,7 +23,7 @@
  */
 import { computed, nextTick, onMounted, ref, type Component } from 'vue'
 import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NTooltip, useDialog, useMessage } from 'naive-ui'
-import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight, LayoutSidebarLeftCollapse } from '@vicons/tabler'
+import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight, LayoutSidebarLeftCollapse, DatabaseImport } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
@@ -31,6 +31,7 @@ import { useLayoutStore } from '@/stores/layout'
 import { useConnectFlow } from '@/composables/useConnectFlow'
 import { decodeExtra } from '@/types/profile'
 import type { SessionProfile } from '@/types/profile'
+import KnownHostsImportDialog from '@/components/common/KnownHostsImportDialog.vue'
 
 const profilesStore = useProfilesStore()
 const tabsStore = useTabsStore()
@@ -56,6 +57,9 @@ const kindIcon: Record<string, Component> = {
 
 /** 正在连接的 profile id（禁用按钮防抖） */
 const connectingId = ref<string | null>(null)
+
+/** known_hosts 导入弹窗显隐（仅 SSH 页签入口） */
+const khImportVisible = ref(false)
 
 /** 「+」新建：按当前页签直接打开对应弹窗（SSH 会话 / 远程桌面连接） */
 function onAdd() {
@@ -400,6 +404,16 @@ onMounted(() => {
         <template #prefix><NIcon :component="Search" /></template>
       </NInput>
       <NButton
+        v-if="layout.sidebarTab === 'ssh'"
+        quaternary
+        size="small"
+        circle
+        title="扫描本机 known_hosts 导入会话"
+        @click="khImportVisible = true"
+      >
+        <NIcon :component="DatabaseImport" />
+      </NButton>
+      <NButton
         quaternary
         size="small"
         circle
@@ -527,6 +541,9 @@ onMounted(() => {
         @keydown.enter="confirmRename"
       />
     </NModal>
+
+    <!-- 扫描本机 known_hosts 导入弹窗 -->
+    <KnownHostsImportDialog v-model:show="khImportVisible" />
   </aside>
 </template>
 
