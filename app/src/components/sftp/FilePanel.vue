@@ -713,6 +713,8 @@ async function saveCrumbSnippet(path: string) {
       sortOrder: 0,
       kind: 'command',
       checkCmd: '',
+      profileId: '',
+      scope: 'host',
       createdAt: Math.floor(Date.now() / 1000),
     })
     message.success('已添加到常用记录')

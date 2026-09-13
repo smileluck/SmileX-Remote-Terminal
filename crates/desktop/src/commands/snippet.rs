@@ -9,14 +9,15 @@ use crate::error::AppError;
 use crate::storage::sqlite::{CommandHistory, CommandSnippet, FavoriteDir};
 use crate::AppState;
 
-/// 全部命令片段（新→旧）
+/// 指定主机档案可见的命令片段（全局 + 本机）
 #[tauri::command]
 pub async fn snippet_list(
     state: State<'_, AppState>,
+    profile_id: String,
 ) -> Result<Vec<CommandSnippet>, AppError> {
     state
         .storage
-        .list_snippets()
+        .list_snippets(&profile_id)
         .await
         .map_err(|e| AppError::storage(format!("查询命令片段失败: {e}")))
 }

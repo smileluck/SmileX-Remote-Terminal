@@ -48,7 +48,14 @@ export const useSnippetsStore = defineStore('snippets', () => {
   /** 是否有执行进行中（防重入） */
   const running = ref(false)
 
-  let loaded = false
+  /** 已加载的 profileId（null = 未加载） */
+  const loadedFor = ref<string | null>(null)
+
+  /** 当前激活会话的主机档案 ID（无 profile = ''） */
+  function activeProfileId(): string {
+    const tabs = useTabsStore()
+    return tabs.activeTab?.profileId ?? ''
+  }
 
   /** 分组视图（首次出现顺序 = 组顺序；snippets 已按展示顺序维护） */
   const groups = computed<SnippetGroup[]>(() => {
@@ -75,15 +82,16 @@ export const useSnippetsStore = defineStore('snippets', () => {
   /** 是否有可执行的 SSH 会话（执行按钮置灰依据） */
   const canRun = computed(() => activeSshSessionId() !== null)
 
-  /** 加载（幂等；force 强制刷新） */
+  /** 加载当前主机档案可见的片段（profileId 变化时强制重载；force 强制刷新） */
   async function load(force = false) {
-    if (loaded && !force) return
+    const pid = activeProfileId()
+    if (!force && loadedFor.value === pid) return
     try {
-      const list = await snippetList()
+      const list = await snippetList(pid)
       snippets.value = [...list].sort(
         (a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt,
       )
-      loaded = true
+      loadedFor.value = pid
     } catch {
       /* 浏览器 dev 环境无后端时静默 */
     }
@@ -105,20 +113,25 @@ export const useSnippetsStore = defineStore('snippets', () => {
     return arr.length
   }
 
-  /** 保存/更新片段（换组时移动到新组末尾） */
+  /** 保存/更新片段（换组时移动到新组末尾；scope=host 归属当前主机档案；成功后重载） */
   async function save(input: CommandSnippet) {
+    const snippet: CommandSnippet = {
+      ...input,
+      profileId: input.scope === 'host' ? activeProfileId() : '',
+    }
     const arr = [...snippets.value]
-    const idx = arr.findIndex((s) => s.id === input.id)
-    if (idx >= 0 && arr[idx].groupName === input.groupName) {
-      arr[idx] = input
+    const idx = arr.findIndex((s) => s.id === snippet.id)
+    if (idx >= 0 && arr[idx].groupName === snippet.groupName) {
+      arr[idx] = snippet
     } else {
       if (idx >= 0) arr.splice(idx, 1)
-      arr.splice(groupEndIndex(arr, input.groupName), 0, input)
+      arr.splice(groupEndIndex(arr, snippet.groupName), 0, snippet)
     }
     snippets.value = arr
     await persistOrder()
-    const final = snippets.value.find((s) => s.id === input.id)
+    const final = snippets.value.find((s) => s.id === snippet.id)
     if (final) await snippetSave(final)
+    await load(true)
   }
 
   /** 删除片段 */
@@ -336,6 +349,8 @@ export const useSnippetsStore = defineStore('snippets', () => {
     running,
     groups,
     canRun,
+    loadedFor,
+    activeProfileId,
     load,
     persistOrder,
     save,

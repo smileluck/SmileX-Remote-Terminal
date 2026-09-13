@@ -53,6 +53,11 @@ fn main() {
             tracing::info!(?db_path, "正在打开 SQLite 数据库");
             let storage = smilex_desktop::storage::sqlite::SqliteStorage::open(db_path)?;
 
+            // 首次启动写入预置常用命令（失败不中断启动）
+            if let Err(e) = tauri::async_runtime::block_on(storage.seed_default_snippets()) {
+                tracing::warn!("写入预置常用命令失败: {e}");
+            }
+
             // 注册全局状态
             let state = AppState::new(storage);
             app.manage(state);

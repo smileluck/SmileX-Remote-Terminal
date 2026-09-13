@@ -46,7 +46,7 @@ watch(keyword, (kw) => void load(kw))
 async function load(kw: string) {
   try {
     const [sn, hi] = await Promise.all([
-      snippetsApi.snippetList(),
+      snippetsApi.snippetList(tabs.activeTab?.profileId ?? ''),
       snippetsApi.historyList(50),
     ])
     const k = kw.trim().toLowerCase()
@@ -104,9 +104,10 @@ function sendSnippet(s: CommandSnippet) {
   )
 }
 
-/** 收藏历史为片段 */
+/** 收藏历史为片段（默认归属当前主机；无激活 profile 时存为全局） */
 async function saveAsSnippet(command: string) {
   const id = crypto.randomUUID()
+  const pid = tabs.activeTab?.profileId ?? ''
   try {
     await snippetsApi.snippetSave({
       id,
@@ -117,6 +118,8 @@ async function saveAsSnippet(command: string) {
       sortOrder: 0,
       kind: 'command',
       checkCmd: '',
+      profileId: pid,
+      scope: pid ? 'host' : 'global',
       createdAt: Math.floor(Date.now() / 1000),
     })
     message.success('已收藏为片段')

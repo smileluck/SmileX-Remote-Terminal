@@ -22,6 +22,9 @@ import {
   NAutoComplete,
   NEmpty,
   NPopconfirm,
+  NRadioButton,
+  NRadioGroup,
+  NTag,
   NTabs,
   NTab,
   NDropdown,
@@ -47,7 +50,7 @@ import { useSnippetsStore, type SnippetGroup, type ServiceStatus } from '@/store
 import { useTabsStore } from '@/stores/tabs'
 import { segmentTabThemeOverrides } from '@/components/common/segmentTabTheme'
 import FavoriteDirPanel from '@/components/terminal/FavoriteDirPanel.vue'
-import type { CommandSnippet, SnippetKind } from '@/services/snippets'
+import type { CommandSnippet, SnippetKind, SnippetScope } from '@/services/snippets'
 
 const store = useSnippetsStore()
 const tabs = useTabsStore()
@@ -59,6 +62,12 @@ onMounted(async () => {
   store.startStatusPolling()
 })
 onUnmounted(() => store.stopStatusPolling())
+
+// 激活 Tab 的主机档案变化 → 重新加载对应范围的片段列表
+watch(
+  () => tabs.activeTab?.profileId,
+  () => void store.load(),
+)
 
 // 活跃会话切换时刷新一次服务状态
 watch(
@@ -106,6 +115,7 @@ const draft = ref({
   group: '',
   kind: 'command' as SnippetKind,
   checkCmd: '',
+  scope: 'host' as SnippetScope,
 })
 
 /** 已有分组名（所属组自动补全候选，取当前 Tab 的组） */
@@ -134,7 +144,7 @@ function openCreate(kind: string | number) {
   }
   const k = (kind === 'service' ? 'service' : 'command') as SnippetKind
   editingId.value = null
-  draft.value = { name: '', command: '', group: '', kind: k, checkCmd: '' }
+  draft.value = { name: '', command: '', group: '', kind: k, checkCmd: '', scope: 'host' }
   showForm.value = true
 }
 
@@ -146,6 +156,7 @@ function openEdit(s: CommandSnippet) {
     group: s.groupName,
     kind: s.kind,
     checkCmd: s.checkCmd,
+    scope: s.scope,
   }
   showForm.value = true
 }
@@ -160,6 +171,7 @@ async function submitForm() {
     ? store.snippets.find((s) => s.id === editingId.value)
     : undefined
   const kind = draft.value.kind
+  const scope = draft.value.scope
   const snippet: CommandSnippet = {
     id: editingId.value ?? crypto.randomUUID(),
     name: draft.value.name.trim() || command.slice(0, 30),
@@ -169,6 +181,8 @@ async function submitForm() {
     sortOrder: old?.sortOrder ?? 0,
     kind,
     checkCmd: kind === 'service' ? draft.value.checkCmd.trim() : '',
+    profileId: scope === 'host' ? store.activeProfileId() : '',
+    scope,
     createdAt: old?.createdAt ?? Math.floor(Date.now() / 1000),
   }
   try {
@@ -522,7 +536,10 @@ async function applyDrop(
             <NIcon :component="GripVertical" :size="13" />
           </span>
           <div class="sp-item-info">
-            <span class="sp-item-name">{{ s.name }}</span>
+            <span class="sp-item-name">
+              {{ s.name }}
+              <NTag v-if="s.scope === 'global'" size="tiny" :bordered="false" class="sp-tag">全局</NTag>
+            </span>
             <span class="sp-item-cmd">{{ s.command }}</span>
           </div>
           <span
@@ -645,6 +662,10 @@ async function applyDrop(
           placeholder="所属分组（留空为未分组，可输入新组名）"
           clearable
         />
+        <NRadioGroup v-model:value="draft.scope" size="small">
+          <NRadioButton value="host">仅本机</NRadioButton>
+          <NRadioButton value="global">全局</NRadioButton>
+        </NRadioGroup>
         <div class="sp-form-actions">
           <NButton size="small" @click="showForm = false">取消</NButton>
           <NButton size="small" type="primary" @click="submitForm">保存</NButton>
@@ -784,6 +805,10 @@ async function applyDrop(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.sp-tag {
+  margin-left: 4px;
+  vertical-align: 1px;
 }
 .sp-dot {
   flex-shrink: 0;

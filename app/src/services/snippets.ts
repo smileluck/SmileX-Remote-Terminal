@@ -9,6 +9,9 @@ import { invoke } from './invoke'
 /** 片段类型：command = 命令；service = 服务（command 字段存服务名） */
 export type SnippetKind = 'command' | 'service'
 
+/** 片段作用范围：global = 所有主机共享；host = 仅 profileId 对应主机 */
+export type SnippetScope = 'global' | 'host'
+
 /** 命令片段 */
 export interface CommandSnippet {
   id: string
@@ -23,6 +26,10 @@ export interface CommandSnippet {
   kind: SnippetKind
   /** 服务条目的自定义状态检查命令（空串 = 默认 systemctl is-active） */
   checkCmd: string
+  /** 所属会话配置 ID（scope=host 时生效；空串 = 全局共享条目） */
+  profileId: string
+  /** 作用范围（默认 'global'） */
+  scope: SnippetScope
   createdAt: number
 }
 
@@ -52,8 +59,8 @@ export interface FavoriteDir {
   scope: DirScope
 }
 
-export function snippetList(): Promise<CommandSnippet[]> {
-  return invoke<CommandSnippet[]>('snippet_list')
+export function snippetList(profileId: string): Promise<CommandSnippet[]> {
+  return invoke<CommandSnippet[]>('snippet_list', { profileId })
 }
 
 export function snippetSave(snippet: CommandSnippet): Promise<void> {

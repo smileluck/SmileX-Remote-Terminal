@@ -117,11 +117,21 @@ pub struct CommandSnippet {
     /// 服务条目的自定义状态检查命令（空串 = 默认 systemctl is-active）
     #[serde(default)]
     pub check_cmd: String,
+    /// 所属会话配置 ID（scope=host 时生效；空串 = 全局共享条目）
+    #[serde(default)]
+    pub profile_id: String,
+    /// 作用范围：global = 所有主机共享；host = 仅 profile_id 对应主机
+    #[serde(default = "default_snippet_scope")]
+    pub scope: String,
     pub created_at: i64,
 }
 
 fn default_snippet_kind() -> String {
     "command".to_string()
+}
+
+fn default_snippet_scope() -> String {
+    "global".to_string()
 }
 
 /// 命令历史条目
@@ -434,6 +444,18 @@ impl SqliteStorage {
         )?;
         Self::ensure_column(
             conn,
+            "command_snippets",
+            "profile_id",
+            "ALTER TABLE command_snippets ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "scope",
+            "ALTER TABLE command_snippets ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'",
+        )?;
+        Self::ensure_column(
+            conn,
             "agent_chats",
             "profile_id",
             "ALTER TABLE agent_chats ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''",
@@ -739,7 +761,7 @@ impl SqliteStorage {
     pub async fn save_snippet(&self, snippet: &CommandSnippet) -> Result<()> {
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, group_name, sort_order, kind, check_cmd, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, group_name, sort_order, kind, check_cmd, profile_id, scope, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 snippet.id,
                 snippet.name,
@@ -749,19 +771,21 @@ impl SqliteStorage {
                 snippet.sort_order,
                 snippet.kind,
                 snippet.check_cmd,
+                snippet.profile_id,
+                snippet.scope,
                 snippet.created_at
             ],
         )?;
         Ok(())
     }
 
-    /// 全部命令片段（按分组 + 排序序号，旧库无排序时退化为创建时间）
-    pub async fn list_snippets(&self) -> Result<Vec<CommandSnippet>> {
+    /// 指定主机档案可见的命令片段（全局共享项 + 本机项；按分组 + 排序序号，旧库无排序时退化为创建时间）
+    pub async fn list_snippets(&self, profile_id: &str) -> Result<Vec<CommandSnippet>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, name, command, tags, group_name, sort_order, kind, check_cmd, created_at FROM command_snippets ORDER BY group_name, sort_order, created_at",
+            "SELECT id, name, command, tags, group_name, sort_order, kind, check_cmd, profile_id, scope, created_at FROM command_snippets WHERE scope = 'global' OR (scope = 'host' AND profile_id = ?1) ORDER BY group_name, sort_order, created_at",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![profile_id], |row| {
             Ok(CommandSnippet {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -771,10 +795,50 @@ impl SqliteStorage {
                 sort_order: row.get(5)?,
                 kind: row.get(6)?,
                 check_cmd: row.get(7)?,
-                created_at: row.get(8)?,
+                profile_id: row.get(8)?,
+                scope: row.get(9)?,
+                created_at: row.get(10)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 首次启动写入预置常用命令（app_config 一次性标记：用户删除后不复活）
+    pub async fn seed_default_snippets(&self) -> Result<()> {
+        const SEED_KEY: &str = "default_snippets_seeded";
+        if self.get_config(SEED_KEY).await?.is_some() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().timestamp();
+        // (名称, 命令, 分组)
+        let defaults: &[(&str, &str, &str)] = &[
+            ("系统信息", "uname -a && cat /etc/os-release", "系统"),
+            ("磁盘使用", "df -h", "系统"),
+            ("内存使用", "free -h", "系统"),
+            ("系统负载", "uptime", "系统"),
+            ("监听端口", "ss -tlnp", "系统"),
+            ("内存占用 Top10", "ps aux --sort=-%mem | head -n 11", "系统"),
+            ("实时日志", "journalctl -f", "日志"),
+            ("Docker 容器", "docker ps", "Docker"),
+        ];
+        for (i, (name, command, group)) in defaults.iter().enumerate() {
+            self.save_snippet(&CommandSnippet {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: (*name).to_string(),
+                command: (*command).to_string(),
+                tags: String::new(),
+                group_name: (*group).to_string(),
+                sort_order: i as i64,
+                kind: "command".to_string(),
+                check_cmd: String::new(),
+                profile_id: String::new(),
+                scope: "global".to_string(),
+                created_at: now,
+            })
+            .await?;
+        }
+        self.set_config(SEED_KEY, "1", now).await?;
+        Ok(())
     }
 
     /// 批量重排命令片段（更新分组与排序序号，单事务落库）
@@ -1504,5 +1568,110 @@ mod tests {
         assert!(storage.delete_favorite_dir("d1").await.unwrap());
         assert!(!storage.delete_favorite_dir("d1").await.unwrap());
         assert_eq!(storage.list_favorite_dirs("p-a").await.unwrap().len(), 2);
+    }
+
+    /// 命令片段作用范围：host 仅对应 profile 可见，global 对所有 profile 可见
+    #[tokio::test]
+    async fn test_snippet_scope_visibility() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+
+        let mk = |id: &str, scope: &str, profile: &str| CommandSnippet {
+            id: id.into(),
+            name: id.into(),
+            command: "echo hi".into(),
+            tags: String::new(),
+            group_name: String::new(),
+            sort_order: 0,
+            kind: "command".into(),
+            check_cmd: String::new(),
+            profile_id: profile.into(),
+            scope: scope.into(),
+            created_at: 100,
+        };
+
+        storage.save_snippet(&mk("s1", "host", "p-a")).await.unwrap();
+        storage.save_snippet(&mk("s2", "host", "p-b")).await.unwrap();
+        storage.save_snippet(&mk("s3", "global", "")).await.unwrap();
+
+        let a = storage.list_snippets("p-a").await.unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(a.iter().any(|s| s.id == "s1"));
+        assert!(a.iter().any(|s| s.id == "s3"));
+        // 其他主机的 host 片段不可见
+        assert!(!a.iter().any(|s| s.id == "s2"));
+        // 全局片段 profile_id/scope 随查询往返
+        let g = a.iter().find(|s| s.id == "s3").unwrap();
+        assert_eq!(g.scope, "global");
+        assert_eq!(g.profile_id, "");
+
+        let b = storage.list_snippets("p-b").await.unwrap();
+        assert_eq!(b.len(), 2);
+        assert!(b.iter().any(|s| s.id == "s2"));
+        assert!(b.iter().any(|s| s.id == "s3"));
+
+        // 无 host 项的 profile 仍可见全局片段
+        let c = storage.list_snippets("p-c").await.unwrap();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].id, "s3");
+    }
+
+    /// 旧行（无 scope/profile_id 列时代的数据）迁移后默认 scope=global，对所有 profile 可见
+    #[tokio::test]
+    async fn test_migrate_legacy_command_snippets_scope() {
+        let dir = std::env::temp_dir().join(format!("srt-test-migrate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("legacy.db");
+
+        {
+            // 建旧 schema 库并写入一条旧记录（无 profile_id / scope 列）
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE command_snippets (
+                    id            TEXT    PRIMARY KEY NOT NULL,
+                    name          TEXT    NOT NULL,
+                    command       TEXT    NOT NULL,
+                    tags          TEXT    NOT NULL DEFAULT '',
+                    created_at    INTEGER NOT NULL
+                );
+                INSERT INTO command_snippets (id, name, command, tags, created_at)
+                VALUES ('old-1', '旧命令', 'ls -la', '', 100);
+                "#,
+            )
+            .unwrap();
+        }
+
+        let storage = SqliteStorage::open(db_path).unwrap();
+        let list = storage.list_snippets("any-profile").await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "旧命令");
+        assert_eq!(list[0].scope, "global");
+        assert_eq!(list[0].profile_id, "");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 预置命令：首次写入 + 幂等（重复调用不重复插入、用户删光后不重插）
+    #[tokio::test]
+    async fn test_seed_default_snippets_idempotent() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+
+        // 首次写入 8 条全局命令
+        storage.seed_default_snippets().await.unwrap();
+        let list = storage.list_snippets("").await.unwrap();
+        assert_eq!(list.len(), 8);
+        assert!(list.iter().all(|s| s.scope == "global" && s.profile_id.is_empty()));
+        assert!(list.iter().any(|s| s.command == "docker ps"));
+
+        // 重复调用不重复插入
+        storage.seed_default_snippets().await.unwrap();
+        assert_eq!(storage.list_snippets("").await.unwrap().len(), 8);
+
+        // 用户删光后不重插
+        for s in storage.list_snippets("").await.unwrap() {
+            storage.delete_snippet(&s.id).await.unwrap();
+        }
+        storage.seed_default_snippets().await.unwrap();
+        assert!(storage.list_snippets("").await.unwrap().is_empty());
     }
 }
