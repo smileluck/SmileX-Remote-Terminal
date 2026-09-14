@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
-import type { CommandSnippet, SnippetKind } from '@/services/snippets'
+import type { CommandSnippet, SnippetKind, SnippetScope } from '@/services/snippets'
 import {
   snippetList,
   snippetSave,
@@ -169,30 +169,75 @@ export const useSnippetsStore = defineStore('snippets', () => {
     await persistOrder()
   }
 
-  /** 拖拽落点：移动条目到目标组 beforeId 之前（null = 组末尾） */
-  async function moveItem(id: string, targetGroup: string, beforeId: string | null) {
+  /** 拖拽落点：移动条目到目标组 beforeId 之前（null = 组末尾）；
+   *  targetScope 与条目当前 scope 不同（跨分区拖动）时连带改作用域并落库，
+   *  内置全局条目移出全局会被拒绝 */
+  async function moveItem(
+    id: string,
+    targetGroup: string,
+    beforeId: string | null,
+    targetScope?: SnippetScope,
+  ) {
     const arr = [...snippets.value]
     const idx = arr.findIndex((s) => s.id === id)
     if (idx < 0) return
     const [item] = arr.splice(idx, 1)
     item.groupName = targetGroup
+    const scopeChanged = !!targetScope && targetScope !== item.scope
+    if (scopeChanged) {
+      if (item.builtin && targetScope === 'host') {
+        throw new Error(`「${item.name}」是内置全局片段，不可移出全局`)
+      }
+      item.scope = targetScope
+      item.profileId = targetScope === 'host' ? activeProfileId() : ''
+    }
     let insertAt = beforeId ? arr.findIndex((s) => s.id === beforeId) : -1
     if (insertAt < 0) insertAt = groupEndIndex(arr, targetGroup)
     arr.splice(insertAt, 0, item)
     snippets.value = arr
     await persistOrder()
+    if (scopeChanged) {
+      const final = snippets.value.find((s) => s.id === id)
+      if (final) await snippetSave(final)
+    }
   }
 
-  /** 拖拽落点：整组移动到 beforeKey 组之前（null = 末尾） */
-  async function moveGroup(key: string, beforeKey: string | null) {
-    const items = snippets.value.filter((s) => s.groupName === key)
+  /** 拖拽落点：整组移动到 beforeKey 组之前（null = 末尾）；
+   *  scope 限定只动该分区的同名组副本（分区拆分后同一组名可能有两份），
+   *  targetScope 与 scope 不同（跨分区拖动）时整组连带改作用域并逐条落库，
+   *  组内含内置全局条目时移出全局会被拒绝 */
+  async function moveGroup(
+    key: string,
+    beforeKey: string | null,
+    scope?: SnippetScope,
+    targetScope?: SnippetScope,
+  ) {
+    const items = snippets.value.filter(
+      (s) => s.groupName === key && (!scope || s.scope === scope),
+    )
     if (!items.length) return
-    const rest = snippets.value.filter((s) => s.groupName !== key)
+    const scopeChanged = !!targetScope && !!scope && targetScope !== scope
+    if (scopeChanged) {
+      if (targetScope === 'host' && items.some((s) => s.builtin)) {
+        throw new Error('分组内含内置全局片段，不可移出全局')
+      }
+      for (const s of items) {
+        s.scope = targetScope
+        s.profileId = targetScope === 'host' ? activeProfileId() : ''
+      }
+    }
+    const moved = new Set(items.map((s) => s.id))
+    const rest = snippets.value.filter((s) => !moved.has(s.id))
     let insertAt = beforeKey ? rest.findIndex((s) => s.groupName === beforeKey) : -1
     if (insertAt < 0) insertAt = rest.length
     rest.splice(insertAt, 0, ...items)
     snippets.value = rest
     await persistOrder()
+    if (scopeChanged) {
+      for (const s of snippets.value.filter((x) => moved.has(x.id))) {
+        await snippetSave(s)
+      }
+    }
   }
 
   function setRunState(id: string, state: SnippetRunState) {

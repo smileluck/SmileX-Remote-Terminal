@@ -11,7 +11,9 @@
  * - 分组折叠列表：组头（执行整组/重命名/删除/拖拽）、条目（单条执行/编辑/删除/拖拽）
  * - 拖拽排序：Pointer Events 自实现（Tauri 拦截 HTML5 DnD，参照 SideBar），
  *   支持组内排序、跨组移动、整组拖动，结束后统一 persistOrder 落库
- *   （基于完整数组重编 sortOrder，另一 kind 的相对顺序不受影响）
+ *   （基于完整数组重编 sortOrder，另一 kind 的相对顺序不受影响）；
+ *   跨分区（本机 ↔ 全局）拖动连带转换条目作用域，内置全局条目不可移出全局；
+ *   拖到分区空白：条目进该分区未分组，整组转入该分区末尾
  * - 执行：整组顺序执行（仅当前 Tab 类型条目，等待每条完成，退出码非零中止）/
  *   单条执行，走终端标记协议（termExec），无活跃 SSH 会话时按钮置灰
  * - 服务条目：静默通道（sessionService.exec）轮询运行状态（10s），
@@ -378,6 +380,8 @@ const draggingId = ref<string | null>(null)
 const dropItem = ref<{ id: string; before: boolean } | null>(null)
 /** 组落点高亮（条目拖到组空白 = 追加组尾；整组拖动 = 目标组前/后） */
 const dropGroup = ref<{ key: string; before: boolean } | null>(null)
+/** 分区空白落点高亮（条目 → 该分区未分组；整组 → 整组转入该分区末尾） */
+const dropRoot = ref<{ scope: SnippetScope } | null>(null)
 
 function onItemPointerDown(e: PointerEvent, s: CommandSnippet) {
   if (e.button !== 0) return
@@ -432,18 +436,28 @@ function onDragPointerMove(e: PointerEvent) {
       const r = row.getBoundingClientRect()
       dropItem.value = { id: row.dataset.si!, before: e.clientY < r.top + r.height / 2 }
       dropGroup.value = null
+      dropRoot.value = null
     } else {
       const grp = el?.closest('[data-sg]') as HTMLElement | null
       dropItem.value = null
       dropGroup.value = grp ? { key: grp.dataset.sg!, before: true } : null
+      const root = grp ? null : (el?.closest('[data-sroot]') as HTMLElement | null)
+      dropRoot.value = root ? { scope: root.dataset.sroot as SnippetScope } : null
     }
   } else {
     const gc = el?.closest('[data-sgc]') as HTMLElement | null
     if (gc && gc.dataset.sgc !== d.id) {
       const r = gc.getBoundingClientRect()
       dropGroup.value = { key: gc.dataset.sgc!, before: e.clientY < r.top + r.height / 2 }
+      dropRoot.value = null
+    } else if (gc) {
+      // 悬停在被拖组自身：无落点（避免误判到所在分区空白）
+      dropGroup.value = null
+      dropRoot.value = null
     } else {
       dropGroup.value = null
+      const root = el?.closest('[data-sroot]') as HTMLElement | null
+      dropRoot.value = root ? { scope: root.dataset.sroot as SnippetScope } : null
     }
   }
 }
@@ -458,22 +472,25 @@ function cleanupDrag() {
   draggingId.value = null
   dropItem.value = null
   dropGroup.value = null
+  dropRoot.value = null
 }
 
 function onDragPointerUp() {
   const d = drag
   const item = dropItem.value
   const group = dropGroup.value
+  const root = dropRoot.value
   const started = d?.started ?? false
   cleanupDrag()
   if (!d || !started) return // 未过阈值：视为点击
-  void applyDrop(d, item, group)
+  void applyDrop(d, item, group, root)
 }
 
 async function applyDrop(
   d: DragInfo,
   item: { id: string; before: boolean } | null,
   group: { key: string; before: boolean } | null,
+  root: { scope: SnippetScope } | null,
 ) {
   try {
     if (d.kind === 'item') {
@@ -484,13 +501,21 @@ async function applyDrop(
         const beforeId = item.before ? item.id : (g.items[idx + 1]?.id ?? null)
         // 目标位置紧邻自身 = 位置不变
         if (beforeId === d.id) return
-        await store.moveItem(d.id, g.key, beforeId)
+        // 跨分区落点：连带转换作用域（内置全局条目由 store 拒绝）
+        await store.moveItem(d.id, g.key, beforeId, g.scope)
       } else if (group) {
-        // 拖到组头/组空白：追加到该组末尾（DOM 键映射回落库组名）
+        // 拖到组头/组空白：追加到该组末尾（DOM 键映射回落库组名 + 目标分区作用域）
         const g = visibleGroups.value.find((gr) => gr.domKey === group.key)
         if (!g) return
-        await store.moveItem(d.id, g.key, null)
+        await store.moveItem(d.id, g.key, null, g.scope)
+      } else if (root) {
+        // 拖到分区空白：移入该分区未分组（跨分区时连带转换作用域）
+        await store.moveItem(d.id, '', null, root.scope)
       }
+    } else if (root) {
+      // 整组拖到分区空白：组保留，整组转入该分区末尾（跨分区时连带转换作用域）
+      const dragged = visibleGroups.value.find((g) => g.domKey === d.id)
+      await store.moveGroup(d.storeKey, null, dragged?.scope, root.scope)
     } else if (group && group.key !== d.id) {
       const domKeys = visibleGroups.value.map((g) => g.domKey)
       const ti = domKeys.indexOf(group.key)
@@ -499,7 +524,10 @@ async function applyDrop(
       const beforeKey = beforeDom
         ? (visibleGroups.value.find((g) => g.domKey === beforeDom)?.key ?? null)
         : null
-      await store.moveGroup(d.storeKey, beforeKey)
+      // 跨分区落点：以光标下目标组所在分区的作用域为准，整组连带转换
+      const dragged = visibleGroups.value.find((g) => g.domKey === d.id)
+      const target = visibleGroups.value.find((g) => g.domKey === group.key)
+      await store.moveGroup(d.storeKey, beforeKey, dragged?.scope, target?.scope)
     }
   } catch (e) {
     message.error(`排序保存失败：${e}`)
@@ -544,6 +572,8 @@ async function applyDrop(
       <div
         v-if="sec.id === 'global'"
         class="sp-scope-head"
+        :class="{ 'root-drop': dropRoot?.scope === 'global' }"
+        data-sroot="global"
         @click="toggleCollapse(GLOBAL_SECTION_KEY)"
       >
         <NIcon
@@ -557,7 +587,9 @@ async function applyDrop(
       </div>
       <div
         v-show="sec.id !== 'global' || !isCollapsed(GLOBAL_SECTION_KEY)"
-        :class="{ 'sp-scope-body': sec.id === 'global' }"
+        class="sp-root"
+        :class="{ 'sp-scope-body': sec.id === 'global', 'root-drop': dropRoot?.scope === sec.id }"
+        :data-sroot="sec.id"
       >
       <div
         v-for="g in sec.groups"
@@ -765,6 +797,7 @@ async function applyDrop(
           v-model:value="renameName"
           size="small"
           :options="groupOptions"
+          :get-show="(v: string) => v.trim() !== renameKey"
           placeholder="分组名（已存在则合并）"
           @keydown.enter="submitRename"
         />
@@ -834,6 +867,16 @@ async function applyDrop(
 }
 .sp-scope-head:hover {
   background: var(--bg-elevated);
+}
+.sp-root.root-drop,
+.sp-scope-head.root-drop {
+  outline: 1px dashed var(--primary);
+  outline-offset: -1px;
+  border-radius: 6px;
+}
+/* 拖拽中给分区空白一个最小高度：空分区也有落点（条目进未分组/整组转入） */
+body.snippet-dragging .sp-root {
+  min-height: 26px;
 }
 .sp-scope-tag {
   font-weight: 600;
