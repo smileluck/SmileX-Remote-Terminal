@@ -266,6 +266,7 @@ async function addToSnippets() {
       checkCmd: '',
       profileId: '',
       scope: 'host',
+      builtin: false,
       createdAt: Math.floor(Date.now() / 1000),
     })
     message.success('已添加到常用记录')

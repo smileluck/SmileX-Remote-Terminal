@@ -4,6 +4,10 @@
  *
  * 命令片段按组分类管理（与 ⌘K 命令面板共用 command_snippets 数据）：
  * - 顶部「命令 / 服务」分段切换（NTabs segment），列表按当前 Tab 的 kind 过滤
+ * - 按作用域分区：全局条目（scope=global）的分组归入底部「全局」超级分组
+ *   （可折叠，「全局」标签在分区头上，不再逐条标注）；本机分组保持平铺
+ * - 内置片段（builtin，预置种子写入）：列表带「内置」标签；内置全局条目的
+ *   全局标签不可移除（表单锁定 scope，后端 save_snippet 强制校验），其余可编辑/删除
  * - 分组折叠列表：组头（执行整组/重命名/删除/拖拽）、条目（单条执行/编辑/删除/拖拽）
  * - 拖拽排序：Pointer Events 自实现（Tauri 拦截 HTML5 DnD，参照 SideBar），
  *   支持组内排序、跨组移动、整组拖动，结束后统一 persistOrder 落库
@@ -83,12 +87,39 @@ const activeKind = ref<SnippetKind | 'directory'>('command')
 /** 目录 Tab 子组件引用（「新增目录」下拉触发其弹窗） */
 const favDirPanelRef = ref<InstanceType<typeof FavoriteDirPanel> | null>(null)
 
-/** 当前 Tab 可见的分组（仅含对应 kind 的条目；空组不显示） */
-const visibleGroups = computed<SnippetGroup[]>(() =>
-  store.groups
-    .map((g) => ({ ...g, items: g.items.filter((s) => s.kind === activeKind.value) }))
-    .filter((g) => g.items.length > 0),
-)
+/** 按作用域拆分后的分组（同一组名可能同时存在于本机/全局两区） */
+interface ScopedGroup extends SnippetGroup {
+  scope: SnippetScope
+  /** DOM/折叠用的唯一键（store 操作仍用 key = 组名） */
+  domKey: string
+}
+
+/** 当前 Tab 可见的分组（按 kind 过滤、按 scope 拆分；空组不显示） */
+const visibleGroups = computed<ScopedGroup[]>(() => {
+  const out: ScopedGroup[] = []
+  for (const g of store.groups) {
+    const items = g.items.filter((s) => s.kind === activeKind.value)
+    for (const scope of ['host', 'global'] as SnippetScope[]) {
+      const scoped = items.filter((s) => s.scope === scope)
+      if (scoped.length) {
+        out.push({ key: g.key, name: g.name, items: scoped, scope, domKey: `${scope}:${g.key}` })
+      }
+    }
+  }
+  return out
+})
+
+/** 「全局」超级分组的折叠键 */
+const GLOBAL_SECTION_KEY = '__scope_global__'
+
+/** 分区视图：本机分组平铺在前，全局分组归入「全局」超级分组在后 */
+const visibleSections = computed(() => {
+  const host = visibleGroups.value.filter((g) => g.scope === 'host')
+  const global = visibleGroups.value.filter((g) => g.scope === 'global')
+  const sections = [{ id: 'host', groups: host }]
+  if (global.length) sections.push({ id: 'global', groups: global })
+  return sections
+})
 
 /* ---------------- 分组折叠 ---------------- */
 
@@ -118,9 +149,12 @@ const draft = ref({
   scope: 'host' as SnippetScope,
 })
 
-/** 已有分组名（所属组自动补全候选，取当前 Tab 的组） */
+/** 已有分组名（所属组自动补全候选，取当前 Tab 的组；本机/全局同名组去重） */
 const groupOptions = computed(() =>
-  visibleGroups.value.filter((g) => g.key).map((g) => ({ label: g.key, value: g.key })),
+  [...new Set(visibleGroups.value.map((g) => g.key).filter(Boolean))].map((k) => ({
+    label: k,
+    value: k,
+  })),
 )
 
 /** 「新增」下拉选项 */
@@ -134,6 +168,16 @@ const createOptions = [
 const formTitle = computed(
   () =>
     `${editingId.value ? '编辑' : '新增'}${draft.value.kind === 'service' ? '服务' : '命令'}`,
+)
+
+/** 编辑中的原始条目（新增时为 undefined） */
+const editingSnippet = computed(() =>
+  editingId.value ? store.snippets.find((s) => s.id === editingId.value) : undefined,
+)
+
+/** 内置全局条目的全局标签不可移除：scope 选择锁定 */
+const scopeLocked = computed(
+  () => !!editingSnippet.value?.builtin && editingSnippet.value.scope === 'global',
 )
 
 function openCreate(kind: string | number) {
@@ -183,6 +227,7 @@ async function submitForm() {
     checkCmd: kind === 'service' ? draft.value.checkCmd.trim() : '',
     profileId: scope === 'host' ? store.activeProfileId() : '',
     scope,
+    builtin: old?.builtin ?? false,
     createdAt: old?.createdAt ?? Math.floor(Date.now() / 1000),
   }
   try {
@@ -314,8 +359,10 @@ const DRAG_THRESHOLD = 6
 
 interface DragInfo {
   kind: 'item' | 'group'
-  /** item：片段 id；group：分组键 */
+  /** item：片段 id；group：分组 DOM 键（scope:组名） */
   id: string
+  /** group 拖拽时的落库分组名（groupName）；item 拖拽时为 '' */
+  storeKey: string
   label: string
   startX: number
   startY: number
@@ -334,15 +381,20 @@ const dropGroup = ref<{ key: string; before: boolean } | null>(null)
 
 function onItemPointerDown(e: PointerEvent, s: CommandSnippet) {
   if (e.button !== 0) return
-  beginDrag(e, { kind: 'item', id: s.id, label: s.name })
+  beginDrag(e, { kind: 'item', id: s.id, storeKey: '', label: s.name })
 }
 
-function onGroupPointerDown(e: PointerEvent, g: SnippetGroup) {
+function onGroupPointerDown(e: PointerEvent, g: ScopedGroup) {
   if (e.button !== 0) return
-  beginDrag(e, { kind: 'group', id: g.key, label: `分组：${g.name}` })
+  beginDrag(e, {
+    kind: 'group',
+    id: g.domKey,
+    storeKey: g.key,
+    label: `分组：${g.name}${g.scope === 'global' ? '（全局）' : ''}`,
+  })
 }
 
-function beginDrag(e: PointerEvent, info: Pick<DragInfo, 'kind' | 'id' | 'label'>) {
+function beginDrag(e: PointerEvent, info: Pick<DragInfo, 'kind' | 'id' | 'storeKey' | 'label'>) {
   e.preventDefault() // 阻止文本选中；不影响 click
   drag = { ...info, startX: e.clientX, startY: e.clientY, started: false, ghost: null }
   window.addEventListener('pointermove', onDragPointerMove)
@@ -434,15 +486,20 @@ async function applyDrop(
         if (beforeId === d.id) return
         await store.moveItem(d.id, g.key, beforeId)
       } else if (group) {
-        // 拖到组头/组空白：追加到该组末尾
-        await store.moveItem(d.id, group.key, null)
+        // 拖到组头/组空白：追加到该组末尾（DOM 键映射回落库组名）
+        const g = visibleGroups.value.find((gr) => gr.domKey === group.key)
+        if (!g) return
+        await store.moveItem(d.id, g.key, null)
       }
     } else if (group && group.key !== d.id) {
-      const keys = visibleGroups.value.map((g) => g.key)
-      const ti = keys.indexOf(group.key)
-      const beforeKey = group.before ? group.key : (keys[ti + 1] ?? null)
-      if (beforeKey === d.id) return
-      await store.moveGroup(d.id, beforeKey)
+      const domKeys = visibleGroups.value.map((g) => g.domKey)
+      const ti = domKeys.indexOf(group.key)
+      const beforeDom = group.before ? group.key : (domKeys[ti + 1] ?? null)
+      if (beforeDom === d.id) return
+      const beforeKey = beforeDom
+        ? (visibleGroups.value.find((g) => g.domKey === beforeDom)?.key ?? null)
+        : null
+      await store.moveGroup(d.storeKey, beforeKey)
     }
   } catch (e) {
     message.error(`排序保存失败：${e}`)
@@ -483,22 +540,41 @@ async function applyDrop(
       class="sp-empty"
     />
 
-    <div
-      v-for="g in visibleGroups"
-      :key="g.key || '__ungrouped__'"
-      class="sp-group"
-      :data-sgc="g.key"
-      :class="{
-        'drag-source': draggingId === g.key,
-        'drop-before': dropGroup?.key === g.key && dropGroup.before,
-        'drop-after': dropGroup?.key === g.key && !dropGroup.before,
-      }"
-    >
-      <div class="sp-group-head" :data-sg="g.key" @click="toggleCollapse(g.key)">
+    <template v-for="sec in visibleSections" :key="sec.id">
+      <div
+        v-if="sec.id === 'global'"
+        class="sp-scope-head"
+        @click="toggleCollapse(GLOBAL_SECTION_KEY)"
+      >
+        <NIcon
+          class="sp-arrow"
+          :class="{ open: !isCollapsed(GLOBAL_SECTION_KEY) }"
+          :component="ChevronRight"
+          :size="12"
+        />
+        <NTag size="tiny" :bordered="false" class="sp-scope-tag">全局</NTag>
+        <span class="sp-group-count">{{ sec.groups.reduce((n, g) => n + g.items.length, 0) }}</span>
+      </div>
+      <div
+        v-show="sec.id !== 'global' || !isCollapsed(GLOBAL_SECTION_KEY)"
+        :class="{ 'sp-scope-body': sec.id === 'global' }"
+      >
+      <div
+        v-for="g in sec.groups"
+        :key="g.domKey"
+        class="sp-group"
+        :data-sgc="g.domKey"
+        :class="{
+          'drag-source': draggingId === g.domKey,
+          'drop-before': dropGroup?.key === g.domKey && dropGroup.before,
+          'drop-after': dropGroup?.key === g.domKey && !dropGroup.before,
+        }"
+      >
+        <div class="sp-group-head" :data-sg="g.domKey" @click="toggleCollapse(g.domKey)">
         <span class="sp-drag" title="拖拽排序" @pointerdown="onGroupPointerDown($event, g)" @click.stop>
           <NIcon :component="GripVertical" :size="13" />
         </span>
-        <NIcon class="sp-arrow" :class="{ open: !isCollapsed(g.key) }" :component="ChevronRight" :size="12" />
+        <NIcon class="sp-arrow" :class="{ open: !isCollapsed(g.domKey) }" :component="ChevronRight" :size="12" />
         <span class="sp-group-name">{{ g.name }}</span>
         <span class="sp-group-count">{{ g.items.length }}</span>
         <span class="sp-ops" @click.stop @pointerdown.stop>
@@ -519,13 +595,13 @@ async function applyDrop(
         </span>
       </div>
 
-      <div v-show="!isCollapsed(g.key)" class="sp-items" :data-sg="g.key">
+      <div v-show="!isCollapsed(g.domKey)" class="sp-items" :data-sg="g.domKey">
         <div
           v-for="s in g.items"
           :key="s.id"
           class="sp-item"
           :data-si="s.id"
-          :data-sg="g.key"
+          :data-sg="g.domKey"
           :class="{
             'drag-source': draggingId === s.id,
             'drop-before': dropItem?.id === s.id && dropItem.before,
@@ -538,7 +614,7 @@ async function applyDrop(
           <div class="sp-item-info">
             <span class="sp-item-name">
               {{ s.name }}
-              <NTag v-if="s.scope === 'global'" size="tiny" :bordered="false" class="sp-tag">全局</NTag>
+              <NTag v-if="s.builtin" size="tiny" :bordered="false" class="sp-tag-builtin">内置</NTag>
             </span>
             <span class="sp-item-cmd">{{ s.command }}</span>
           </div>
@@ -621,7 +697,9 @@ async function applyDrop(
           </span>
         </div>
       </div>
-    </div>
+      </div>
+      </div>
+    </template>
     </template>
 
     <!-- 新增 / 编辑条目（类型由打开方式决定，编辑时 kind 不可改） -->
@@ -662,10 +740,11 @@ async function applyDrop(
           placeholder="所属分组（留空为未分组，可输入新组名）"
           clearable
         />
-        <NRadioGroup v-model:value="draft.scope" size="small">
+        <NRadioGroup v-model:value="draft.scope" size="small" :disabled="scopeLocked">
           <NRadioButton value="host">仅本机</NRadioButton>
           <NRadioButton value="global">全局</NRadioButton>
         </NRadioGroup>
+        <div v-if="scopeLocked" class="sp-form-hint">内置片段的全局标签不可移除</div>
         <div class="sp-form-actions">
           <NButton size="small" @click="showForm = false">取消</NButton>
           <NButton size="small" type="primary" @click="submitForm">保存</NButton>
@@ -743,6 +822,27 @@ async function applyDrop(
 .sp-group-head:hover {
   background: var(--bg-elevated);
 }
+.sp-scope-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px;
+  margin-top: 4px;
+  cursor: pointer;
+  border-radius: 6px;
+  user-select: none;
+}
+.sp-scope-head:hover {
+  background: var(--bg-elevated);
+}
+.sp-scope-tag {
+  font-weight: 600;
+}
+.sp-scope-body {
+  margin-left: 8px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border-color);
+}
 .sp-arrow {
   color: var(--text-tertiary);
   transition: transform 0.15s;
@@ -805,10 +905,6 @@ async function applyDrop(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.sp-tag {
-  margin-left: 4px;
-  vertical-align: 1px;
 }
 .sp-dot {
   flex-shrink: 0;
@@ -893,6 +989,15 @@ async function applyDrop(
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.sp-tag-builtin {
+  margin-left: 4px;
+  vertical-align: 1px;
+}
+.sp-form-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: -4px;
 }
 .sp-form-actions {
   display: flex;

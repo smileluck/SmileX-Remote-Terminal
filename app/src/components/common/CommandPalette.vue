@@ -120,6 +120,7 @@ async function saveAsSnippet(command: string) {
       checkCmd: '',
       profileId: pid,
       scope: pid ? 'host' : 'global',
+      builtin: false,
       createdAt: Math.floor(Date.now() / 1000),
     })
     message.success('已收藏为片段')

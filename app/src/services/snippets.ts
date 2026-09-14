@@ -30,6 +30,8 @@ export interface CommandSnippet {
   profileId: string
   /** 作用范围（默认 'global'） */
   scope: SnippetScope
+  /** 是否内置片段（预置种子写入）；内置全局条目的全局标签不可移除 */
+  builtin: boolean
   createdAt: number
 }
 
