@@ -7,7 +7,8 @@
  * - 顶部 header（标题随页签变化 + 折叠按钮）
  * - 搜索栏右侧「+」按当前页签直接打开对应新建弹窗
  * - 卡片：kind 图标 + 名称 + user@host:port + 相对时间 + 悬浮 编辑/删除
- * - 点击卡片走统一连接流程（已连接弹「切换/新开」，断线原地重连）
+ * - 点击卡片走统一连接流程（已连接直接切换/多 tab 循环，断线原地重连）
+ * - 卡片右键菜单：「新增会话窗口」（跳过复用判断，同会话再开一个 tab）
  *
  * 分组（extra.group）：
  * - 按分组名忽略大小写聚类（「Wujie」与「WUJIE」视为同组，避免同组分叉）
@@ -22,7 +23,7 @@
  * - tabs store（连接成功后 addTab）
  */
 import { computed, nextTick, onMounted, ref, type Component } from 'vue'
-import { NButton, NIcon, NPopconfirm, NEmpty, NInput, NModal, NTooltip, useDialog, useMessage } from 'naive-ui'
+import { NButton, NDropdown, NIcon, NPopconfirm, NEmpty, NInput, NModal, NTooltip, useDialog, useMessage } from 'naive-ui'
 import { Terminal2, DeviceDesktop, BrandApple, Plus, Pencil, Trash, Search, ChevronRight, LayoutSidebarLeftCollapse, DatabaseImport } from '@vicons/tabler'
 import { useProfilesStore } from '@/stores/profiles'
 import { useTabsStore } from '@/stores/tabs'
@@ -37,7 +38,7 @@ const profilesStore = useProfilesStore()
 const tabsStore = useTabsStore()
 const ui = useUiStore()
 const layout = useLayoutStore()
-const { connect } = useConnectFlow()
+const { connect, openSession, openDesktopSession } = useConnectFlow()
 const message = useMessage()
 const dialog = useDialog()
 
@@ -362,11 +363,48 @@ async function onDelete(profile: SessionProfile) {
   }
 }
 
-/** 点击会话卡片发起连接（统一流程：已连接弹「切换/新开」，断线原地重连） */
+/** 点击会话卡片发起连接（统一流程：已连接直接切换/多 tab 循环，断线原地重连） */
 async function onConnect(profile: SessionProfile) {
   connectingId.value = profile.id
   try {
     await connect(profile)
+  } catch (e) {
+    message.error(`连接失败：${e}`)
+  } finally {
+    connectingId.value = null
+  }
+}
+
+/* ---------------- 卡片右键菜单 ---------------- */
+
+/** 右键菜单状态（参照 TabBar 的 manual NDropdown 模式） */
+const menuShow = ref(false)
+const menuX = ref(0)
+const menuY = ref(0)
+let menuProfile: SessionProfile | null = null
+
+function onContextMenu(e: MouseEvent, p: SessionProfile) {
+  menuProfile = p
+  menuX.value = e.clientX
+  menuY.value = e.clientY
+  menuShow.value = true
+}
+
+const menuOptions = [{ label: '新增会话窗口', key: 'new-window' }]
+
+function onMenuSelect(key: string) {
+  menuShow.value = false
+  const p = menuProfile
+  if (!p) return
+  if (key === 'new-window') void openNewWindow(p)
+}
+
+/** 新增会话窗口：跳过 connect 的复用/切换判断，同 profile 直接再开一个 tab */
+async function openNewWindow(p: SessionProfile) {
+  connectingId.value = p.id
+  try {
+    if (p.kind === 'ssh') await openSession(p)
+    else await openDesktopSession(p)
   } catch (e) {
     message.error(`连接失败：${e}`)
   } finally {
@@ -477,6 +515,7 @@ onMounted(() => {
                 :title="`${p.username}@${p.host}:${p.port}`"
                 @click="onConnect(p)"
                 @pointerdown="onCardPointerDown($event, p)"
+                @contextmenu.prevent.stop="(e) => onContextMenu(e, p)"
               >
                 <NIcon
                   :component="kindIcon[p.kind] || Terminal2"
@@ -541,6 +580,18 @@ onMounted(() => {
         @keydown.enter="confirmRename"
       />
     </NModal>
+
+    <!-- 卡片右键菜单（新增会话窗口） -->
+    <NDropdown
+      trigger="manual"
+      placement="bottom-start"
+      :show="menuShow"
+      :x="menuX"
+      :y="menuY"
+      :options="menuOptions"
+      @select="onMenuSelect"
+      @clickoutside="menuShow = false"
+    />
 
     <!-- 扫描本机 known_hosts 导入弹窗 -->
     <KnownHostsImportDialog v-model:show="khImportVisible" />

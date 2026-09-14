@@ -4,13 +4,14 @@
  * 所有连接入口（侧边栏卡片 / ⌘K 命令面板 / 连接弹窗）共用：
  * - SSH（kind='ssh'）：session_connect 建连 + 开 tab + 启动监控
  * - 远程桌面（rdp/host）：开 tab 携带 desktopConfig，DesktopView 挂载自动连接
- * - 同 profile 已有活跃 tab → 弹「切换到已有会话 / 新建连接」
+ * - 同 profile 已有活跃 tab → 直接切换到现有 tab；已有多个则在这组 tab 间循环
  * - 同 profile 已有断线 tab（仅 SSH）→ 复用该 tab 原地重连
  * - 否则 → 新建连接 + 开 tab + 更新最近使用
+ *   （「新增会话窗口」= 跳过复用判断直接新开，见侧栏卡片右键菜单）
  *
  * 在 useSshConnect 之上叠加 tab 复用策略与后续动作，消除各入口行为不一致。
  */
-import { useDialog, useMessage } from 'naive-ui'
+import { useMessage } from 'naive-ui'
 
 import { connectProfile } from '@/composables/useSshConnect'
 import { useTabsStore } from '@/stores/tabs'
@@ -22,7 +23,6 @@ import type { SessionProfile } from '@/types/profile'
 import type { DesktopConfig, TabItem } from '@/types/session'
 
 export function useConnectFlow() {
-  const dialog = useDialog()
   const message = useMessage()
   const tabs = useTabsStore()
   const monitor = useMonitorStore()
@@ -87,28 +87,20 @@ export function useConnectFlow() {
   /**
    * 统一连接入口（SSH 会话与远程桌面分流）。
    *
-   * 「已有活跃 tab」走弹窗选择，错误在弹窗回调内提示；
-   * 其余路径的错误向上抛出，由调用方（连接按钮的 loading 态/表单）处理。
+   * 「已有活跃 tab」直接切换/循环，不弹窗；其余路径的错误向上抛出，
+   * 由调用方（连接按钮的 loading 态/表单）处理。
    * 桌面 tab 没有断线重连语义（切走即断连），跳过 reconnectInTab 分支。
    */
   async function connect(profile: SessionProfile): Promise<void> {
     const isDesktop = profile.kind !== 'ssh'
-    const open = () =>
-      isDesktop ? openDesktopSession(profile) : openSession(profile).then(() => undefined)
 
-    const live = tabs.tabs.find(
+    const lives = tabs.tabs.filter(
       (t) => t.profileId === profile.id && t.sessionId && !t.disconnected,
     )
-    if (live) {
-      dialog.warning({
-        title: '会话已连接',
-        content: `「${profile.name}」已有一个连接中的${isDesktop ? '远程桌面' : '终端'}。要切换到已有会话，还是新建一条连接？`,
-        positiveText: '切换到已有会话',
-        negativeText: '新建连接',
-        onPositiveClick: () => switchTo(live),
-        onNegativeClick: () =>
-          open().catch((e) => message.error(`连接失败：${e}`)),
-      })
+    if (lives.length) {
+      // 当前已在这组 tab 里 → 循环到下一个；否则切到第一个
+      const cur = lives.findIndex((t) => t.id === tabs.activeId)
+      switchTo(cur >= 0 ? lives[(cur + 1) % lives.length] : lives[0])
       return
     }
 
@@ -126,6 +118,8 @@ export function useConnectFlow() {
       }
     }
 
+    const open = () =>
+      isDesktop ? openDesktopSession(profile) : openSession(profile).then(() => undefined)
     await open()
   }
 
