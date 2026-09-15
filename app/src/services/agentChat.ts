@@ -12,6 +12,8 @@ export interface AgentChatMessage {
   role: ChatMessage['role']
   content: string
   error: boolean
+  /** 附加元数据 JSON（plan 块步骤状态机等；空串/缺省 = 无） */
+  meta?: string
   createdAt: number
 }
 
@@ -43,6 +45,11 @@ export function chatMessages(chatId: string): Promise<AgentChatMessage[]> {
 /** 追加一条消息，返回更新后的会话（前端同步排序与标题） */
 export function chatMessageAppend(message: AgentChatMessage): Promise<AgentChat> {
   return invoke<AgentChat>('agent_chat_message_append', { message })
+}
+
+/** 更新单条消息的 meta（plan 状态机等；不动会话排序与标题） */
+export function chatMessageSetMeta(chatId: string, messageId: string, meta: string): Promise<boolean> {
+  return invoke<boolean>('agent_chat_message_set_meta', { chatId, messageId, meta })
 }
 
 /** 清空某会话的消息（保留会话本身） */

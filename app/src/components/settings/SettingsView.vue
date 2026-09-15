@@ -34,12 +34,13 @@ import {
   NSpin,
   useMessage,
 } from 'naive-ui'
-import { Plus, Palette, Robot, Key, CloudDownload, Folder as FolderIcon, InfoCircle } from '@vicons/tabler'
+import { Plus, Palette, Robot, Key, CloudDownload, Folder as FolderIcon, InfoCircle, Shield } from '@vicons/tabler'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { getVersion } from '@tauri-apps/api/app'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useTransferStore } from '@/stores/transfer'
 import KeyManager from '@/components/settings/KeyManager.vue'
+import AiSecurity from '@/components/settings/AiSecurity.vue'
 import {
   PROVIDER_OPTIONS,
   createDefaultProfileFields,
@@ -63,8 +64,8 @@ const message = useMessage()
 const themeStore = useThemeStore()
 const transferStore = useTransferStore()
 
-/** 设置分区：外观 / llm 配置 / ssh 密钥 / 文件传输 / 关于我们 */
-type Section = 'appearance' | 'llm' | 'keys' | 'transfer' | 'about'
+/** 设置分区：外观 / llm 配置 / ssh 密钥 / AI 命令授权 / 文件传输 / 关于我们 */
+type Section = 'appearance' | 'llm' | 'keys' | 'ai' | 'transfer' | 'about'
 const section = ref<Section>('llm')
 
 /** 分区元信息（左侧导航 + 内容区标题） */
@@ -89,6 +90,13 @@ const SECTIONS: { value: Section; label: string; icon: Component; title: string;
     icon: Key,
     title: 'SSH 密钥',
     desc: '生成或导入 SSH 密钥用于连接认证，私钥加密存储于本地，前端不展示明文。',
+  },
+  {
+    value: 'ai',
+    label: 'AI 命令授权',
+    icon: Shield,
+    title: 'AI 命令授权',
+    desc: 'AI 助手执行命令的授权白名单与审计日志（只读）。',
   },
   {
     value: 'transfer',
@@ -505,6 +513,11 @@ onMounted(() => {
       <!-- SSH 密钥管理 -->
       <div v-else-if="section === 'keys'" class="section-body">
         <KeyManager />
+      </div>
+
+      <!-- AI 命令授权：白名单 + 审计日志（只读视图） -->
+      <div v-else-if="section === 'ai'" class="section-body">
+        <AiSecurity />
       </div>
 
       <!-- 文件传输：下载目录偏好 -->

@@ -117,6 +117,21 @@ pub struct CommandSnippet {
     /// 服务条目的自定义状态检查命令（空串 = 默认 systemctl is-active）
     #[serde(default)]
     pub check_cmd: String,
+    /// 服务条目的自定义启动命令（空串 = 默认 systemctl start）
+    #[serde(default)]
+    pub start_cmd: String,
+    /// 服务条目的自定义停止命令（空串 = 默认 systemctl stop）
+    #[serde(default)]
+    pub stop_cmd: String,
+    /// 服务条目的自定义重启命令（空串 = 默认 systemctl restart）
+    #[serde(default)]
+    pub restart_cmd: String,
+    /// 服务条目的自定义查看状态命令（空串 = 默认 systemctl status --no-pager）
+    #[serde(default)]
+    pub status_cmd: String,
+    /// 执行工作目录（空串 = 终端当前目录；执行时在子 shell 中 cd，不污染终端 cwd）
+    #[serde(default)]
+    pub work_dir: String,
     /// 所属会话配置 ID（scope=host 时生效；空串 = 全局共享条目）
     #[serde(default)]
     pub profile_id: String,
@@ -242,6 +257,9 @@ pub struct AgentChatMessage {
     pub content: String,
     /// 生成失败标记
     pub error: bool,
+    /// 附加元数据 JSON（如 plan 块的结构化步骤状态机；空串 = 无）
+    #[serde(default)]
+    pub meta: String,
     pub created_at: i64,
 }
 
@@ -255,6 +273,48 @@ pub struct SshKeyMeta {
     pub public_key: String,
     pub fingerprint: String,
     pub created_at: i64,
+}
+
+/// AI 命令白名单条目（命中后 Modify 级命令可免确认自动执行）
+///
+/// `risk` 记录加白时命令的风险等级（`read_only` / `modify`）；
+/// 匹配时要求与命令当前分类一致，`danger` 级不允许入表（命令层保证）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAllowlistEntry {
+    pub id: i64,
+    /// 匹配模式：与完整命令相等，或为命令的前缀（后随空白/结尾）
+    pub pattern: String,
+    /// `read_only` / `modify`
+    pub risk: String,
+    /// 作用范围：`chat`（单会话）/ `profile`（整台主机档案）/ `global`（全局）
+    pub scope: String,
+    /// scope 为 chat / profile 时分别为 chat_id / profile_id；global 为 NULL
+    pub scope_id: Option<String>,
+    pub created_at: i64,
+}
+
+/// AI 命令审计记录
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAuditEntry {
+    pub id: i64,
+    /// 事件时间戳（unix 秒）
+    pub ts: i64,
+    pub chat_id: Option<String>,
+    pub profile_id: Option<String>,
+    pub command: String,
+    /// 风险等级：`read_only` / `modify` / `danger`
+    pub risk: String,
+    /// 授权决策：`auto`（只读/白名单自动放行）/ `approved`（用户确认后执行）/
+    /// `rejected`（闸门拒绝）/ `failed`（闸门内部执行错误；非远端非零退出码）
+    pub decision: String,
+    /// 来源：`manual`（手动执行）/ `auto`（自动链路）/ `plan`（计划模式）
+    pub source: String,
+    /// 远端退出码（仅执行过的记录有值）
+    pub exit_code: Option<i64>,
+    /// 执行耗时（毫秒）
+    pub duration_ms: Option<i64>,
 }
 
 /// SQLite 存储句柄
@@ -289,13 +349,7 @@ impl SqliteStorage {
 
     /// 执行 schema 初始化（幂等）
     ///
-    /// 建表 + 索引，启用 WAL 模式以提升并发读。
-    ///
-    /// 包含四张表：
-    /// - `session_profiles`：会话配置（用户可读）
-    /// - `known_hosts`：已知主机指纹（首次信任后落盘，用于 MITM 校验）
-    /// - `app_config`：应用全局配置（键值对；LLM 配置等历史字段）
-    /// - `llm_profiles`：多 LLM 配置档案（阶段 6）
+    /// 建表 + 索引，启用 WAL 模式以提升并发读；旧库新增列走 [`Self::ensure_column`]。
     fn init_schema(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
@@ -426,17 +480,55 @@ impl SqliteStorage {
 
             -- Agent 助手会话消息（id 为前端生成的稳定 ID）
             -- role: user / assistant / tool；error: 生成失败标记
+            -- meta: 附加元数据 JSON（plan 块步骤状态机等；空串 = 无）
             CREATE TABLE IF NOT EXISTS agent_chat_messages (
                 id            TEXT    PRIMARY KEY NOT NULL,
                 chat_id       TEXT    NOT NULL,
                 role          TEXT    NOT NULL,
                 content       TEXT    NOT NULL,
                 error         INTEGER NOT NULL DEFAULT 0,
+                meta          TEXT    NOT NULL DEFAULT '',
                 created_at    INTEGER NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_agent_chat_messages_chat
                 ON agent_chat_messages(chat_id, created_at);
+
+            -- AI 命令白名单（AI 发起命令的安全闸门，见 commands/ai_exec.rs）
+            -- scope: chat（单会话）/ profile（整台主机档案）/ global（全局，scope_id 为 NULL）
+            -- risk 记录加白时分类（read_only / modify），danger 级不允许入表
+            CREATE TABLE IF NOT EXISTS ai_command_allowlist (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern       TEXT    NOT NULL,
+                risk          TEXT    NOT NULL,
+                scope         TEXT    NOT NULL,
+                scope_id      TEXT,
+                created_at    INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_allowlist_scope
+                ON ai_command_allowlist(scope, scope_id);
+
+            -- AI 命令审计日志（放行/拒绝/执行结果全量留痕）
+            -- decision: auto / approved / rejected / failed（授权决策，非执行成败）
+            -- source:   manual / auto / plan
+            CREATE TABLE IF NOT EXISTS ai_audit_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts            INTEGER NOT NULL,
+                chat_id       TEXT,
+                profile_id    TEXT,
+                command       TEXT    NOT NULL,
+                risk          TEXT    NOT NULL,
+                decision      TEXT    NOT NULL,
+                source        TEXT    NOT NULL,
+                exit_code     INTEGER,
+                duration_ms   INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_audit_log_ts
+                ON ai_audit_log(ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_ai_audit_log_chat
+                ON ai_audit_log(chat_id, ts DESC);
             "#,
         )?;
 
@@ -496,6 +588,36 @@ impl SqliteStorage {
             "builtin",
             "ALTER TABLE command_snippets ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0",
         )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "start_cmd",
+            "ALTER TABLE command_snippets ADD COLUMN start_cmd TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "stop_cmd",
+            "ALTER TABLE command_snippets ADD COLUMN stop_cmd TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "restart_cmd",
+            "ALTER TABLE command_snippets ADD COLUMN restart_cmd TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "status_cmd",
+            "ALTER TABLE command_snippets ADD COLUMN status_cmd TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "command_snippets",
+            "work_dir",
+            "ALTER TABLE command_snippets ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''",
+        )?;
         // v1 预置片段（随机 id 写入，无内置标记）按 名称+命令+分组 补标内置；
         // 用户改过的条目不再匹配、保持非内置（幂等，每次启动执行）
         conn.execute(
@@ -516,6 +638,12 @@ impl SqliteStorage {
             "agent_chats",
             "profile_id",
             "ALTER TABLE agent_chats ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''",
+        )?;
+        Self::ensure_column(
+            conn,
+            "agent_chat_messages",
+            "meta",
+            "ALTER TABLE agent_chat_messages ADD COLUMN meta TEXT NOT NULL DEFAULT ''",
         )?;
         Self::ensure_column(
             conn,
@@ -831,7 +959,7 @@ impl SqliteStorage {
         }
         let builtin = existing.map(|(b, _)| b).unwrap_or(false) || snippet.builtin;
         conn.execute(
-            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, group_name, sort_order, kind, check_cmd, profile_id, scope, builtin, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT OR REPLACE INTO command_snippets (id, name, command, tags, group_name, sort_order, kind, check_cmd, start_cmd, stop_cmd, restart_cmd, status_cmd, work_dir, profile_id, scope, builtin, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 snippet.id,
                 snippet.name,
@@ -841,6 +969,11 @@ impl SqliteStorage {
                 snippet.sort_order,
                 snippet.kind,
                 snippet.check_cmd,
+                snippet.start_cmd,
+                snippet.stop_cmd,
+                snippet.restart_cmd,
+                snippet.status_cmd,
+                snippet.work_dir,
                 snippet.profile_id,
                 snippet.scope,
                 builtin,
@@ -854,7 +987,7 @@ impl SqliteStorage {
     pub async fn list_snippets(&self, profile_id: &str) -> Result<Vec<CommandSnippet>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, name, command, tags, group_name, sort_order, kind, check_cmd, profile_id, scope, builtin, created_at FROM command_snippets WHERE scope = 'global' OR (scope = 'host' AND profile_id = ?1) ORDER BY group_name, sort_order, created_at",
+            "SELECT id, name, command, tags, group_name, sort_order, kind, check_cmd, start_cmd, stop_cmd, restart_cmd, status_cmd, work_dir, profile_id, scope, builtin, created_at FROM command_snippets WHERE scope = 'global' OR (scope = 'host' AND profile_id = ?1) ORDER BY group_name, sort_order, created_at",
         )?;
         let rows = stmt.query_map(params![profile_id], |row| {
             Ok(CommandSnippet {
@@ -866,10 +999,15 @@ impl SqliteStorage {
                 sort_order: row.get(5)?,
                 kind: row.get(6)?,
                 check_cmd: row.get(7)?,
-                profile_id: row.get(8)?,
-                scope: row.get(9)?,
-                builtin: row.get(10)?,
-                created_at: row.get(11)?,
+                start_cmd: row.get(8)?,
+                stop_cmd: row.get(9)?,
+                restart_cmd: row.get(10)?,
+                status_cmd: row.get(11)?,
+                work_dir: row.get(12)?,
+                profile_id: row.get(13)?,
+                scope: row.get(14)?,
+                builtin: row.get(15)?,
+                created_at: row.get(16)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -901,6 +1039,11 @@ impl SqliteStorage {
                 sort_order: i as i64,
                 kind: (*kind).to_string(),
                 check_cmd: String::new(),
+                start_cmd: String::new(),
+                stop_cmd: String::new(),
+                restart_cmd: String::new(),
+                status_cmd: String::new(),
+                work_dir: String::new(),
                 profile_id: String::new(),
                 scope: "global".to_string(),
                 builtin: true,
@@ -918,8 +1061,19 @@ impl SqliteStorage {
         let tx = conn.unchecked_transaction()?;
         for s in snippets {
             tx.execute(
-                "UPDATE command_snippets SET group_name = ?1, sort_order = ?2, kind = ?3, check_cmd = ?4 WHERE id = ?5",
-                params![s.group_name, s.sort_order, s.kind, s.check_cmd, s.id],
+                "UPDATE command_snippets SET group_name = ?1, sort_order = ?2, kind = ?3, check_cmd = ?4, start_cmd = ?5, stop_cmd = ?6, restart_cmd = ?7, status_cmd = ?8, work_dir = ?9 WHERE id = ?10",
+                params![
+                    s.group_name,
+                    s.sort_order,
+                    s.kind,
+                    s.check_cmd,
+                    s.start_cmd,
+                    s.stop_cmd,
+                    s.restart_cmd,
+                    s.status_cmd,
+                    s.work_dir,
+                    s.id
+                ],
             )?;
         }
         tx.commit()?;
@@ -1135,7 +1289,7 @@ impl SqliteStorage {
     pub async fn list_chat_messages(&self, chat_id: &str) -> Result<Vec<AgentChatMessage>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, role, content, error, created_at FROM agent_chat_messages WHERE chat_id = ?1 ORDER BY rowid ASC",
+            "SELECT id, chat_id, role, content, error, meta, created_at FROM agent_chat_messages WHERE chat_id = ?1 ORDER BY rowid ASC",
         )?;
         let rows = stmt.query_map(params![chat_id], |row| {
             Ok(AgentChatMessage {
@@ -1144,7 +1298,8 @@ impl SqliteStorage {
                 role: row.get(2)?,
                 content: row.get(3)?,
                 error: row.get::<_, i64>(4)? != 0,
-                created_at: row.get(5)?,
+                meta: row.get(5)?,
+                created_at: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1157,8 +1312,8 @@ impl SqliteStorage {
     pub async fn append_chat_message(&self, msg: &AgentChatMessage, ts: i64) -> Result<AgentChat> {
         let conn = self.conn.lock().await;
         conn.execute(
-            "INSERT OR REPLACE INTO agent_chat_messages (id, chat_id, role, content, error, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![msg.id, msg.chat_id, msg.role, msg.content, msg.error as i64, msg.created_at],
+            "INSERT OR REPLACE INTO agent_chat_messages (id, chat_id, role, content, error, meta, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![msg.id, msg.chat_id, msg.role, msg.content, msg.error as i64, msg.meta, msg.created_at],
         )?;
 
         // 自动标题：仅未命名会话 + 用户消息
@@ -1211,6 +1366,16 @@ impl SqliteStorage {
         Ok(chat)
     }
 
+    /// 更新单条消息的 meta（不动 updated_at/标题；供 plan 状态机等高频小更新）
+    pub async fn set_chat_message_meta(&self, chat_id: &str, message_id: &str, meta: &str) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        let affected = conn.execute(
+            "UPDATE agent_chat_messages SET meta = ?3 WHERE chat_id = ?1 AND id = ?2",
+            params![chat_id, message_id, meta],
+        )?;
+        Ok(affected > 0)
+    }
+
     /// 清空某会话的消息（保留会话本身）
     pub async fn clear_chat_messages(&self, chat_id: &str) -> Result<()> {
         let conn = self.conn.lock().await;
@@ -1219,6 +1384,154 @@ impl SqliteStorage {
             params![chat_id],
         )?;
         Ok(())
+    }
+
+    /// 按 id 获取单个 Agent 会话（AI 执行闸门解析绑定用）
+    pub async fn get_chat(&self, id: &str) -> Result<Option<AgentChat>> {
+        let conn = self.conn.lock().await;
+        conn.query_row(
+            "SELECT id, title, profile_id, created_at, updated_at FROM agent_chats WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(AgentChat {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    profile_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                    updated_at: r.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// 新增 AI 命令白名单条目，返回完整记录（含自增 id）
+    pub async fn ai_allowlist_add(
+        &self,
+        pattern: &str,
+        risk: &str,
+        scope: &str,
+        scope_id: Option<&str>,
+        created_at: i64,
+    ) -> Result<AiAllowlistEntry> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO ai_command_allowlist (pattern, risk, scope, scope_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![pattern, risk, scope, scope_id, created_at],
+        )?;
+        Ok(AiAllowlistEntry {
+            id: conn.last_insert_rowid(),
+            pattern: pattern.to_string(),
+            risk: risk.to_string(),
+            scope: scope.to_string(),
+            scope_id: scope_id.map(str::to_string),
+            created_at,
+        })
+    }
+
+    /// 删除 AI 命令白名单条目（返回是否存在）
+    pub async fn ai_allowlist_remove(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().await;
+        Ok(conn.execute("DELETE FROM ai_command_allowlist WHERE id = ?1", params![id])? > 0)
+    }
+
+    /// 查询某执行上下文（chat + profile）可见的全部白名单条目
+    ///
+    /// 可见范围 = global 全部 + 该 profile 条目 + 该 chat 条目；
+    /// 是否真正命中由命令层按 pattern/risk 判定。
+    pub async fn ai_allowlist_for_context(
+        &self,
+        chat_id: &str,
+        profile_id: &str,
+    ) -> Result<Vec<AiAllowlistEntry>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, pattern, risk, scope, scope_id, created_at FROM ai_command_allowlist \
+             WHERE scope = 'global' \
+                OR (scope = 'profile' AND scope_id = ?1) \
+                OR (scope = 'chat' AND scope_id = ?2) \
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![profile_id, chat_id], row_to_allowlist_entry)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 全部 AI 命令白名单条目（设置页只读视图用，不限执行上下文）
+    pub async fn ai_allowlist_list_all(&self) -> Result<Vec<AiAllowlistEntry>> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(
+            "SELECT id, pattern, risk, scope, scope_id, created_at FROM ai_command_allowlist ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_allowlist_entry)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 写入一条 AI 命令审计，返回自增 id
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ai_audit_insert(
+        &self,
+        ts: i64,
+        chat_id: Option<&str>,
+        profile_id: Option<&str>,
+        command: &str,
+        risk: &str,
+        decision: &str,
+        source: &str,
+        exit_code: Option<i64>,
+        duration_ms: Option<i64>,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO ai_audit_log (ts, chat_id, profile_id, command, risk, decision, source, exit_code, duration_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![ts, chat_id, profile_id, command, risk, decision, source, exit_code, duration_ms],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// 补记审计的执行结果（exit_code / duration_ms）
+    pub async fn ai_audit_update_result(
+        &self,
+        id: i64,
+        exit_code: Option<i64>,
+        duration_ms: Option<i64>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE ai_audit_log SET exit_code = ?2, duration_ms = ?3 WHERE id = ?1",
+            params![id, exit_code, duration_ms],
+        )?;
+        Ok(())
+    }
+
+    /// 分页查询 AI 命令审计（按 ts 倒序；chat_id 为 Some 时按会话过滤）
+    pub async fn ai_audit_list(
+        &self,
+        chat_id: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<AiAuditEntry>> {
+        let conn = self.conn.lock().await;
+        let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::ToSql>>) = match chat_id {
+            Some(cid) => (
+                "SELECT id, ts, chat_id, profile_id, command, risk, decision, source, exit_code, duration_ms \
+                 FROM ai_audit_log WHERE chat_id = ?1 ORDER BY ts DESC, id DESC LIMIT ?2 OFFSET ?3",
+                vec![
+                    Box::new(cid.to_string()),
+                    Box::new(limit),
+                    Box::new(offset),
+                ],
+            ),
+            None => (
+                "SELECT id, ts, chat_id, profile_id, command, risk, decision, source, exit_code, duration_ms \
+                 FROM ai_audit_log ORDER BY ts DESC, id DESC LIMIT ?1 OFFSET ?2",
+                vec![Box::new(limit), Box::new(offset)],
+            ),
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params_vec), row_to_audit_entry)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 
@@ -1233,6 +1546,34 @@ fn row_to_alert_rule(row: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRule> {
         enabled: row.get::<_, i32>(5)? != 0,
         cooldown_sec: row.get(6)?,
         created_at: row.get(7)?,
+    })
+}
+
+/// 把 rusqlite `Row` 映射为 [`AiAllowlistEntry`]
+fn row_to_allowlist_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiAllowlistEntry> {
+    Ok(AiAllowlistEntry {
+        id: row.get(0)?,
+        pattern: row.get(1)?,
+        risk: row.get(2)?,
+        scope: row.get(3)?,
+        scope_id: row.get(4)?,
+        created_at: row.get(5)?,
+    })
+}
+
+/// 把 rusqlite `Row` 映射为 [`AiAuditEntry`]
+fn row_to_audit_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AiAuditEntry> {
+    Ok(AiAuditEntry {
+        id: row.get(0)?,
+        ts: row.get(1)?,
+        chat_id: row.get(2)?,
+        profile_id: row.get(3)?,
+        command: row.get(4)?,
+        risk: row.get(5)?,
+        decision: row.get(6)?,
+        source: row.get(7)?,
+        exit_code: row.get(8)?,
+        duration_ms: row.get(9)?,
     })
 }
 
@@ -1499,6 +1840,7 @@ mod tests {
                     role: "user".into(),
                     content: "帮我看看 CPU 为什么这么高\n第二行".into(),
                     error: false,
+                    meta: String::new(),
                     created_at: 110,
                 },
                 110,
@@ -1517,6 +1859,7 @@ mod tests {
                     role: "user".into(),
                     content: "这是一条非常长的消息标题用来验证截断逻辑是否生效".into(),
                     error: false,
+                    meta: String::new(),
                     created_at: 210,
                 },
                 210,
@@ -1535,6 +1878,7 @@ mod tests {
                     role: "user".into(),
                     content: "第二条".into(),
                     error: false,
+                    meta: String::new(),
                     created_at: 220,
                 },
                 220,
@@ -1548,6 +1892,20 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].id, "m-2");
         assert_eq!(msgs[1].id, "m-3");
+        assert_eq!(msgs[0].meta, "");
+
+        // meta 列：写入随消息落库，set_chat_message_meta 单独更新（不动 updated_at）
+        assert!(
+            storage
+                .set_chat_message_meta("chat-2", "m-3", "{\"planStates\":{}}")
+                .await
+                .unwrap()
+        );
+        let msgs = storage.list_chat_messages("chat-2").await.unwrap();
+        assert_eq!(msgs[1].meta, "{\"planStates\":{}}");
+        let chats = storage.list_chats().await.unwrap();
+        assert_eq!(chats[0].updated_at, 220);
+        assert!(!storage.set_chat_message_meta("chat-2", "nope", "x").await.unwrap());
 
         // 会话列表按 updated_at 倒序
         let chats = storage.list_chats().await.unwrap();
@@ -1572,6 +1930,87 @@ mod tests {
         storage.clear_chat_messages("chat-1").await.unwrap();
         assert!(storage.list_chat_messages("chat-1").await.unwrap().is_empty());
         assert_eq!(storage.list_chats().await.unwrap().len(), 1);
+    }
+
+    /// AI 命令白名单：增删 + 按 (chat, profile) 上下文可见性
+    #[tokio::test]
+    async fn test_ai_allowlist_crud() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+
+        let global = storage
+            .ai_allowlist_add("docker ps", "modify", "global", None, 100)
+            .await
+            .unwrap();
+        let profile = storage
+            .ai_allowlist_add("systemctl restart nginx", "modify", "profile", Some("profile-a"), 110)
+            .await
+            .unwrap();
+        let chat = storage
+            .ai_allowlist_add("tail -f app.log", "read_only", "chat", Some("chat-1"), 120)
+            .await
+            .unwrap();
+        storage
+            .ai_allowlist_add("kubectl rollout restart deploy/x", "modify", "profile", Some("profile-b"), 130)
+            .await
+            .unwrap();
+
+        // chat-1 / profile-a 上下文：global + profile-a + chat-1 三条可见
+        let visible = storage.ai_allowlist_for_context("chat-1", "profile-a").await.unwrap();
+        assert_eq!(visible.len(), 3);
+        assert!(visible.iter().any(|e| e.id == global.id && e.scope_id.is_none()));
+        assert!(visible.iter().any(|e| e.id == profile.id));
+        assert!(visible.iter().any(|e| e.id == chat.id));
+
+        // 其他上下文仅见 global
+        let visible = storage.ai_allowlist_for_context("chat-2", "profile-c").await.unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, global.id);
+
+        // 删除
+        assert!(storage.ai_allowlist_remove(profile.id).await.unwrap());
+        assert!(!storage.ai_allowlist_remove(profile.id).await.unwrap());
+        let visible = storage.ai_allowlist_for_context("chat-1", "profile-a").await.unwrap();
+        assert_eq!(visible.len(), 2);
+    }
+
+    /// AI 命令审计：插入 / 补记结果 / 分页查询（ts 倒序 + chat 过滤）
+    #[tokio::test]
+    async fn test_ai_audit_log() {
+        let storage = SqliteStorage::open_in_memory().unwrap();
+
+        let id1 = storage
+            .ai_audit_insert(100, Some("chat-1"), Some("profile-a"), "ls -l", "read_only", "auto", "manual", Some(0), Some(12))
+            .await
+            .unwrap();
+        // 先写拒绝（无结果），再补记
+        let id2 = storage
+            .ai_audit_insert(200, Some("chat-1"), Some("profile-a"), "rm -rf /", "danger", "rejected", "auto", None, None)
+            .await
+            .unwrap();
+        storage
+            .ai_audit_insert(300, Some("chat-2"), None, "df -h", "read_only", "auto", "plan", Some(0), Some(8))
+            .await
+            .unwrap();
+        assert!(id2 > id1);
+
+        storage.ai_audit_update_result(id2, Some(1), Some(5)).await.unwrap();
+
+        // 全量分页：ts 倒序
+        let all = storage.ai_audit_list(None, 10, 0).await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].ts, 300);
+        assert_eq!(all[1].id, id2);
+        assert_eq!(all[1].exit_code, Some(1));
+        assert_eq!(all[1].duration_ms, Some(5));
+
+        // 按 chat 过滤 + limit/offset
+        let page = storage.ai_audit_list(Some("chat-1"), 1, 0).await.unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, id2);
+        let page = storage.ai_audit_list(Some("chat-1"), 1, 1).await.unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, id1);
+        assert!(storage.ai_audit_list(Some("chat-x"), 10, 0).await.unwrap().is_empty());
     }
 
     /// 常用目录 CRUD + 按 profile 隔离 + 排序
@@ -1655,6 +2094,11 @@ mod tests {
             sort_order: 0,
             kind: "command".into(),
             check_cmd: String::new(),
+            start_cmd: String::new(),
+            stop_cmd: String::new(),
+            restart_cmd: String::new(),
+            status_cmd: String::new(),
+            work_dir: String::new(),
             profile_id: profile.into(),
             scope: scope.into(),
             builtin: false,
@@ -1872,6 +2316,11 @@ mod tests {
             sort_order: 0,
             kind: "command".into(),
             check_cmd: String::new(),
+            start_cmd: String::new(),
+            stop_cmd: String::new(),
+            restart_cmd: String::new(),
+            status_cmd: String::new(),
+            work_dir: String::new(),
             profile_id: String::new(),
             scope: "global".into(),
             builtin: false,

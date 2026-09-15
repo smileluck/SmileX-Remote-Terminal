@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use tauri::State;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::storage::keyring;
 use crate::storage::sqlite::LlmProfile;
@@ -302,7 +303,7 @@ pub async fn llm_profile_test(
     let on_token_clone = on_token.clone();
     let chat_task = tokio::spawn(async move {
         client_clone
-            .chat_stream(&messages_clone, on_token_clone)
+            .chat_stream(&messages_clone, on_token_clone, CancellationToken::new())
             .await
     });
 

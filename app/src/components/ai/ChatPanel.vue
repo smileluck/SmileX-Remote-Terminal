@@ -10,8 +10,8 @@
  * 对话自动按会话持久化：经「历史会话」弹窗查看与切换（可删除），
  * 「新会话」另起一段对话，当前对话保留在历史中。
  */
-import { ref, computed, nextTick, watch, onMounted } from 'vue'
-import { NButton, NInput, NIcon, NSelect, NTag, NSwitch, NTooltip, useDialog, useMessage } from 'naive-ui'
+import { ref, computed, nextTick, watch, onMounted, h } from 'vue'
+import { NButton, NInput, NIcon, NSelect, NTag, NSwitch, NTooltip, NCheckbox, NRadioGroup, NRadioButton, useDialog, useMessage } from 'naive-ui'
 import { Send, PlayerStop, PlugConnected, Settings, MessagePlus, History } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 import { useTabsStore } from '@/stores/tabs'
@@ -30,19 +30,50 @@ const llm = useLlmStore()
 const message = useMessage()
 const dialog = useDialog()
 
-/** 修改类命令确认：自动链路在 store 挂起，此处弹窗并回调用户选择 */
+/** 修改类命令确认：执行链路在 store 挂起（闸门 needs_approval），此处弹窗并回调用户选择（可勾选「记住授权」写白名单） */
 watch(
   () => agent.pendingConfirm,
   (p) => {
     if (!p) return
+    const remember = ref(false)
+    const scope = ref<'chat' | 'profile'>(p.profileId ? 'profile' : 'chat')
     dialog.warning({
       title: '执行修改类命令？',
-      content: `AI 请求执行可能修改服务器状态的命令：\n\n$ ${p.command}\n\n是否执行？（开启「自动执行」后此类命令将不再询问）`,
+      content: () =>
+        h('div', { style: 'white-space: pre-wrap; line-height: 1.7' }, [
+          h('div', null, `AI 请求执行可能修改服务器状态的命令：\n\n$ ${p.command}\n`),
+          h(
+            NCheckbox,
+            {
+              checked: remember.value,
+              'onUpdate:checked': (v: boolean) => (remember.value = v),
+            },
+            () => '记住授权（加入命令白名单，后续同类命令自动放行）',
+          ),
+          remember.value
+            ? h(
+                NRadioGroup,
+                {
+                  value: scope.value,
+                  'onUpdate:value': (v: 'chat' | 'profile') => (scope.value = v),
+                  size: 'small',
+                  style: 'display: flex; margin: 4px 0 0 24px',
+                },
+                () => [
+                  h(NRadioButton, { value: 'chat' }, () => '仅当前会话'),
+                  ...(p.profileId
+                    ? [h(NRadioButton, { value: 'profile' }, () => '该服务器所有会话')]
+                    : []),
+                ],
+              )
+            : null,
+        ]),
       positiveText: '执行',
       negativeText: '跳过',
-      onPositiveClick: () => agent.resolvePendingConfirm(true),
-      onNegativeClick: () => agent.resolvePendingConfirm(false),
-      onClose: () => agent.resolvePendingConfirm(false),
+      onPositiveClick: () =>
+        agent.resolvePendingConfirm({ ok: true, remember: remember.value ? scope.value : undefined }),
+      onNegativeClick: () => agent.resolvePendingConfirm({ ok: false }),
+      onClose: () => agent.resolvePendingConfirm({ ok: false }),
     })
   },
 )

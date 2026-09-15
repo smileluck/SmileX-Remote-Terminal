@@ -148,6 +148,11 @@ const draft = ref({
   group: '',
   kind: 'command' as SnippetKind,
   checkCmd: '',
+  startCmd: '',
+  stopCmd: '',
+  restartCmd: '',
+  statusCmd: '',
+  workDir: '',
   scope: 'host' as SnippetScope,
 })
 
@@ -190,7 +195,19 @@ function openCreate(kind: string | number) {
   }
   const k = (kind === 'service' ? 'service' : 'command') as SnippetKind
   editingId.value = null
-  draft.value = { name: '', command: '', group: '', kind: k, checkCmd: '', scope: 'host' }
+  draft.value = {
+    name: '',
+    command: '',
+    group: '',
+    kind: k,
+    checkCmd: '',
+    startCmd: '',
+    stopCmd: '',
+    restartCmd: '',
+    statusCmd: '',
+    workDir: '',
+    scope: 'host',
+  }
   showForm.value = true
 }
 
@@ -202,6 +219,11 @@ function openEdit(s: CommandSnippet) {
     group: s.groupName,
     kind: s.kind,
     checkCmd: s.checkCmd,
+    startCmd: s.startCmd,
+    stopCmd: s.stopCmd,
+    restartCmd: s.restartCmd,
+    statusCmd: s.statusCmd,
+    workDir: s.workDir,
     scope: s.scope,
   }
   showForm.value = true
@@ -227,6 +249,11 @@ async function submitForm() {
     sortOrder: old?.sortOrder ?? 0,
     kind,
     checkCmd: kind === 'service' ? draft.value.checkCmd.trim() : '',
+    startCmd: kind === 'service' ? draft.value.startCmd.trim() : '',
+    stopCmd: kind === 'service' ? draft.value.stopCmd.trim() : '',
+    restartCmd: kind === 'service' ? draft.value.restartCmd.trim() : '',
+    statusCmd: kind === 'service' ? draft.value.statusCmd.trim() : '',
+    workDir: draft.value.workDir.trim(),
     profileId: scope === 'host' ? store.activeProfileId() : '',
     scope,
     builtin: old?.builtin ?? false,
@@ -666,7 +693,7 @@ async function applyDrop(
             <template v-if="s.kind === 'service'">
               <button
                 class="sp-op"
-                title="查看状态（systemctl status）"
+                title="查看状态"
                 :disabled="!store.canRun || store.running"
                 @click="runOne(s)"
               >
@@ -764,7 +791,37 @@ async function applyDrop(
             placeholder="检查命令（可选，留空用 systemctl is-active）"
             clearable
           />
+          <NInput
+            v-model:value="draft.startCmd"
+            size="small"
+            placeholder="启动命令（可选，如 /opt/app/start_prod.sh start；留空用 systemctl start）"
+            clearable
+          />
+          <NInput
+            v-model:value="draft.stopCmd"
+            size="small"
+            placeholder="停止命令（可选，留空用 systemctl stop）"
+            clearable
+          />
+          <NInput
+            v-model:value="draft.restartCmd"
+            size="small"
+            placeholder="重启命令（可选，留空用 systemctl restart）"
+            clearable
+          />
+          <NInput
+            v-model:value="draft.statusCmd"
+            size="small"
+            placeholder="查看状态命令（可选，留空用 systemctl status）"
+            clearable
+          />
         </template>
+        <NInput
+          v-model:value="draft.workDir"
+          size="small"
+          placeholder="工作目录（可选，如 /opt/app；留空用终端当前目录）"
+          clearable
+        />
         <NAutoComplete
           v-model:value="draft.group"
           size="small"

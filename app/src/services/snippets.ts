@@ -26,6 +26,16 @@ export interface CommandSnippet {
   kind: SnippetKind
   /** 服务条目的自定义状态检查命令（空串 = 默认 systemctl is-active） */
   checkCmd: string
+  /** 服务条目的自定义启动命令（空串 = 默认 systemctl start） */
+  startCmd: string
+  /** 服务条目的自定义停止命令（空串 = 默认 systemctl stop） */
+  stopCmd: string
+  /** 服务条目的自定义重启命令（空串 = 默认 systemctl restart） */
+  restartCmd: string
+  /** 服务条目的自定义查看状态命令（空串 = 默认 systemctl status） */
+  statusCmd: string
+  /** 执行工作目录（空串 = 终端当前目录；在子 shell 中 cd，不污染终端 cwd） */
+  workDir: string
   /** 所属会话配置 ID（scope=host 时生效；空串 = 全局共享条目） */
   profileId: string
   /** 作用范围（默认 'global'） */

@@ -154,6 +154,16 @@ fn main() {
             commands::ai::ai_config_get,
             commands::ai::ai_config_save,
             commands::ai::ai_secret_get,
+            // AI 命令执行安全闸门（分类 / 预检 / 执行 / 白名单 / 审计）
+            commands::ai_exec::ai_classify_command,
+            commands::ai_exec::ai_exec_prepare,
+            commands::ai_exec::ai_exec_finish,
+            commands::ai_exec::ai_exec_command,
+            commands::ai_exec::ai_allowlist_add,
+            commands::ai_exec::ai_allowlist_remove,
+            commands::ai_exec::ai_allowlist_list,
+            commands::ai_exec::ai_allowlist_all,
+            commands::ai_exec::ai_audit_list,
             // Agent 助手会话（多会话 Tab）
             commands::agent_chat::agent_chat_list,
             commands::agent_chat::agent_chat_create,
@@ -161,6 +171,7 @@ fn main() {
             commands::agent_chat::agent_chat_delete,
             commands::agent_chat::agent_chat_messages,
             commands::agent_chat::agent_chat_message_append,
+            commands::agent_chat::agent_chat_message_set_meta,
             commands::agent_chat::agent_chat_clear_messages,
             // LLM 配置档案命令组（阶段 6：多档案管理）
             commands::llm_profile::llm_profile_list,

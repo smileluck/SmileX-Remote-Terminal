@@ -2,8 +2,9 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v1.0 |
+| 文档版本 | v1.1 |
 | 创建日期 | 2026-07-17 |
+| 最后更新 | 2026-09-15 |
 | 文档状态 | 评审中 |
 | 关联文档 | [architecture.md](../../.trae/documents/smilex-remote-terminal-architecture.md)、[development.md](./development.md) |
 
@@ -147,15 +148,22 @@ SmileX-Remote-Terminal 是一款 **跨平台综合运维工具**，融合三大�
 | F-AI-03 | 会话上下文采集 | P0 | 勾选后读取终端最近 N 行 |
 | F-AI-04 | 多轮对话历史 | P0 | 保留最近 N 轮上下文 |
 | F-AI-05 | Markdown + 代码块高亮渲染 | P0 | markdown-it + highlight.js |
-| F-AI-06 | 中断生成 | P1 | 可随时停止响应 |
+| F-AI-06 | 中断生成 | P1 | 可随时停止响应（后端真实中断 SSE 流） |
 | F-AI-07 | 清空对话历史 | P1 | 一键重置 |
+| F-AI-08 | run/plan 提示词协议 | P1 | LLM 输出 ```run / ```plan 块；计划确认后每次回复一个 run 块，失败即停等待指示 |
+| F-AI-09 | AI 发起命令安全闸门 | P1 | 所有 AI 发起的执行（PTY 可见路径与非交互 exec 通道）统一经后端闸门；用户正常输入不受影响 |
+| F-AI-10 | 命令三级分类 | P1 | read_only 自动执行；modify 需确认或白名单；danger 永不自动执行、需二次确认 |
+| F-AI-11 | 命令白名单授权 | P1 | scope 支持 chat/profile/global，可随时删除撤销；danger 级不允许入白名单 |
+| F-AI-12 | AI 命令审计日志 | P1 | 放行/拒绝/执行全量留痕（含被拒绝的尝试），分页可查 |
+| F-AI-13 | 计划模式与步骤状态机 | P1 | 步骤 pending/running/done/failed/skipped；失败暂停支持重试/跳过/终止；状态持久化到消息 meta，重启后不自动续跑 |
+| F-AI-14 | 输出保护 | P1 | 执行结果回传截断 8KB 保尾（`[已截断 N 字节]`）；流式输出超 256KB 自动中止 |
 
 #### 3.4.2 Work 模式（P2 预留）
 
 | 编号 | 需求 | 优先级 | 验收标准 |
 |------|------|--------|---------|
-| F-WORK-01 | AgentProvider trait 接口预留 | P2 | 未来实现不改 trait |
-| F-WORK-02 | 自主调用 SSH 命令 | P2 | 未来：function calling |
+| F-WORK-01 | AgentProvider trait 接口预留 | P2 | 未来实现不改 trait（WorkProvider 现为 stub，路线图见 development.md §13.6） |
+| F-WORK-02 | 自主调用 SSH 命令 | P2 | 未来：Turn/Step 驱动器，统一经安全闸门（F-AI-09） |
 | F-WORK-03 | 自动诊断/修复 | P2 | 未来：AI 自主运维 |
 
 ### 3.5 SFTP 文件传输（P1）
@@ -194,6 +202,7 @@ SmileX-Remote-Terminal 是一款 **跨平台综合运维工具**，融合三大�
 | F-CONFIG-02 | LLM Provider 配置 | P0 | Provider/模型/BaseURL/API Key |
 | F-CONFIG-03 | 凭据管理（Keyring 可视化） | P1 | 查看/删除已存凭据 |
 | F-CONFIG-04 | 配置导入导出 | P2 | 跨设备迁移 |
+| F-CONFIG-05 | 设置页「AI 命令授权」分区 | P1 | 白名单管理（含删除撤销）+ 最近 50 条审计只读列表 |
 
 ---
 
@@ -223,6 +232,7 @@ SmileX-Remote-Terminal 是一款 **跨平台综合运维工具**，融合三大�
 | NF-SEC-07 | LLM API Key 安全 | 存 Keyring，显式用户发起调用 |
 | NF-SEC-08 | AI 隐私保护 | 上下文采集默认关闭需勾选；Ollama 模式数据不出本机 |
 | NF-SEC-09 | 配置文件加密 | SQLite 可选 AES-256-GCM 加密 |
+| NF-SEC-10 | AI 发起命令安全闸门 | 三级分类唯一事实来源 `ai_core::safety::classify_command`；危险命令二次确认、永不自动执行；白名单可撤销；全量审计留痕 |
 
 ### 4.3 可用性需求
 
@@ -354,3 +364,4 @@ MVP 完成后需满足以下全部验收项：
 | 版本 | 日期 | 变更 | 作者 |
 |------|------|------|------|
 | v1.0 | 2026-07-17 | 初始版本，基于架构文档生成 | - |
+| v1.1 | 2026-09-15 | 同步 Agent 助手 Harness 化 P1：新增 F-AI-08~14（run/plan 协议、安全闸门、白名单、审计、计划状态机、输出保护）、F-CONFIG-05、NF-SEC-10 | - |

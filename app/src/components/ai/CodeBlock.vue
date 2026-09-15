@@ -26,7 +26,8 @@ const agent = useAgentStore()
 const dialog = useDialog()
 const message = useMessage()
 
-const danger = computed(() => agent.isDangerous(props.command))
+/** 即时风险标签（ai_classify_command 异步查询，仅作展示与二次确认提示） */
+const danger = computed(() => agent.riskOf(props.command) === 'danger')
 
 /** hljs 高亮结果（无对应语言时转义原文） */
 const highlighted = computed(() => {
@@ -66,8 +67,9 @@ async function sendToTerminal() {
   }
 }
 
-function execute() {
-  if (danger.value) {
+async function execute() {
+  const level = agent.riskOf(props.command) ?? (await agent.ensureRisk(props.command))
+  if (level === 'danger') {
     dialog.warning({
       title: '危险命令确认',
       content: `该命令可能造成破坏性影响：\n\n$ ${props.command}\n\n确定要在服务器上执行吗？`,

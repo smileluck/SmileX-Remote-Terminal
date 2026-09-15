@@ -2,15 +2,29 @@
 /**
  * PlanBlock - 计划模式下 AI 回复中的执行计划卡片
  *
- * AI 按计划模式协议输出 ```plan 块，此处渲染为计划卡片：
- * - 待确认：「确认执行」→ 回传计划原文开始逐步执行；「取消」→ 纯本地标记
- * - 已确认/已取消：按钮区替换为状态文案
- * 确认状态（agent store planStates）；确认后的执行仍走 run 块的三级策略
+ * AI 按计划模式协议输出 ```plan 块，此处渲染为结构化步骤状态机：
+ * - pending_confirm：步骤列表预览 +「确认执行 / 取消」
+ * - running：高亮当前步；某步失败 → paused_failed（暂停自动链），
+ *   失败步旁提供「重试 / 跳过 / 终止计划」
+ * - done / cancelled：仅展示最终状态
+ * 状态存于 agent store planStates，并持久化到消息 meta（重启可恢复；
+ * 恢复时 running 一律按 paused_failed 处理，不自动续跑）
  */
 import { computed } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
-import { Check, X } from '@vicons/tabler'
-import { useAgentStore } from '@/stores/agent'
+import {
+  Check,
+  X,
+  Circle,
+  CircleCheck,
+  CircleX,
+  PlayerPlay,
+  PlayerSkipForward,
+  PlayerStop,
+  Refresh,
+} from '@vicons/tabler'
+import { useAgentStore, parsePlanSteps } from '@/stores/agent'
+import type { PlanStep, PlanStepStatus } from '@/types/ai'
 
 const props = defineProps<{
   messageId: string
@@ -25,18 +39,92 @@ const props = defineProps<{
 const agent = useAgentStore()
 
 const key = computed(() => `${props.messageId}#${props.index}`)
-const state = computed(() => agent.planStates[key.value] ?? 'pending')
+/** 结构化状态；无记录 = 待确认（steps 现场解析用于预览） */
+const plan = computed(() => agent.planStates[key.value] ?? null)
+const status = computed(() => plan.value?.status ?? 'pending_confirm')
+const steps = computed<PlanStep[]>(() => plan.value?.steps ?? parsePlanSteps(props.content))
+
+const STATUS_TEXT: Record<string, string> = {
+  running: '执行中',
+  paused_failed: '已暂停（步骤失败）',
+  done: '计划已完成',
+  cancelled: '已取消',
+}
+
+/** 步骤状态图标 */
+const STEP_ICON: Record<PlanStepStatus, typeof Circle> = {
+  pending: Circle,
+  running: PlayerPlay,
+  done: CircleCheck,
+  failed: CircleX,
+  skipped: PlayerSkipForward,
+}
+
+/** 失败中的当前步（paused_failed 时展示操作按钮） */
+const failedStep = computed(() => {
+  if (!plan.value || plan.value.status !== 'paused_failed') return -1
+  const i = plan.value.currentIndex
+  return plan.value.steps[i]?.status === 'failed' ? i : -1
+})
 </script>
 
 <template>
-  <div class="plan-block" :class="[state]">
+  <div class="plan-block" :class="[status]">
     <div class="plan-head">
       <span class="plan-title">📋 执行计划</span>
-      <span v-if="state === 'confirmed'" class="plan-state confirmed">已确认，按计划执行中</span>
-      <span v-else-if="state === 'cancelled'" class="plan-state cancelled">已取消</span>
+      <span v-if="status !== 'pending_confirm'" class="plan-state" :class="[status]">
+        {{ STATUS_TEXT[status] }}
+      </span>
     </div>
-    <div class="plan-body">{{ content }}</div>
-    <div v-if="state === 'pending'" class="plan-actions">
+    <ol class="plan-steps">
+      <li
+        v-for="(step, i) in steps"
+        :key="i"
+        class="plan-step"
+        :class="[
+          step.status,
+          { current: plan && plan.status !== 'done' && i === plan.currentIndex },
+        ]"
+      >
+        <NIcon :component="STEP_ICON[step.status]" :size="13" class="step-icon" />
+        <span class="step-text">{{ i + 1 }}. {{ step.text }}</span>
+        <span v-if="i === failedStep" class="step-actions">
+          <NButton
+            size="tiny"
+            type="primary"
+            quaternary
+            :disabled="disabled || agent.busy"
+            title="重新执行该步命令"
+            @click="agent.retryPlanStep(messageId, index)"
+          >
+            <template #icon><NIcon :component="Refresh" :size="12" /></template>
+            重试
+          </NButton>
+          <NButton
+            size="tiny"
+            quaternary
+            :disabled="disabled || agent.busy"
+            title="标记跳过并继续后续步骤"
+            @click="agent.skipPlanStep(messageId, index)"
+          >
+            <template #icon><NIcon :component="PlayerSkipForward" :size="12" /></template>
+            跳过
+          </NButton>
+          <NButton
+            size="tiny"
+            type="error"
+            quaternary
+            :disabled="disabled || agent.busy"
+            title="终止整个计划"
+            @click="agent.terminatePlan(messageId, index)"
+          >
+            <template #icon><NIcon :component="PlayerStop" :size="12" /></template>
+            终止计划
+          </NButton>
+        </span>
+      </li>
+    </ol>
+    <div v-if="status === 'pending_confirm'" class="plan-actions">
       <NButton
         size="tiny"
         type="primary"
@@ -51,7 +139,7 @@ const state = computed(() => agent.planStates[key.value] ?? 'pending')
         size="tiny"
         quaternary
         :disabled="disabled"
-        @click="agent.cancelPlan(messageId, index)"
+        @click="agent.cancelPlan(messageId, index, content)"
       >
         <template #icon><NIcon :component="X" :size="12" /></template>
         取消
@@ -69,6 +157,12 @@ const state = computed(() => agent.planStates[key.value] ?? 'pending')
   background: var(--bg-elevated);
   padding: 8px 10px;
   overflow: hidden;
+}
+.plan-block.paused_failed {
+  border-left-color: var(--danger);
+}
+.plan-block.done {
+  border-left-color: var(--success);
 }
 .plan-block.cancelled {
   opacity: 0.6;
@@ -88,18 +182,73 @@ const state = computed(() => agent.planStates[key.value] ?? 'pending')
 .plan-state {
   font-size: 11px;
 }
-.plan-state.confirmed {
+.plan-state.running {
+  color: var(--primary);
+}
+.plan-state.paused_failed {
+  color: var(--danger);
+}
+.plan-state.done {
   color: var(--success);
 }
 .plan-state.cancelled {
   color: var(--text-tertiary);
 }
-.plan-body {
+.plan-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.plan-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-size: 12.5px;
   line-height: 1.7;
+  color: var(--text-secondary);
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+.plan-step.current {
+  background: var(--primary-bg);
   color: var(--text-primary);
+}
+.step-icon {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--text-tertiary);
+}
+.plan-step.done .step-icon {
+  color: var(--success);
+}
+.plan-step.failed .step-icon {
+  color: var(--danger);
+}
+.plan-step.skipped .step-icon {
+  color: var(--warning);
+}
+.plan-step.running .step-icon {
+  color: var(--primary);
+}
+.plan-step.done .step-text,
+.plan-step.skipped .step-text {
+  color: var(--text-tertiary);
+}
+.plan-step.failed .step-text {
+  color: var(--danger);
+}
+.step-text {
+  flex: 1;
+  min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.step-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  align-self: center;
 }
 .plan-actions {
   display: flex;

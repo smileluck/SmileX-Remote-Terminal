@@ -2,10 +2,11 @@
 /**
  * RunBlock - AI 回复中的可执行命令卡片
  *
- * AI 按命令执行协议输出 ```run 块，此处渲染为命令卡片，按三级分类处理：
- * - 查询（只读）：点击直接执行；自动链路中始终自动执行
- * - 修改：点击弹确认框；自动链路中仅「自动执行」开启时直接执行，否则逐条弹窗确认
- * - 危险：永不自动执行，手动执行需二次确认
+ * AI 按命令执行协议输出 ```run 块，此处渲染为命令卡片：
+ * - 风险标签经 ai_classify_command 异步查询（先显示「识别中」，回来后响应式更新），仅作展示
+ * - 执行决策全部走后端安全闸门（ai_exec_prepare）：闸门拒绝直接展示原因；
+ *   修改类未授权时由 store 挂起弹窗（可勾选「记住授权」写白名单）；
+ *   危险命令保留此处的二次确认交互，确认后以 approved=true 过闸
  * 命令写入该聊天绑定的终端窗口会话执行（用户可在终端看到全过程），
  * 回显自动捕获为输出；绑定会话断开时阻止执行并提示。
  * 执行状态（agent store runStates）；输出不回显在面板，仅作为 tool 消息
@@ -31,10 +32,11 @@ const message = useMessage()
 
 const key = computed(() => `${props.messageId}#${props.index}`)
 const state = computed(() => agent.runStates[key.value])
-const level = computed(() => agent.classifyCommand(props.command))
+/** 即时风险标签（异步查询；null = 识别中） */
+const level = computed(() => agent.riskOf(props.command))
 const danger = computed(() => level.value === 'danger')
-const levelLabel = computed(
-  () => ({ query: '查询', modify: '修改', danger: '危险' })[level.value],
+const levelLabel = computed(() =>
+  level.value ? ({ query: '查询', modify: '修改', danger: '危险' })[level.value] : '识别中…',
 )
 
 async function copyCommand() {
@@ -52,45 +54,36 @@ async function run() {
     message.warning(reason)
     return
   }
-  if (danger.value) {
+  // 等风险识别完成再决定交互（危险命令需二次确认）
+  const lvl = level.value ?? (await agent.ensureRisk(props.command))
+  if (lvl === 'danger') {
     dialog.warning({
       title: '危险命令确认',
       content: `该命令可能造成破坏性影响：\n\n$ ${props.command}\n\n确定要在服务器上执行吗？`,
       positiveText: '仍要执行',
       negativeText: '取消',
       onPositiveClick: () => {
-        void agent.executeRun(props.messageId, props.index, props.command)
+        void agent.executeRun(props.messageId, props.index, props.command, { approved: true })
       },
     })
     return
   }
-  if (level.value === 'modify') {
-    dialog.warning({
-      title: '修改类命令确认',
-      content: `该命令可能修改服务器状态：\n\n$ ${props.command}\n\n确定执行吗？`,
-      positiveText: '执行',
-      negativeText: '取消',
-      onPositiveClick: () => {
-        void agent.executeRun(props.messageId, props.index, props.command)
-      },
-    })
-    return
-  }
+  // 查询/修改类：直接执行，闸门未授权时由 store 弹确认框（含「记住授权」）
   await agent.executeRun(props.messageId, props.index, props.command)
 }
 </script>
 
 <template>
-  <div class="run-block" :class="[level]">
+  <div class="run-block" :class="[level ?? '']">
     <div class="run-head">
-      <span class="run-title">$ 终端命令 <span class="run-level" :class="[level]">{{ levelLabel }}</span></span>
+      <span class="run-title">$ 终端命令 <span class="run-level" :class="[level ?? '']">{{ levelLabel }}</span></span>
       <div class="run-actions">
         <NButton size="tiny" quaternary title="复制命令" @click="copyCommand">
           <template #icon><NIcon :component="Copy" :size="12" /></template>
         </NButton>
         <NButton
           size="tiny"
-          :type="state?.status === 'error' ? 'error' : 'primary'"
+          :type="state?.status === 'error' || state?.status === 'rejected' ? 'error' : 'primary'"
           :loading="state?.status === 'running'"
           :disabled="disabled || state?.status === 'done' || state?.status === 'running'"
           secondary
@@ -104,7 +97,8 @@ async function run() {
       </div>
     </div>
     <code class="run-cmd">{{ command }}</code>
-    <div v-if="danger" class="run-warn">⚠ 高风险命令，执行前请确认影响</div>
+    <div v-if="state?.status === 'rejected'" class="run-warn rejected">✕ {{ state.output }}</div>
+    <div v-else-if="danger" class="run-warn">⚠ 高风险命令，执行前请确认影响</div>
     <div v-else-if="level === 'modify'" class="run-warn modify">⚠ 修改类命令，可能变更服务器状态</div>
   </div>
 </template>
@@ -159,6 +153,9 @@ async function run() {
 .run-warn.modify {
   color: var(--warning);
   opacity: 0.85;
+}
+.run-warn.rejected {
+  color: var(--danger);
 }
 .run-level {
   display: inline-block;

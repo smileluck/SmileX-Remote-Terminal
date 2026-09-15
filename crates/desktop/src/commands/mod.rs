@@ -4,6 +4,7 @@
 
 pub mod agent_chat;
 pub mod ai;
+pub mod ai_exec;
 pub mod alert;
 pub mod common;
 pub mod desktop;

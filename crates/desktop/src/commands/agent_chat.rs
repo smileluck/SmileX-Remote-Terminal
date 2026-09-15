@@ -88,6 +88,21 @@ pub async fn agent_chat_message_append(
         .map_err(|e| AppError::storage(format!("追加 Agent 会话消息失败: {e}")))
 }
 
+/// 更新单条消息的 meta（plan 块步骤状态机等；不动会话 updated_at/标题）
+#[tauri::command]
+pub async fn agent_chat_message_set_meta(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+    meta: String,
+) -> Result<bool, AppError> {
+    state
+        .storage
+        .set_chat_message_meta(&chat_id, &message_id, &meta)
+        .await
+        .map_err(|e| AppError::storage(format!("更新 Agent 会话消息 meta 失败: {e}")))
+}
+
 /// 清空某会话的消息（保留会话本身）
 #[tauri::command]
 pub async fn agent_chat_clear_messages(

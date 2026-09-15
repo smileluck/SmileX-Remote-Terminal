@@ -18,9 +18,11 @@
 
 pub mod error;
 pub mod provider;
+pub mod safety;
 
 pub use error::{Error, Result};
 pub use provider::llm::LlmClient;
+pub use safety::{classify_command, CommandRisk};
 pub use provider::{
     context::Context,
     history::{Message, Role},

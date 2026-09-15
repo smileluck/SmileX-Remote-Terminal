@@ -2,12 +2,13 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 
 import * as aiService from '@/services/ai'
+import * as aiExecService from '@/services/aiExec'
 import * as agentChatService from '@/services/agentChat'
-import * as sessionService from '@/services/session'
 import * as termExec from '@/services/termExec'
 import { listen } from '@/services/invoke'
 import { stripThink } from '@/utils/think'
 import { useTabsStore } from '@/stores/tabs'
+import type { CommandRisk, ExecSource } from '@/services/aiExec'
 import type {
   AgentChat,
   ChatMessage,
@@ -16,6 +17,7 @@ import type {
   AiDonePayload,
   CommandLevel,
   PlanState,
+  PlanStep,
   RunState,
 } from '@/types/ai'
 
@@ -25,95 +27,67 @@ const RUN_RE = /```run\s*\n([\s\S]*?)```/g
 /** ```plan 块解析（计划模式；与 MessageBubble 的解析规则保持一致） */
 const PLAN_RE = /```plan\s*\n([\s\S]*?)```/g
 
-/** 危险命令特征：自动模式跳过，手动执行需二次确认 */
-const DANGER_PATTERNS: RegExp[] = [
-  /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)/i, // rm -rf
-  /\bmkfs(\.\w+)?\b/i,
-  /\bdd\b/i,
-  /\b(shutdown|reboot|halt|poweroff|init\s+[06])\b/i,
-  /:\(\)\s*\{.*\};:/i, // fork bomb
-  />\s*\/dev\/(sd|nvme|vd)/i, // 直写磁盘设备
-  /\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/i, // 下载内容直接进 shell
-  /\bkill\s+-9\s+-1\b/i,
-]
-
-/** 只读查询命令白名单（按段首词匹配；未命中一律按修改类处理，安全兜底） */
-const READONLY_COMMANDS = new Set([
-  'ls', 'll', 'cat', 'head', 'tail', 'less', 'more',
-  'grep', 'egrep', 'fgrep', 'zgrep', 'awk', 'cut', 'tr', 'sort', 'uniq', 'wc', 'diff', 'comm',
-  'ps', 'top', 'htop', 'df', 'du', 'free', 'uptime', 'vmstat', 'iostat', 'mpstat', 'sar',
-  'whoami', 'who', 'w', 'id', 'groups', 'last', 'lastlog',
-  'uname', 'hostname', 'hostnamectl', 'pwd', 'arch', 'lscpu', 'lsmem', 'lsblk', 'lsof', 'lsusb', 'lspci', 'lsmod',
-  'which', 'whereis', 'type', 'env', 'printenv',
-  'ip', 'ifconfig', 'ss', 'netstat', 'ping', 'traceroute', 'tracepath', 'nslookup', 'dig', 'host', 'arp', 'route',
-  'dmesg', 'stat', 'file', 'date', 'cal', 'timedatectl', 'echo', 'printf', 'history', 'alias', 'jobs', 'getenforce',
-])
-
-/** 带只读子命令白名单的命令（命中子命令才算查询类） */
-const READONLY_SUBCMDS: Record<string, Set<string>> = {
-  systemctl: new Set(['status', 'show', 'is-active', 'is-enabled', 'is-failed', 'list-units', 'list-unit-files', 'list-timers', 'list-dependencies', 'cat', 'help']),
-  docker: new Set(['ps', 'logs', 'inspect', 'stats', 'images', 'version', 'info', 'top', 'port', 'diff', 'history', 'search']),
-  podman: new Set(['ps', 'logs', 'inspect', 'stats', 'images', 'version', 'info', 'top', 'port', 'diff', 'history', 'search']),
-  kubectl: new Set(['get', 'describe', 'logs', 'top', 'version', 'cluster-info', 'api-resources', 'api-versions', 'explain']),
-  git: new Set(['status', 'log', 'diff', 'show', 'branch', 'tag', 'remote', 'ls-files', 'blame', 'reflog', 'shortlog']),
-}
-
-/** 段内是否含写文件的输出重定向（2>&1 合并与丢弃到 /dev/null 不算） */
-function hasWriteRedirect(seg: string): boolean {
-  const s = seg.replace(/\d*>&\d/g, '').replace(/\d*>>?\s*\/dev\/null/g, '')
-  return /\d*>>?/.test(s)
-}
-
-/** 单段命令是否为只读（name 已去路径与 sudo 前缀） */
-function isReadonlySegment(name: string, seg: string): boolean {
-  seg = seg.replace(/^sudo\s+/, '')
-  if (name === 'curl') {
-    return !/(-o\b|-O\b|-d\b|--data|-T\b|--upload-file|-X\s*(POST|PUT|DELETE|PATCH))/i.test(seg)
-  }
-  if (name === 'wget') return false // 默认落盘下载
-  if (name === 'journalctl') return !/--(vacuum|rotate|flush)/.test(seg)
-  if (name === 'find') return !/\s-(delete|exec|execdir)\b/.test(seg)
-  if (name === 'sed') return !/\s-i\b/.test(seg)
-  const subcmds = READONLY_SUBCMDS[name]
-  if (subcmds) {
-    // 首词后的第一个裸词即子命令（取不到按修改类兜底）
-    const first = seg.split(/\s+/).slice(1).find((t) => !t.startsWith('-'))
-    return !!first && subcmds.has(first)
-  }
-  return READONLY_COMMANDS.has(name)
-}
-
-/** 命令分级：danger（危险黑名单）> modify（修改/未知，安全兜底）> query（只读白名单） */
-function classifyCommand(cmd: string): CommandLevel {
-  if (DANGER_PATTERNS.some((re) => re.test(cmd))) return 'danger'
-  // 命令替换可嵌入任意命令，按修改类兜底
-  if (/`|\$\(/.test(cmd)) return 'modify'
-  const segments = cmd
-    .split(/\|\||&&|[|;\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-  if (segments.length === 0) return 'modify'
-  for (const seg of segments) {
-    if (hasWriteRedirect(seg)) return 'modify'
-    const tokens = seg.split(/\s+/)
-    let name = tokens[0].replace(/^.*\//, '')
-    if (name === 'sudo') {
-      if (tokens.length < 2) return 'modify'
-      name = tokens[1].replace(/^.*\//, '')
-    }
-    if (!isReadonlySegment(name, seg)) return 'modify'
-  }
-  return 'query'
+/** 后端风险等级 → 前端三级展示 */
+function riskToLevel(risk: CommandRisk): CommandLevel {
+  return risk === 'read_only' ? 'query' : risk
 }
 
 /** 自动执行模式持久化键 */
 const AUTORUN_KEY = 'smilex-agent-autorun'
 /** 计划模式持久化键 */
 const PLANMODE_KEY = 'smilex-agent-planmode'
-/** 单条命令回传 LLM 的输出截断上限 */
+/** 单条命令回传 LLM 的输出截断上限（按字节保尾截断） */
 const MAX_EXEC_OUTPUT = 8 * 1024
 /** 一次用户提问后自动执行的链路上限（防止 agent 循环失控） */
 const MAX_AUTO_CHAIN = 8
+/** LLM 流式输出累计上限（字节）：超过自动中止生成 */
+const MAX_STREAM_BYTES = 256 * 1024
+
+/** 按字节保尾截断（报错通常在输出末尾），截断时加前缀标记 */
+const outputEncoder = new TextEncoder()
+const outputDecoder = new TextDecoder('utf-8')
+function truncateOutput(s: string): string {
+  const bytes = outputEncoder.encode(s)
+  if (bytes.length <= MAX_EXEC_OUTPUT) return s
+  const dropped = bytes.length - MAX_EXEC_OUTPUT
+  return `[已截断 ${dropped} 字节]\n${outputDecoder.decode(bytes.subarray(dropped))}`
+}
+
+/** 后端闸门 reason → 中文文案 */
+const REJECT_REASON_TEXT: Record<string, string> = {
+  chat_not_found: '会话不存在（可能已被删除）',
+  chat_not_bound: '该会话未绑定服务器，无法执行命令',
+  session_disconnected: '该会话绑定的服务器已断开，无法执行命令',
+  danger_requires_confirmation: '危险命令需手动确认后执行',
+  not_in_allowlist: '修改类命令未在授权白名单中',
+}
+
+function rejectReasonText(reason?: string): string {
+  if (!reason) return '命令被安全闸门拒绝'
+  return REJECT_REASON_TEXT[reason] ?? reason
+}
+
+/** ai_done 错误文案中文化（后端错误多为中文，常见英文模式翻译兜底） */
+function humanizeLlmError(msg: string): string {
+  if (!msg) return '生成失败'
+  if (/timed?\s*out|timeout/i.test(msg)) return '请求超时，请稍后重试'
+  if (/401|unauthorized|invalid\s*api\s*key/i.test(msg)) return 'API Key 无效或未授权（401）'
+  if (/429|rate\s*limit/i.test(msg)) return '请求过于频繁，触发限流（429）'
+  if (/\b5\d\d\b/.test(msg)) return '服务端错误，请稍后重试'
+  if (/network|connection|refused|dns|resolve/i.test(msg)) return '网络连接失败，请检查网络或 Base URL'
+  return msg
+}
+
+/** 解析 ```plan 块文本为结构化步骤（编号行 `1.` / 列表行 `- `；无匹配时整段作为单步） */
+export function parsePlanSteps(planText: string): PlanStep[] {
+  const steps: PlanStep[] = []
+  for (const line of planText.split('\n')) {
+    const m = line.match(/^\s*(?:\d+\s*[.、)]|[-*•])\s*(.+)$/)
+    if (m) steps.push({ text: m[1].trim(), status: 'pending' })
+  }
+  if (steps.length === 0) steps.push({ text: planText.trim(), status: 'pending' })
+  return steps
+}
 
 /** 生成前端消息 / 会话 ID（crypto.randomUUID 不可用时回退随机串） */
 function genId(prefix: string): string {
@@ -140,11 +114,14 @@ function genId(prefix: string): string {
  *   绑定的服务器断开后阻止执行并提示，绝不静默打到别的机器；
  *   仅无绑定的通用聊天回退到当前激活的 SSH 会话
  * - 计划模式（planMode）：开启后 AI 先输出 ```plan 块执行计划，用户确认后
- *   前端回传「计划已确认 + 计划原文」，AI 再按计划逐步输出 run 块执行
- * - 命令分级执行：```run 块按 查询（只读，自动执行）/ 修改（自动模式直接执行，
- *   否则逐条弹窗确认）/ 危险（始终手动二次确认）三级处理；
- *   命令写入绑定的终端窗口会话执行（对用户可见、保留会话状态），
- *   从会话回显捕获输出回传对话继续分析；写入失败回退独立 exec 通道
+ *   前端回传「计划已确认 + 计划原文」，AI 再按计划逐步输出 run 块执行；
+ *   计划进度为结构化步骤状态机（planStates），逐步标记 done/failed，
+ *   失败暂停（重试 / 跳过 / 终止），状态持久化到消息 meta
+ * - 命令执行决策全部走后端安全闸门（ai_exec_prepare）：
+ *   前端不再做安全分类正则，run 块的风险标签用 ai_classify_command
+ *   异步查询 + 缓存，仅作展示；闸门放行后默认写绑定终端窗口会话执行
+ *   （对用户可见、保留会话状态），完成后 ai_exec_finish 补记审计；
+ *   写入失败回退 ai_exec_command 非交互通道（自带闸门 + 审计 + 截断）
  */
 export const useAgentStore = defineStore('agent', () => {
   const tabs = useTabsStore()
@@ -185,23 +162,35 @@ export const useAgentStore = defineStore('agent', () => {
   const planMode = ref(localStorage.getItem(PLANMODE_KEY) === '1')
   /** run 块执行状态：`${messageId}#${index}` → RunState */
   const runStates = ref<Record<string, RunState>>({})
-  /** plan 块确认状态：`${messageId}#${index}` → PlanState（无记录 = pending 待确认） */
+  /** plan 块结构化状态机：`${messageId}#${index}` → PlanState（无记录 = pending_confirm 待确认） */
   const planStates = ref<Record<string, PlanState>>({})
+  /** run 块风险标签缓存（ai_classify_command 异步查询结果，仅作展示；执行决策以闸门为准） */
+  const riskCache = ref<Record<string, CommandLevel>>({})
+  /** 正在查询风险等级的命令（防并发重复查询） */
+  const riskInflight = new Set<string>()
 
-  /** 修改类命令待确认（自动链路挂起点，由 ChatPanel 呈现确认框并回调） */
+  /** 修改类命令待确认（执行链路挂起点，由 ChatPanel 呈现确认框并回调） */
   const pendingConfirm = ref<{
     messageId: string
     index: number
     command: string
-    resolve: (ok: boolean) => void
+    /** 所属会话与绑定档案（「记住授权」白名单 scope 用；profileId 空 = 仅可记住到会话） */
+    chatId: string
+    profileId: string
+    resolve: (choice: { ok: boolean; remember?: 'chat' | 'profile' }) => void
   } | null>(null)
 
   /** 用户确认/跳过修改类命令（ChatPanel 确认框回调） */
-  function resolvePendingConfirm(ok: boolean) {
+  function resolvePendingConfirm(choice: { ok: boolean; remember?: 'chat' | 'profile' }) {
     const p = pendingConfirm.value
     pendingConfirm.value = null
-    p?.resolve(ok)
+    p?.resolve(choice)
   }
+
+  /** 流式输出累计字节数（LLM→前端方向保护，超过 MAX_STREAM_BYTES 自动中止） */
+  const streamBytes = new Map<string, number>()
+  /** 已因超限中止的会话（ai_done 据此分类 limit） */
+  const streamLimited = new Set<string>()
 
   watch(autoRun, (v) => {
     try {
@@ -234,7 +223,7 @@ export const useAgentStore = defineStore('agent', () => {
     return list
   }
 
-  /** 从库加载某会话的消息（切换 Tab / 启动激活时） */
+  /** 从库加载某会话的消息（切换 Tab / 启动激活时）；还原消息 meta 中的 plan 步骤状态机 */
   async function loadMessages(chatId: string) {
     try {
       const rows = await agentChatService.chatMessages(chatId)
@@ -244,7 +233,30 @@ export const useAgentStore = defineStore('agent', () => {
         content: r.content,
         timestamp: r.createdAt,
         ...(r.error ? { error: true } : {}),
+        ...(r.meta ? { meta: r.meta } : {}),
       }))
+      // 还原持久化的 plan 状态（运行中的计划重启后按已暂停处理，避免自动续跑）
+      for (const r of rows) {
+        if (!r.meta) continue
+        try {
+          const meta = JSON.parse(r.meta) as { planStates?: Record<string, PlanState> }
+          for (const [idx, plan] of Object.entries(meta.planStates ?? {})) {
+            const restored: PlanState =
+              plan.status === 'running'
+                ? {
+                    ...plan,
+                    status: 'paused_failed',
+                    steps: plan.steps.map((s) =>
+                      s.status === 'running' ? { ...s, status: 'failed' as const } : s,
+                    ),
+                  }
+                : plan
+            planStates.value = { ...planStates.value, [`${r.id}#${idx}`]: restored }
+          }
+        } catch {
+          /* meta 非 JSON / 结构不符时忽略 */
+        }
+      }
     } catch {
       messagesByChat.value[chatId] = []
     }
@@ -342,22 +354,44 @@ export const useAgentStore = defineStore('agent', () => {
     if (started) return
     started = true
     // p.sessionId 即会话 id：增量写入对应会话的 pending assistant 消息，
-    // 生成中切换 Tab 也不丢
+    // 生成中切换 Tab 也不丢；累计超过 256KB 自动中止（防输出失控撑爆 UI）
     await listen<AiTokenPayload>('ai_token', (p) => {
       const list = messagesByChat.value[p.sessionId]
       const last = list?.[list.length - 1]
-      if (last && last.role === 'assistant' && last.pending) last.content += p.token
+      if (!last || last.role !== 'assistant' || !last.pending) return
+      if (streamLimited.has(p.sessionId)) return
+      const n = (streamBytes.get(p.sessionId) ?? 0) + outputEncoder.encode(p.token).length
+      streamBytes.set(p.sessionId, n)
+      if (n > MAX_STREAM_BYTES) {
+        streamLimited.add(p.sessionId)
+        last.content += '\n\n⚠ 输出超限已中止'
+        void aiService.chatAbort().catch(() => {})
+        return
+      }
+      last.content += p.token
     })
     await listen<AiDonePayload>('ai_done', (p) => {
       if (generatingChatId.value !== p.sessionId) return
       generatingChatId.value = null
       const chatId = p.sessionId
+      const limited = streamLimited.delete(chatId)
+      streamBytes.delete(chatId)
       const last = messagesByChat.value[chatId]?.at(-1)
       if (last && last.role === 'assistant' && last.pending) {
         last.pending = false
         if (!p.success) {
-          last.error = true
-          last.content = p.error || '生成失败'
+          const errText = p.error || ''
+          if (limited || errText.includes('输出超限')) {
+            // 输出超限中止：保留已生成内容，标记错误样式
+            last.error = true
+            if (!last.content.includes('输出超限')) last.content += '\n\n⚠ 输出超限已中止'
+          } else if (errText.includes('操作已取消')) {
+            // 用户主动取消：安静收尾，不显示错误样式
+            if (!last.content) last.content = '已取消'
+          } else {
+            last.error = true
+            last.content = humanizeLlmError(errText)
+          }
         }
       }
       // 定稿落库（失败占位也存，恢复上下文时后端会跳过）
@@ -411,9 +445,35 @@ export const useAgentStore = defineStore('agent', () => {
     { deep: true },
   )
 
-  /** 危险命令检测 */
-  function isDangerous(cmd: string): boolean {
-    return classifyCommand(cmd) === 'danger'
+  /** run 块风险标签（渲染用）：命中缓存直接返回，未命中触发异步查询后响应式更新（null = 查询中） */
+  function riskOf(cmd: string): CommandLevel | null {
+    const hit = riskCache.value[cmd]
+    if (hit) return hit
+    void ensureRisk(cmd)
+    return null
+  }
+
+  /** 查询命令风险等级（缓存优先；分类服务不可用时按修改类兜底——仅影响展示与预检交互，执行决策以闸门为准） */
+  async function ensureRisk(cmd: string): Promise<CommandLevel> {
+    const hit = riskCache.value[cmd]
+    if (hit) return hit
+    if (riskInflight.has(cmd)) {
+      // 已有查询在途：轮询等待其结果
+      for (let i = 0; i < 100 && riskInflight.has(cmd); i++) {
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      return riskCache.value[cmd] ?? 'modify'
+    }
+    riskInflight.add(cmd)
+    try {
+      const level = riskToLevel(await aiExecService.classifyCommand(cmd))
+      riskCache.value = { ...riskCache.value, [cmd]: level }
+      return level
+    } catch {
+      return 'modify'
+    } finally {
+      riskInflight.delete(cmd)
+    }
   }
 
   /**
@@ -460,6 +520,7 @@ export const useAgentStore = defineStore('agent', () => {
         role: msg.role,
         content: msg.content,
         error: !!msg.error,
+        meta: msg.meta,
         createdAt: msg.timestamp,
       })
       .then(upsertChat)
@@ -501,7 +562,7 @@ export const useAgentStore = defineStore('agent', () => {
   async function send(text: string) {
     if (!text.trim() || generatingChatId.value) return
     // 用户接管对话：取消挂起的修改类命令确认（其链路随之停止）
-    if (pendingConfirm.value) resolvePendingConfirm(false)
+    if (pendingConfirm.value) resolvePendingConfirm({ ok: false })
     const chatId = activeChatId.value ?? (await newChat())
     autoChain = 0
     const list = msgListOf(chatId)
@@ -536,8 +597,13 @@ export const useAgentStore = defineStore('agent', () => {
     return null
   }
 
-  /** 执行消息中第 index 个 run 块命令（在该聊天绑定的 SSH 会话上） */
-  async function executeRun(messageId: string, index: number, command: string) {
+  /** 执行消息中第 index 个 run 块命令（在该聊天绑定的 SSH 会话上，全路过后端闸门） */
+  async function executeRun(
+    messageId: string,
+    index: number,
+    command: string,
+    opts: { approved?: boolean; source?: ExecSource } = {},
+  ) {
     const chatId = findChatIdOf(messageId) ?? activeChatId.value
     if (!chatId) return
     const key = `${messageId}#${index}`
@@ -548,50 +614,206 @@ export const useAgentStore = defineStore('agent', () => {
     if (!sessionId) {
       error.value = bound
         ? '该会话绑定的服务器已断开，无法执行命令'
-        : '未连接 SSH 服务器，无法执行命令'
+        : '未连接 SSH 服务器，请先连接'
       return
     }
-    runStates.value = { ...runStates.value, [key]: { status: 'running' } }
-    try {
-      // 命令写入绑定的终端窗口会话（对用户可见、保留 cwd/env 状态），
-      // 从会话回显捕获输出；写入失败（会话异常）回退独立 exec 通道
-      let out: string
-      try {
-        out = await termExec.execInTerminal(sessionId, command)
-      } catch {
-        out = await sessionService.exec(sessionId, command)
-      }
-      if (out.length > MAX_EXEC_OUTPUT) {
-        out = out.slice(0, MAX_EXEC_OUTPUT) + '\n…（输出过长，已截断）'
-      }
-      runStates.value = { ...runStates.value, [key]: { status: 'done', output: out } }
-      await sendResult(chatId, command, out || '（无输出）')
-    } catch (e) {
-      const msg = String(e)
-      runStates.value = { ...runStates.value, [key]: { status: 'error', output: msg } }
-      await sendResult(chatId, command, `执行失败：${msg}`)
-    }
+    await runGated(chatId, key, command, opts.source ?? 'manual', !!opts.approved)
   }
 
   /**
-   * 确认计划：置 confirmed，把计划原文回传给 LLM 开始逐步执行
-   * （回传原文而非依赖模型回忆上一轮；执行链路计数重置）
+   * 经后端闸门执行一条命令的核心流程（run 块与计划重试共用）
+   *
+   * 时序：ai_exec_prepare(approved) → rejected 展示原因 / needs_approval 弹窗
+   * （确认后 approved=true 重新 prepare，勾选「记住授权」同时写白名单）→
+   * allowed 后 PTY 可见路径执行，完成 ai_exec_finish 补记审计；
+   * PTY 写入失败回退 ai_exec_command（自带闸门 + 审计 + 截断）。
+   *
+   * @returns 执行是否成功（输出回传与计划推进由内部完成）
+   */
+  async function runGated(
+    chatId: string,
+    runKey: string,
+    command: string,
+    source: ExecSource,
+    approved: boolean,
+  ): Promise<boolean> {
+    const sessionId = sessionIdOf(chatId)
+    if (!sessionId) return false
+    // 1) 后端闸门预检（所有执行决策以闸门结果为准）
+    let prep: aiExecService.ExecPrepareResult
+    try {
+      prep = await aiExecService.execPrepare(chatId, command, source, approved)
+    } catch (e) {
+      runStates.value = { ...runStates.value, [runKey]: { status: 'error', output: String(e) } }
+      error.value = `执行预检失败：${String(e)}`
+      return false
+    }
+    if (prep.status === 'rejected') {
+      const text = rejectReasonText(prep.reason)
+      runStates.value = { ...runStates.value, [runKey]: { status: 'rejected', output: text } }
+      error.value = text
+      return false
+    }
+    if (prep.status === 'needs_approval') {
+      // 挂起链路，弹窗询问（danger 不会走到这里：UI 二次确认时已带 approved=true）
+      const profileId = chats.value.find((c) => c.id === chatId)?.profileId ?? ''
+      const messageId = runKey.slice(0, runKey.indexOf('#'))
+      const idxStr = runKey.slice(runKey.indexOf('#') + 1)
+      const choice = await new Promise<{ ok: boolean; remember?: 'chat' | 'profile' }>(
+        (resolve) => {
+          pendingConfirm.value = {
+            messageId,
+            index: Number.parseInt(idxStr, 10) || 0,
+            command,
+            chatId,
+            profileId,
+            resolve,
+          }
+        },
+      )
+      if (!choice.ok) return false // 用户跳过：不执行（自动链路随之停止）
+      approved = true
+      if (choice.remember) {
+        const scopeId = choice.remember === 'chat' ? chatId : profileId
+        void aiExecService
+          .allowlistAdd(command.trim(), prep.risk, choice.remember, scopeId)
+          .catch(() => {})
+      }
+      // 用户确认后带 approved=true 重新过闸
+      try {
+        prep = await aiExecService.execPrepare(chatId, command, source, true)
+      } catch (e) {
+        runStates.value = { ...runStates.value, [runKey]: { status: 'error', output: String(e) } }
+        error.value = `执行预检失败：${String(e)}`
+        return false
+      }
+      if (prep.status !== 'allowed') {
+        const text = rejectReasonText(prep.reason)
+        runStates.value = { ...runStates.value, [runKey]: { status: 'rejected', output: text } }
+        error.value = text
+        return false
+      }
+    }
+
+    // 2) 执行：默认 PTY 可见路径，完成后补记审计；写入失败回退非交互通道
+    runStates.value = { ...runStates.value, [runKey]: { status: 'running' } }
+    const started = Date.now()
+    try {
+      let out: string
+      let exitCode: number | undefined
+      try {
+        const r = await termExec.execInTerminalDetailed(sessionId, command)
+        out = r.text
+        exitCode = r.rc
+        void aiExecService
+          .execFinish(chatId, command, prep.risk, source, exitCode, Date.now() - started)
+          .catch(() => {})
+      } catch {
+        const res = await aiExecService.execCommand(chatId, command, source, approved)
+        if (res.status !== 'executed') throw new Error(res.error ?? '执行失败')
+        out = res.output ?? ''
+      }
+      out = truncateOutput(out)
+      runStates.value = { ...runStates.value, [runKey]: { status: 'done', output: out, exitCode } }
+      await sendResult(chatId, command, out || '（无输出）')
+      const ok = exitCode === undefined || exitCode === 0
+      advancePlan(chatId, ok, command)
+      return ok
+    } catch (e) {
+      const msg = String(e)
+      runStates.value = { ...runStates.value, [runKey]: { status: 'error', output: msg } }
+      await sendResult(chatId, command, `执行失败：${msg}`)
+      advancePlan(chatId, false, command)
+      return false
+    }
+  }
+
+  /** 取聊天当前解析到的 SSH 会话 id（执行时取，保证与预检同源） */
+  function sessionIdOf(chatId: string): string | null {
+    return resolveSessionForChat(chatId).sessionId
+  }
+
+  /* ---------------- 计划步骤状态机 ---------------- */
+
+  /** 更新 plan 状态（响应式）并序列化进所属消息的 meta 持久化 */
+  function setPlanState(key: string, plan: PlanState) {
+    planStates.value = { ...planStates.value, [key]: plan }
+    persistPlanMeta(key)
+  }
+
+  /** 把某消息全部 plan 块状态序列化进该消息的 meta 列 */
+  function persistPlanMeta(key: string) {
+    const messageId = key.slice(0, key.lastIndexOf('#'))
+    const chatId = findChatIdOf(messageId)
+    if (!chatId) return
+    const msg = messagesByChat.value[chatId]?.find((m) => m.id === messageId)
+    if (!msg) return
+    const plans: Record<number, PlanState> = {}
+    for (const [k, v] of Object.entries(planStates.value)) {
+      if (k.startsWith(`${messageId}#`)) plans[Number(k.slice(messageId.length + 1))] = v
+    }
+    const meta = JSON.stringify({ planStates: plans })
+    msg.meta = meta
+    void agentChatService.chatMessageSetMeta(chatId, messageId, meta).catch(() => {})
+  }
+
+  /** 某会话当前进行中的计划（running / paused_failed；多个时取首个匹配） */
+  function activePlanOf(chatId: string): { key: string; plan: PlanState } | null {
+    for (const [key, plan] of Object.entries(planStates.value)) {
+      if (plan.status !== 'running' && plan.status !== 'paused_failed') continue
+      const messageId = key.slice(0, key.lastIndexOf('#'))
+      if (findChatIdOf(messageId) === chatId) return { key, plan }
+    }
+    return null
+  }
+
+  /**
+   * 计划推进：计划运行期间每个 run 块完成后调用——
+   * 成功标当前步 done 并推进；失败标 failed 并暂停链（paused_failed，等用户重试/跳过/终止）
+   */
+  function advancePlan(chatId: string, ok: boolean, command: string) {
+    const active = activePlanOf(chatId)
+    if (!active || active.plan.status !== 'running') return
+    // 深拷贝当前计划，避免原地改引用类型漏掉响应式
+    const plan: PlanState = JSON.parse(JSON.stringify(active.plan))
+    const step = plan.steps[plan.currentIndex]
+    if (!step) return
+    step.command = command
+    if (ok) {
+      step.status = 'done'
+      plan.currentIndex++
+      if (plan.steps.every((s) => s.status === 'done' || s.status === 'skipped')) {
+        plan.status = 'done'
+      }
+    } else {
+      step.status = 'failed'
+      plan.status = 'paused_failed'
+      error.value = `计划第 ${plan.currentIndex + 1} 步执行失败，已暂停（可重试 / 跳过 / 终止计划）`
+    }
+    setPlanState(active.key, plan)
+  }
+
+  /**
+   * 确认计划：解析 plan 块编号行为结构化步骤，置 running，
+   * 把计划原文回传给 LLM 开始逐步执行（回传原文而非依赖模型回忆上一轮；执行链路计数重置）
    */
   async function confirmPlan(messageId: string, index: number, planText: string) {
     const chatId = findChatIdOf(messageId) ?? activeChatId.value
     if (!chatId || generatingChatId.value) return
     const key = `${messageId}#${index}`
-    if (planStates.value[key] && planStates.value[key] !== 'pending') return
-    planStates.value = { ...planStates.value, [key]: 'confirmed' }
+    const existing = planStates.value[key]
+    if (existing && existing.status !== 'pending_confirm') return
+    setPlanState(key, { steps: parsePlanSteps(planText), currentIndex: 0, status: 'running' })
     autoChain = 0
     await llmSend(chatId, `[计划已确认] 请按以下计划逐步执行：\n${planText}`)
   }
 
-  /** 取消计划：纯本地状态，不触发新一轮生成 */
-  function cancelPlan(messageId: string, index: number) {
+  /** 取消计划（待确认阶段）：纯本地状态，不触发新一轮生成 */
+  function cancelPlan(messageId: string, index: number, planText: string) {
     const key = `${messageId}#${index}`
-    if (planStates.value[key] && planStates.value[key] !== 'pending') return
-    planStates.value = { ...planStates.value, [key]: 'cancelled' }
+    const existing = planStates.value[key]
+    if (existing && existing.status !== 'pending_confirm') return
+    setPlanState(key, { steps: parsePlanSteps(planText), currentIndex: 0, status: 'cancelled' })
   }
 
   /** 消息内是否含未确认的 plan 块（计划模式兜底：计划未确认前不自动执行其中的 run 块） */
@@ -599,11 +821,67 @@ export const useAgentStore = defineStore('agent', () => {
     const plans = [...stripThink(message.content).matchAll(PLAN_RE)]
     return plans.some((_, i) => {
       const st = planStates.value[`${message.id}#${i}`]
-      return !st || st === 'pending'
+      return !st || st.status === 'pending_confirm'
     })
   }
 
-  /** 自动链路：执行回复中第一条未执行的 run 命令（查询直接执行，修改类按自动模式/弹窗确认，危险跳过留给手动） */
+  /** 重试失败步：已记录命令则直接重新过闸执行；否则通知 LLM 重新输出该步命令 */
+  async function retryPlanStep(messageId: string, index: number) {
+    const key = `${messageId}#${index}`
+    const plan = planStates.value[key]
+    if (!plan || plan.status !== 'paused_failed') return
+    const chatId = findChatIdOf(messageId)
+    if (!chatId || generatingChatId.value) return
+    const step = plan.steps[plan.currentIndex]
+    if (!step || step.status !== 'failed') return
+    const next: PlanState = JSON.parse(JSON.stringify(plan))
+    next.status = 'running'
+    next.steps[next.currentIndex].status = 'running'
+    setPlanState(key, next)
+    autoChain = 0
+    if (step.command) {
+      // 重试用独立的 run key（不复用原 run 块的 done/error 状态守卫）
+      await runGated(chatId, `${messageId}#retry${index}-${plan.currentIndex}`, step.command, 'plan', false)
+      return
+    }
+    await llmSend(chatId, `[计划步骤重试] 请重新执行第 ${plan.currentIndex + 1} 步：${step.text}`)
+  }
+
+  /** 跳过失败步：标 skipped 继续后续步骤 */
+  async function skipPlanStep(messageId: string, index: number) {
+    const key = `${messageId}#${index}`
+    const plan = planStates.value[key]
+    if (!plan || plan.status !== 'paused_failed') return
+    const chatId = findChatIdOf(messageId)
+    if (!chatId || generatingChatId.value) return
+    const step = plan.steps[plan.currentIndex]
+    if (!step || step.status !== 'failed') return
+    const next: PlanState = JSON.parse(JSON.stringify(plan))
+    next.steps[next.currentIndex].status = 'skipped'
+    next.currentIndex++
+    next.status = next.steps.every((s) => s.status === 'done' || s.status === 'skipped')
+      ? 'done'
+      : 'running'
+    setPlanState(key, next)
+    autoChain = 0
+    await llmSend(
+      chatId,
+      `[计划步骤已跳过] 第 ${plan.currentIndex + 1} 步「${step.text}」已跳过，请继续执行后续步骤。`,
+    )
+  }
+
+  /** 终止计划：状态 cancelled 并通知 LLM */
+  async function terminatePlan(messageId: string, index: number) {
+    const key = `${messageId}#${index}`
+    const plan = planStates.value[key]
+    if (!plan || (plan.status !== 'running' && plan.status !== 'paused_failed')) return
+    const chatId = findChatIdOf(messageId)
+    if (!chatId || generatingChatId.value) return
+    setPlanState(key, { ...plan, status: 'cancelled' })
+    await llmSend(chatId, '[计划已终止] 用户终止了执行计划，请停止后续命令并总结当前进展。')
+  }
+
+  /** 自动链路：执行回复中第一条未执行的 run 命令（查询直接执行；修改类自动模式带批准、否则闸门弹窗确认；危险跳过留给手动） */
   async function autoStep(chatId: string, message: ChatMessage) {
     if (autoChain >= MAX_AUTO_CHAIN) {
       error.value = `自动执行已达上限（${MAX_AUTO_CHAIN} 条），剩余命令请手动执行`
@@ -611,21 +889,21 @@ export const useAgentStore = defineStore('agent', () => {
     }
     // 计划模式兜底：计划阶段不应有 run 块；若有且计划未确认，不自动执行
     if (planMode.value && hasUnconfirmedPlan(message)) return
+    // 计划失败暂停 / 已终止：停止自动链，等用户在计划卡片上操作
+    const activePlan = activePlanOf(chatId)
+    if (activePlan && activePlan.plan.status !== 'running') return
     // 思考段内的内容不参与命令解析
     const cmds = [...stripThink(message.content).matchAll(RUN_RE)].map((m) => m[1].trim())
     for (let i = 0; i < cmds.length; i++) {
       if (runStates.value[`${message.id}#${i}`]) continue
-      const level = classifyCommand(cmds[i])
+      const level = await ensureRisk(cmds[i])
       if (level === 'danger') continue
-      if (level === 'modify' && !autoRun.value) {
-        // 未开启自动执行：挂起链路，弹窗询问用户是否执行该修改类命令
-        const ok = await new Promise<boolean>((resolve) => {
-          pendingConfirm.value = { messageId: message.id, index: i, command: cmds[i], resolve }
-        })
-        if (!ok) return // 用户跳过：停止链路，剩余命令留给手动
-      }
       autoChain++
-      await executeRun(message.id, i, cmds[i])
+      await executeRun(message.id, i, cmds[i], {
+        // 自动模式 = 用户对修改类命令的常驻批准（闸门按 approved 放行并记 approved 审计）
+        approved: level === 'modify' && autoRun.value,
+        source: activePlan ? 'plan' : 'auto',
+      })
       // 执行结果触发新一轮生成，其 ai_done 会继续 autoStep
       return
     }
@@ -634,10 +912,12 @@ export const useAgentStore = defineStore('agent', () => {
   /** 中断当前生成（本地立即定稿已流式到达的内容） */
   async function abort() {
     const chatId = generatingChatId.value
-    if (pendingConfirm.value) resolvePendingConfirm(false)
+    if (pendingConfirm.value) resolvePendingConfirm({ ok: false })
     await aiService.chatAbort().catch(() => {})
     generatingChatId.value = null
     if (!chatId) return
+    streamBytes.delete(chatId)
+    streamLimited.delete(chatId)
     const last = messagesByChat.value[chatId]?.at(-1)
     if (last && last.role === 'assistant' && last.pending) {
       last.pending = false
@@ -661,13 +941,16 @@ export const useAgentStore = defineStore('agent', () => {
     runStates,
     planStates,
     pendingConfirm,
-    isDangerous,
-    classifyCommand,
+    riskOf,
+    ensureRisk,
     resolveSessionForChat,
     execBlockReason,
     resolvePendingConfirm,
     confirmPlan,
     cancelPlan,
+    retryPlanStep,
+    skipPlanStep,
+    terminatePlan,
     newChat,
     switchChat,
     deleteChat,

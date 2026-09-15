@@ -4,6 +4,7 @@
 //! 实现 `/v1/chat/completions` 流式调用 + SSE 解析。
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
 use crate::provider::history::Message;
@@ -105,6 +106,7 @@ impl LlmClient for OpenAiClient {
         &self,
         messages: &[Message],
         on_token: std::sync::Arc<dyn Fn(String) + Send + Sync>,
+        cancel: CancellationToken,
     ) -> Result<()> {
         let url = format!("{}/chat/completions", self.base_url());
 
@@ -143,8 +145,15 @@ impl LlmClient for OpenAiClient {
         let mut buf = String::new();
         let mut think = ThinkWrap::default();
 
-        'outer: while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| Error::LlmApi(format!("读取流失败: {e}")))?;
+        'outer: loop {
+            // 监听取消令牌：用户中断时立即跳出，返回 Cancelled 而非继续读流
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => return Err(Error::Cancelled),
+                chunk = stream.next() => match chunk {
+                    Some(chunk) => chunk.map_err(|e| Error::LlmApi(format!("读取流失败: {e}")))?,
+                    None => break 'outer,
+                },
+            };
             buf.push_str(&String::from_utf8_lossy(&chunk));
 
             // 按行处理

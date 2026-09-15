@@ -9,6 +9,7 @@
 //! Claude Code 的 `ANTHROPIC_AUTH_TOKEN` Bearer 约定，官方端点则禁止两种头叠加）。
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
 use crate::provider::history::{Message, Role};
@@ -183,6 +184,7 @@ impl LlmClient for AnthropicClient {
         &self,
         messages: &[Message],
         on_token: std::sync::Arc<dyn Fn(String) + Send + Sync>,
+        cancel: CancellationToken,
     ) -> Result<()> {
         let url = format!("{}/v1/messages", self.base_url());
 
@@ -222,8 +224,15 @@ impl LlmClient for AnthropicClient {
         let mut buf = String::new();
         let mut think = ThinkWrap::default();
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| Error::LlmApi(format!("读取流失败: {e}")))?;
+        loop {
+            // 监听取消令牌：用户中断时立即跳出，返回 Cancelled 而非继续读流
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => return Err(Error::Cancelled),
+                chunk = stream.next() => match chunk {
+                    Some(chunk) => chunk.map_err(|e| Error::LlmApi(format!("读取流失败: {e}")))?,
+                    None => break,
+                },
+            };
             buf.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buf.find('\n') {

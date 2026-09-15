@@ -93,6 +93,15 @@ pub struct PtyHandle {
     pub channel: russh::Channel<client::Msg>,
 }
 
+/// 一次性命令执行结果（[`SshSession::exec_with_status`] 返回）
+#[derive(Debug, Clone)]
+pub struct ExecOutput {
+    /// stdout + stderr 合并文本（lossy 转码）
+    pub output: String,
+    /// 远端退出码（None = 对端未上报 ExitStatus）
+    pub exit_code: Option<u32>,
+}
+
 /// host key 确认挑战信息（未知主机时交由应用层 UI 确认）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HostKeyChallenge {
@@ -513,6 +522,13 @@ impl SshSession {
     /// 流程：`channel_open_session` → `channel.exec` → 循环 `wait()` 收集
     /// stdout/stderr 直到 EOF/Close。超时由调用方（tokio::time::timeout）控制。
     pub async fn exec(&self, command: &str) -> Result<String> {
+        Ok(self.exec_with_status(command).await?.output)
+    }
+
+    /// 同 [`Self::exec`]，但额外返回远端退出码（AI 命令审计用）
+    ///
+    /// 退出码为 `None` 表示对端未上报 `ExitStatus`（罕见，如通道异常关闭）。
+    pub async fn exec_with_status(&self, command: &str) -> Result<ExecOutput> {
         let mut channel = {
             let handle = self.handle.lock().await;
             handle
@@ -527,6 +543,7 @@ impl SshSession {
             .map_err(|e| Error::Terminal(format!("exec 请求失败: {e}")))?;
 
         let mut out: Vec<u8> = Vec::new();
+        let mut exit_code: Option<u32> = None;
         loop {
             match channel.wait().await {
                 Some(russh::ChannelMsg::Data { ref data }) => {
@@ -536,6 +553,7 @@ impl SshSession {
                     out.extend_from_slice(data)
                 }
                 Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = Some(exit_status);
                     if exit_status != 0 {
                         tracing::warn!(
                             session_id = %self.id,
@@ -551,7 +569,10 @@ impl SshSession {
                 _ => {}
             }
         }
-        Ok(String::from_utf8_lossy(&out).into_owned())
+        Ok(ExecOutput {
+            output: String::from_utf8_lossy(&out).into_owned(),
+            exit_code,
+        })
     }
 
     /// 在当前连接上打开 SFTP 通道并初始化协议

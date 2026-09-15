@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
 use crate::provider::context::Context;
@@ -63,6 +64,8 @@ pub struct ChatProvider {
     histories: Mutex<HashMap<String, History>>,
     /// 取消标志（用户中断）
     cancelled: AsyncMutex<bool>,
+    /// 取消令牌（中断进行中的流式请求；每次 send 前换新）
+    cancel_token: AsyncMutex<CancellationToken>,
 }
 
 impl ChatProvider {
@@ -73,6 +76,7 @@ impl ChatProvider {
             config: AsyncMutex::new(None),
             histories: Mutex::new(HashMap::new()),
             cancelled: AsyncMutex::new(false),
+            cancel_token: AsyncMutex::new(CancellationToken::new()),
         }
     }
 
@@ -130,8 +134,13 @@ impl AgentProvider for ChatProvider {
             .clone();
         drop(client_guard);
 
-        // 重置取消标志
+        // 重置取消标志，并换新取消令牌（旧令牌可能已被 abort 触发过）
         *self.cancelled.lock().await = false;
+        let cancel = {
+            let mut guard = self.cancel_token.lock().await;
+            *guard = CancellationToken::new();
+            guard.clone()
+        };
 
         // 组装消息列表
         let mut messages: Vec<Message> = Vec::new();
@@ -172,11 +181,11 @@ impl AgentProvider for ChatProvider {
             on_token(token);
         }) as Arc<dyn Fn(String) + Send + Sync>;
 
-        // 调用 LLM（传 Arc clone）
-        let result = client.chat_stream(&messages, merged).await;
+        // 调用 LLM（传 Arc clone 与取消令牌）
+        let result = client.chat_stream(&messages, merged, cancel).await;
 
-        // 检查是否被取消
-        if *self.cancelled.lock().await {
+        // 检查是否被取消（含流因取消令牌中断返回的 Error::Cancelled 路径）
+        if *self.cancelled.lock().await || matches!(result, Err(Error::Cancelled)) {
             let partial = strip_think(&assistant_content.lock().unwrap().clone());
             if !partial.is_empty() {
                 self.push_assistant(session, partial);
@@ -196,6 +205,8 @@ impl AgentProvider for ChatProvider {
 
     async fn abort(&self) -> Result<()> {
         *self.cancelled.lock().await = true;
+        // 触发取消令牌，立即中断进行中的流式请求
+        self.cancel_token.lock().await.cancel();
         Ok(())
     }
 

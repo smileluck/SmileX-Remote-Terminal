@@ -36,7 +36,8 @@ export interface SnippetGroup {
  *   退出码非零即判定失败，整组执行失败中止
  * - 服务条目（kind='service'）：command 字段存服务名；
  *   状态经静默 exec 通道轮询（startStatusPolling/stopStatusPolling 由面板组件管理生命周期），
- *   快捷操作 runServiceAction 在终端可见执行 systemctl start|stop|restart
+ *   快捷操作 runServiceAction 在终端可见执行自定义命令（startCmd/stopCmd/restartCmd），
+ *   留空回退 systemctl start|stop|restart；查看状态同理用 statusCmd 或 systemctl status
  */
 export const useSnippetsStore = defineStore('snippets', () => {
   /** 全部片段（顺序 = 展示顺序） */
@@ -245,16 +246,31 @@ export const useSnippetsStore = defineStore('snippets', () => {
   }
 
   /**
+   * 按条目工作目录包装命令：有 workDir 时在子 shell 中 cd 后执行，
+   * 不改变终端交互 shell 的 cwd；单引号转义防路径含空格/引号
+   */
+  function withWorkDir(s: CommandSnippet, command: string): string {
+    const dir = s.workDir.trim()
+    if (!dir) return command
+    const quoted = `'${dir.replace(/'/g, `'\\''`)}'`
+    return `( cd ${quoted} && ${command} )`
+  }
+
+  /**
    * 条目在终端实际执行的命令
    *
    * - command 条目：原样执行
-   * - service 条目：执行 `systemctl status`（--no-pager 避免 pager 阻塞终端；
+   * - service 条目：执行 statusCmd（自定义查看状态命令），
+   *   留空则 `systemctl status`（--no-pager 避免 pager 阻塞终端；
    *   `|| true` 兜底：服务停止时 status 退出码非零，属正常查询结果而非执行失败）
+   * - 两者均应用 workDir 包装
    */
   function effectiveCommand(s: CommandSnippet): string {
-    return s.kind === 'service'
-      ? `systemctl status --no-pager ${s.command} || true`
-      : s.command
+    const cmd =
+      s.kind !== 'service'
+        ? s.command
+        : s.statusCmd.trim() || `systemctl status --no-pager ${s.command} || true`
+    return withWorkDir(s, cmd)
   }
 
   /** 在终端执行条目（供 runOne / 服务快捷操作共用） */
@@ -284,9 +300,11 @@ export const useSnippetsStore = defineStore('snippets', () => {
     await runCommand(snippet, effectiveCommand(snippet))
   }
 
-  /** 服务快捷操作：在终端可见执行 systemctl start|stop|restart，完成后延迟刷新状态 */
+  /** 服务快捷操作：在终端可见执行自定义命令（startCmd/stopCmd/restartCmd），
+   *  留空回退 systemctl start|stop|restart；应用 workDir 包装；完成后延迟刷新状态 */
   async function runServiceAction(s: CommandSnippet, action: 'start' | 'stop' | 'restart') {
-    await runCommand(s, `systemctl ${action} ${s.command}`)
+    const custom = { start: s.startCmd, stop: s.stopCmd, restart: s.restartCmd }[action].trim()
+    await runCommand(s, withWorkDir(s, custom || `systemctl ${action} ${s.command}`))
     setTimeout(() => void refreshServiceStatus(), 1000)
   }
 
@@ -337,7 +355,7 @@ export const useSnippetsStore = defineStore('snippets', () => {
       // 自定义检查命令：包装执行并回显退出码（输出全部丢弃，只认 SVC_RC）
       const out = await sessionService.exec(
         sid,
-        `{ ${checkCmd} ; } >/dev/null 2>&1; echo "SVC_RC=$?"`,
+        `${withWorkDir(s, `{ ${checkCmd} ; }`)} >/dev/null 2>&1; echo "SVC_RC=$?"`,
       )
       const matches = [...out.matchAll(/SVC_RC=(\d+)/g)]
       if (!matches.length) return 'unknown'

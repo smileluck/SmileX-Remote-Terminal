@@ -8,6 +8,7 @@ description = "SmileX AI 运维助手核心：Chat 已实现 + Work trait 预留
 [dependencies]
 # workspace 依赖
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -16,4 +17,5 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+regex = "1"
 futures-util = "0.3"

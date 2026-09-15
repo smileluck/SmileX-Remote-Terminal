@@ -14,6 +14,7 @@ pub mod ollama;
 pub mod openai;
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::Result;
 use crate::provider::history::Message;
@@ -136,10 +137,13 @@ pub trait LlmClient: Send + Sync {
     /// 流式对话
     ///
     /// `on_token` 每收到一个 token 触发一次。需 `Send + Sync` 以支持异步跨线程。
+    /// `cancel` 取消令牌：读取响应流的循环会监听它，一旦取消立即中断
+    /// 并返回 [`crate::Error::Cancelled`]，而非等流自然结束。
     async fn chat_stream(
         &self,
         messages: &[Message],
         on_token: std::sync::Arc<dyn Fn(String) + Send + Sync>,
+        cancel: CancellationToken,
     ) -> Result<()>;
 
     /// 传输协议
