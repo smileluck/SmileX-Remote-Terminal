@@ -16,6 +16,9 @@
  *   拖到分区空白：条目进该分区未分组，整组转入该分区末尾
  * - 执行：整组顺序执行（仅当前 Tab 类型条目，等待每条完成，退出码非零中止）/
  *   单条执行，走终端标记协议（termExec），无活跃 SSH 会话时按钮置灰
+ * - 批量发送：工具栏「批量」勾选已连接的 SSH 会话后，命令/整组执行并行
+ *   发送到所有选中主机（主机内仍顺序执行、失败中止该主机，主机间互不影响）；
+ *   不勾选则仅发送到当前会话；服务条目不参与批量
  * - 服务条目：静默通道（sessionService.exec）轮询运行状态（10s），
  *   提供启动/停止/重启快捷操作（终端可见执行 systemctl）
  */
@@ -34,6 +37,9 @@ import {
   NTabs,
   NTab,
   NDropdown,
+  NPopover,
+  NCheckbox,
+  NCheckboxGroup,
   useMessage,
   useDialog,
 } from 'naive-ui'
@@ -51,6 +57,7 @@ import {
   Clock,
   Eye,
   Refresh,
+  Affiliate,
 } from '@vicons/tabler'
 import { useSnippetsStore, type SnippetGroup, type ServiceStatus } from '@/stores/snippets'
 import { useTabsStore } from '@/stores/tabs'
@@ -332,9 +339,46 @@ function removeOne(s: CommandSnippet) {
 
 /* ---------------- 执行 ---------------- */
 
+/** 已连接的 SSH 会话（批量发送候选目标） */
+const sshSessions = computed(() =>
+  tabs.tabs.filter((t) => t.kind === 'ssh' && t.sessionId && !t.disconnected),
+)
+
+/** 有效批量目标（剔除已断开/已关闭的选中项） */
+const validBatchTargets = computed(() => {
+  const ids = new Set(sshSessions.value.map((t) => t.sessionId!))
+  return store.batchTargets.filter((id) => ids.has(id))
+})
+
+/** 命令执行按钮可用：批量模式有目标即可，不要求激活 Tab 本身是 SSH */
+const canExec = computed(
+  () => !store.running && (validBatchTargets.value.length > 0 || store.canRun),
+)
+
+/** 主机显示名（sessionId → 标签标题） */
+function sessionTitle(sid: string): string {
+  return sshSessions.value.find((t) => t.sessionId === sid)?.title ?? sid
+}
+
+/** 批量执行结果汇总提示 */
+function reportBatch(name: string, total: number, failed: string[]) {
+  if (!failed.length) {
+    message.success(`「${name}」已在 ${total} 台主机执行完成`)
+  } else {
+    message.warning(
+      `「${name}」：${total} 台主机中 ${failed.length} 台失败（${failed.map(sessionTitle).join('、')}）`,
+    )
+  }
+}
+
 async function runOne(s: CommandSnippet) {
   try {
-    await store.runOne(s)
+    if (s.kind === 'command' && validBatchTargets.value.length) {
+      const failed = await store.runOneToTargets(s, [...validBatchTargets.value])
+      reportBatch(s.name, validBatchTargets.value.length, failed)
+    } else {
+      await store.runOne(s)
+    }
   } catch (e) {
     message.error(String(e))
   }
@@ -342,9 +386,14 @@ async function runOne(s: CommandSnippet) {
 
 async function runGroup(g: SnippetGroup) {
   try {
-    // 仅从命令/服务 Tab 的分组列表触发，activeKind 在此必为 SnippetKind
-    await store.runGroup(g.key, activeKind.value as SnippetKind)
-    message.success(`分组「${g.name}」执行完成`)
+    if (activeKind.value === 'command' && validBatchTargets.value.length) {
+      const failed = await store.runGroupToTargets(g.key, 'command', [...validBatchTargets.value])
+      reportBatch(`分组 ${g.name}`, validBatchTargets.value.length, failed)
+    } else {
+      // 仅从命令/服务 Tab 的分组列表触发，activeKind 在此必为 SnippetKind
+      await store.runGroup(g.key, activeKind.value as SnippetKind)
+      message.success(`分组「${g.name}」执行完成`)
+    }
   } catch (e) {
     message.error(String(e))
   }
@@ -578,6 +627,39 @@ async function applyDrop(
         <NTab name="service" tab="服务" />
         <NTab name="directory" tab="目录" />
       </NTabs>
+      <NPopover trigger="click" placement="bottom-start" :disabled="sshSessions.length < 2">
+        <template #trigger>
+          <NButton
+            size="tiny"
+            quaternary
+            :type="validBatchTargets.length ? 'primary' : 'default'"
+            :title="sshSessions.length < 2 ? '批量发送（需至少 2 个已连接的 SSH 会话）' : '批量发送：选择目标主机'"
+          >
+            <template #icon><NIcon :component="Affiliate" /></template>
+            批量{{ validBatchTargets.length ? `（${validBatchTargets.length}）` : '' }}
+          </NButton>
+        </template>
+        <div class="sp-batch">
+          <div class="sp-batch-head">
+            <span class="sp-batch-title">发送到 {{ validBatchTargets.length || 0 }} / {{ sshSessions.length }} 台主机</span>
+            <button class="sp-batch-op" @click="store.setBatchTargets(sshSessions.map((t) => t.sessionId!))">全选</button>
+            <button class="sp-batch-op" @click="store.setBatchTargets([])">清空</button>
+          </div>
+          <NCheckboxGroup
+            :value="validBatchTargets"
+            class="sp-batch-list"
+            @update:value="(v: (string | number)[]) => store.setBatchTargets(v.map(String))"
+          >
+            <NCheckbox
+              v-for="t in sshSessions"
+              :key="t.sessionId"
+              :value="t.sessionId"
+              :label="t.title + (t.id === tabs.activeTab?.id ? '（当前）' : '')"
+            />
+          </NCheckboxGroup>
+          <div class="sp-batch-hint">勾选后，命令/整组执行将并行发送到所有选中主机；不勾选则仅发送到当前会话</div>
+        </div>
+      </NPopover>
       <NDropdown trigger="click" :options="createOptions" @select="openCreate">
         <NButton size="tiny" quaternary circle title="新增">
           <template #icon><NIcon :component="Plus" /></template>
@@ -639,8 +721,12 @@ async function applyDrop(
         <span class="sp-ops" @click.stop @pointerdown.stop>
           <button
             class="sp-op"
-            title="顺序执行整组"
-            :disabled="!store.canRun || store.running"
+            :title="
+              activeKind === 'command' && validBatchTargets.length
+                ? `批量顺序执行整组（${validBatchTargets.length} 台主机，主机内顺序执行、失败中止该主机）`
+                : '顺序执行整组'
+            "
+            :disabled="activeKind === 'command' ? !canExec : !store.canRun || store.running"
             @click="runGroup(g)"
           >
             <NIcon :component="PlayerPlay" :size="13" />
@@ -741,8 +827,8 @@ async function applyDrop(
             <button
               v-else
               class="sp-op"
-              title="执行"
-              :disabled="!store.canRun || store.running"
+              :title="validBatchTargets.length ? `批量执行（${validBatchTargets.length} 台主机）` : '执行'"
+              :disabled="!canExec"
               @click="runOne(s)"
             >
               <NIcon :component="PlayerPlay" :size="13" />
@@ -1127,5 +1213,42 @@ body.snippet-dragging .sp-root {
 body.snippet-dragging {
   user-select: none;
   cursor: grabbing;
+}
+/* 批量发送弹层：NPopover 内容 teleport 到 body，scoped 样式到不了，需全局定义 */
+.sp-batch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 260px;
+}
+.sp-batch-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sp-batch-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sp-batch-op {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--primary);
+  cursor: pointer;
+}
+.sp-batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sp-batch-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 </style>

@@ -49,6 +49,14 @@ export const useSnippetsStore = defineStore('snippets', () => {
   /** 是否有执行进行中（防重入） */
   const running = ref(false)
 
+  /** 批量发送目标会话（sessionId 列表；空 = 仅当前激活会话） */
+  const batchTargets = ref<string[]>([])
+
+  /** 设置批量发送目标 */
+  function setBatchTargets(ids: string[]) {
+    batchTargets.value = ids
+  }
+
   /** 已加载的 profileId（null = 未加载） */
   const loadedFor = ref<string | null>(null)
 
@@ -82,6 +90,14 @@ export const useSnippetsStore = defineStore('snippets', () => {
 
   /** 是否有可执行的 SSH 会话（执行按钮置灰依据） */
   const canRun = computed(() => activeSshSessionId() !== null)
+
+  /** 当前已连接的 SSH 会话 id 列表（批量发送的有效目标范围） */
+  function connectedSshSessionIds(): string[] {
+    const tabs = useTabsStore()
+    return tabs.tabs
+      .filter((t) => t.kind === 'ssh' && t.sessionId && !t.disconnected)
+      .map((t) => t.sessionId!)
+  }
 
   /** 加载当前主机档案可见的片段（profileId 变化时强制重载；force 强制刷新） */
   async function load(force = false) {
@@ -343,6 +359,73 @@ export const useSnippetsStore = defineStore('snippets', () => {
     }
   }
 
+  /**
+   * 批量执行单条命令到多台主机（主机间并行；单台失败不影响其他主机）。
+   * 返回失败主机的 sessionId 列表。
+   */
+  async function runOneToTargets(s: CommandSnippet, sids: string[]): Promise<string[]> {
+    if (!sids.length) throw new Error('未选择目标会话')
+    if (running.value) throw new Error('已有命令在执行中，请等待完成')
+    running.value = true
+    setRunState(s.id, 'running')
+    try {
+      const cmd = effectiveCommand(s)
+      const results = await Promise.allSettled(
+        sids.map(async (sid) => {
+          const r = await execInTerminalDetailed(sid, cmd)
+          if (r.rc !== undefined && r.rc !== 0) throw new Error(`退出码 ${r.rc}`)
+        }),
+      )
+      const failed = sids.filter((_, i) => results[i].status === 'rejected')
+      setRunState(s.id, failed.length ? 'failed' : 'success')
+      return failed
+    } finally {
+      running.value = false
+    }
+  }
+
+  /**
+   * 批量顺序执行整组到多台主机：每台主机内逐条执行（失败即中止该主机），
+   * 主机间并行；条目状态按聚合结果标记（任一主机失败即 failed）。
+   * 返回失败主机的 sessionId 列表。
+   */
+  async function runGroupToTargets(
+    groupKey: string,
+    kind: SnippetKind | undefined,
+    sids: string[],
+  ): Promise<string[]> {
+    if (!sids.length) throw new Error('未选择目标会话')
+    if (running.value) throw new Error('已有命令在执行中，请等待完成')
+    const all = groups.value.find((g) => g.key === groupKey)?.items ?? []
+    const items = kind ? all.filter((s) => s.kind === kind) : all
+    if (!items.length) return []
+    running.value = true
+    for (const s of items) setRunState(s.id, 'pending')
+    const failedItems = new Set<string>()
+    try {
+      const results = await Promise.allSettled(
+        sids.map(async (sid) => {
+          for (const s of items) {
+            if (!failedItems.has(s.id)) setRunState(s.id, 'running')
+            try {
+              const r = await execInTerminalDetailed(sid, effectiveCommand(s))
+              if (r.rc !== undefined && r.rc !== 0) {
+                throw new Error(`「${s.name}」失败（退出码 ${r.rc}）`)
+              }
+            } catch (e) {
+              failedItems.add(s.id)
+              throw e
+            }
+          }
+        }),
+      )
+      for (const s of items) setRunState(s.id, failedItems.has(s.id) ? 'failed' : 'success')
+      return sids.filter((_, i) => results[i].status === 'rejected')
+    } finally {
+      running.value = false
+    }
+  }
+
   /* ---------------- 服务状态监控（静默 exec 通道，不影响 PTY） ---------------- */
 
   let refreshingStatus = false
@@ -410,10 +493,13 @@ export const useSnippetsStore = defineStore('snippets', () => {
     runStates,
     serviceStatus,
     running,
+    batchTargets,
     groups,
     canRun,
     loadedFor,
     activeProfileId,
+    setBatchTargets,
+    connectedSshSessionIds,
     load,
     persistOrder,
     save,
@@ -424,6 +510,8 @@ export const useSnippetsStore = defineStore('snippets', () => {
     moveGroup,
     runOne,
     runGroup,
+    runOneToTargets,
+    runGroupToTargets,
     runServiceAction,
     refreshServiceStatus,
     startStatusPolling,
