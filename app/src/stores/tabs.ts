@@ -56,6 +56,25 @@ export const useTabsStore = defineStore('tabs', () => {
     }
   }
 
+  /**
+   * 摘出标签用于拖拽分屏：从列表移除 tab 并修正 activeId，
+   * 但不断开会话、不停监控采样（会话所有权移交给目标 TerminalView 的 pane）。
+   * 返回会话信息；tab 不存在时返回 null。
+   */
+  function detachTabForSplit(
+    id: string,
+  ): { sessionId?: string; title: string; profileId?: string } | null {
+    const idx = tabs.value.findIndex((t) => t.id === id)
+    if (idx === -1) return null
+    const [tab] = tabs.value.splice(idx, 1)
+
+    if (activeId.value === id) {
+      const next = tabs.value[idx] || tabs.value[idx - 1] || null
+      activeId.value = next?.id ?? null
+    }
+    return { sessionId: tab.sessionId, title: tab.title, profileId: tab.profileId }
+  }
+
   /** 关闭指定标签左侧的所有标签 */
   function closeTabsToLeft(id: string) {
     const idx = tabs.value.findIndex((t) => t.id === id)
@@ -116,6 +135,7 @@ export const useTabsStore = defineStore('tabs', () => {
     activeTab,
     addTab,
     closeTab,
+    detachTabForSplit,
     closeTabsToLeft,
     closeTabsToRight,
     closeAllTabs,

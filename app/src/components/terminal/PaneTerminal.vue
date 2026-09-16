@@ -506,7 +506,7 @@ const pickedSession = ref<string | null>(null)
   flex: 1;
   min-height: 0;
   background: var(--bg-app);
-  padding: 2px;
+  padding: 4px;
 }
 .pane-picker {
   flex: 1;

@@ -10,12 +10,16 @@ import { NIcon, NButton, NDropdown, useMessage } from 'naive-ui'
 import { Terminal2, DeviceDesktop, Settings, X } from '@vicons/tabler'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfilesStore } from '@/stores/profiles'
+import { useLayoutStore } from '@/stores/layout'
 import { useConnectFlow } from '@/composables/useConnectFlow'
+import { useTabDrag, type DropZone } from '@/composables/useTabDrag'
 import type { SessionKind, TabItem } from '@/types/session'
 import { ref, type Component } from 'vue'
 
 const tabs = useTabsStore()
 const profiles = useProfilesStore()
+const layout = useLayoutStore()
+const tabDrag = useTabDrag()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
 
@@ -96,6 +100,96 @@ async function reconnectTab(tab: TabItem) {
     message.error(`重连失败：${e}`)
   }
 }
+
+/* ---------------- Tab 拖拽分屏（Pointer Events 自实现，参照 SnippetPanel） ---------------- */
+
+/** 拖拽判定阈值（px）：位移内视为点击 */
+const DRAG_THRESHOLD = 6
+
+interface TabDragInfo {
+  tab: TabItem
+  startX: number
+  startY: number
+  started: boolean
+}
+
+let dragInfo: TabDragInfo | null = null
+/** 拖拽结束的 pointerup 会紧跟一次 click，需吞掉防止误切换 active tab */
+let suppressClick = false
+
+function onTabPointerDown(e: PointerEvent, tab: TabItem) {
+  if (e.button !== 0) return
+  // 仅 SSH 会话 tab 可拖（需有效会话且未断开）；点在关闭按钮上时不启动拖拽
+  if (tab.kind !== 'ssh' || !tab.sessionId || tab.sessionId === 'connected' || tab.disconnected) return
+  if ((e.target as HTMLElement).closest('.tab-close')) return
+  e.preventDefault() // 阻止文本选中；不影响 click
+  dragInfo = { tab, startX: e.clientX, startY: e.clientY, started: false }
+  window.addEventListener('pointermove', onTabPointerMove)
+  window.addEventListener('pointerup', onTabPointerUp)
+  window.addEventListener('pointercancel', onTabPointerUp)
+}
+
+function onTabPointerMove(e: PointerEvent) {
+  const d = dragInfo
+  if (!d) return
+  if (!d.started) {
+    if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_THRESHOLD) return
+    d.started = true
+    tabDrag.startDrag(d.tab)
+  }
+  tabDrag.moveGhost(e.clientX, e.clientY)
+  tabDrag.setDropZone(hitDropZone(e.clientX, e.clientY))
+}
+
+/** 命中 MainContent 的放置覆盖层（data-tab-drop）：按指针相对位置折算四边缘区 */
+function hitDropZone(x: number, y: number): DropZone | null {
+  const el = document.elementFromPoint(x, y)?.closest('[data-tab-drop]') as HTMLElement | null
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  const fx = (x - r.left) / r.width
+  const fy = (y - r.top) / r.height
+  if (fx < 0.3) return 'left'
+  if (fx > 0.7) return 'right'
+  if (fy < 0.3) return 'top'
+  if (fy > 0.7) return 'bottom'
+  return null
+}
+
+function onTabPointerUp() {
+  window.removeEventListener('pointermove', onTabPointerMove)
+  window.removeEventListener('pointerup', onTabPointerUp)
+  window.removeEventListener('pointercancel', onTabPointerUp)
+  const d = dragInfo
+  dragInfo = null
+  if (!d?.started) return
+  suppressClick = true
+  // click 紧跟 pointerup 派发（同一事件序列）；若无 click（落点在 tab 外）则下一拍复位，避免吞掉后续正常点击
+  setTimeout(() => (suppressClick = false), 0)
+  const result = tabDrag.endDrag()
+  if (!result) return
+  const { tab, zone } = result
+  const targetTabId = tabs.activeId
+  // 放置目标始终是当前激活的 tab（覆盖层只在「拖到其他 SSH tab 视图」时出现）
+  if (!targetTabId || targetTabId === tab.id) return
+  const detached = tabs.detachTabForSplit(tab.id)
+  if (!detached?.sessionId) return
+  layout.requestSplit({
+    targetTabId,
+    sessionId: detached.sessionId,
+    dir: zone === 'left' || zone === 'right' ? 'row' : 'column',
+    before: zone === 'left' || zone === 'top',
+    title: detached.title,
+    profileId: detached.profileId,
+  })
+}
+
+function onTabClick(tab: TabItem) {
+  if (suppressClick) {
+    suppressClick = false
+    return
+  }
+  tabs.setActive(tab.id)
+}
 </script>
 
 <template>
@@ -104,9 +198,10 @@ async function reconnectTab(tab: TabItem) {
       v-for="tab in tabs.tabs"
       :key="tab.id"
       class="tab"
-      :class="{ active: tab.id === tabs.activeId }"
+      :class="{ active: tab.id === tabs.activeId, dragging: tabDrag.draggingTab.value?.id === tab.id }"
       :title="tab.title"
-      @click="tabs.setActive(tab.id)"
+      @click="onTabClick(tab)"
+      @pointerdown="(e: PointerEvent) => onTabPointerDown(e, tab)"
       @contextmenu.prevent="(e: MouseEvent) => onContextMenu(e, tab)"
     >
       <NIcon :component="kindIcon[tab.kind]" class="tab-icon" />
@@ -157,6 +252,9 @@ async function reconnectTab(tab: TabItem) {
 .tab:hover {
   background: var(--bg-elevated);
   color: var(--text-primary);
+}
+.tab.dragging {
+  opacity: 0.45;
 }
 .tab.active {
   background: var(--bg-sidebar);

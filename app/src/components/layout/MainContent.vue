@@ -14,6 +14,7 @@ import { Terminal2, DeviceDesktop } from '@vicons/tabler'
 import type { TabItem } from '@/types/session'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
+import { useTabDrag } from '@/composables/useTabDrag'
 import BrandMark from '@/components/common/BrandMark.vue'
 import TerminalView from '@/components/terminal/TerminalView.vue'
 import DesktopView from '@/components/desktop/DesktopView.vue'
@@ -22,9 +23,21 @@ import SettingsView from '@/components/settings/SettingsView.vue'
 defineProps<{ tab: TabItem | null }>()
 const tabs = useTabsStore()
 const ui = useUiStore()
+const tabDrag = useTabDrag()
 
 /** 所有 SSH tab：常驻渲染、按需显示，保证每个 tab 的终端实例与分屏状态完全独立 */
 const sshTabs = computed(() => tabs.tabs.filter((t) => t.kind === 'ssh'))
+
+/**
+ * 是否显示 tab 拖放区：拖拽中 + 目标是「其他」SSH tab（不能拖到自身视图）
+ * + 目标视图窗格数未达上限（窗格数由 TerminalView 上报到 useTabDrag）
+ */
+const dropVisible = computed(() => {
+  const d = tabDrag.draggingTab.value
+  const active = tabs.activeTab
+  if (!d || !active || active.kind !== 'ssh' || d.id === active.id) return false
+  return (tabDrag.paneCounts.get(active.id) ?? 1) < 4
+})
 </script>
 
 <template>
@@ -61,6 +74,14 @@ const sshTabs = computed(() => tabs.tabs.filter((t) => t.kind === 'ssh'))
         </div>
       </div>
     </div>
+
+    <!-- Tab 拖放区：拖到某一边缘即把该 tab 的会话并入当前视图为分屏 pane（命中检测在 TabBar） -->
+    <div v-if="dropVisible" class="tab-drop-overlay" data-tab-drop>
+      <div class="tab-drop-zone zone-left" :class="{ on: tabDrag.dropZone.value === 'left' }" />
+      <div class="tab-drop-zone zone-right" :class="{ on: tabDrag.dropZone.value === 'right' }" />
+      <div class="tab-drop-zone zone-top" :class="{ on: tabDrag.dropZone.value === 'top' }" />
+      <div class="tab-drop-zone zone-bottom" :class="{ on: tabDrag.dropZone.value === 'bottom' }" />
+    </div>
   </div>
 </template>
 
@@ -69,7 +90,51 @@ const sshTabs = computed(() => tabs.tabs.filter((t) => t.kind === 'ssh'))
   flex: 1;
   overflow: hidden;
   display: flex;
+  position: relative;
   background: var(--bg-app);
+}
+.tab-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
+.tab-drop-zone {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(76, 141, 255, 0.1);
+  border: 1px dashed rgba(76, 141, 255, 0.4);
+  border-radius: 6px;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.tab-drop-zone.on {
+  background: rgba(76, 141, 255, 0.28);
+  border: 1px solid var(--primary);
+}
+.zone-left {
+  left: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 30%;
+}
+.zone-right {
+  right: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 30%;
+}
+.zone-top {
+  left: calc(30% + 8px);
+  right: calc(30% + 8px);
+  top: 4px;
+  height: 30%;
+}
+.zone-bottom {
+  left: calc(30% + 8px);
+  right: calc(30% + 8px);
+  bottom: 4px;
+  height: 30%;
 }
 .tab-view {
   flex: 1;

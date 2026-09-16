@@ -11,7 +11,7 @@
  *   分割方向）+ 四面板入口（文件管理 / 监控 / Agent / 告警），
  *   四面板互斥切换（同一时间只开一个，再点同一个收起）
  */
-import { ref, computed, onMounted, onUnmounted, watch, h, type Component } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, watchEffect, h, type Component } from 'vue'
 import { NButton, NDropdown, NIcon, NTooltip, useMessage } from 'naive-ui'
 import {
   Refresh,
@@ -32,8 +32,9 @@ import { useConnectFlow } from '@/composables/useConnectFlow'
 import { shellQuote } from '@/utils/shell'
 import { useProfilesStore } from '@/stores/profiles'
 import { useMonitorStore } from '@/stores/monitor'
-import { useLayoutStore } from '@/stores/layout'
+import { useLayoutStore, type SplitRequest } from '@/stores/layout'
 import { useTabsStore } from '@/stores/tabs'
+import { useTabDrag } from '@/composables/useTabDrag'
 import FilePanel from '@/components/sftp/FilePanel.vue'
 import PaneTerminal from './PaneTerminal.vue'
 import {
@@ -57,6 +58,7 @@ const layout = useLayoutStore()
 const tabs = useTabsStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
+const tabDrag = useTabDrag()
 
 /** 右栏面板入口（Agent / 监控 / 告警 / 常用记录 / Docker / 定时任务 / 环境管理 / 端口转发）：按钮高亮条件与点击切换 */
 const panelEntries = [
@@ -87,9 +89,12 @@ const profile = computed(() =>
   props.tab.profileId ? profiles.profiles.find((p) => p.id === props.tab.profileId) : null,
 )
 
-/** 分屏窗格绑定会话时写入的首行提示（主窗格有远端提示符，返回 undefined） */
+/**
+ * 分屏窗格绑定会话时写入的首行提示（主窗格有远端提示符，返回 undefined）。
+ * 拖入的既有会话（dragInPanes）输出即时到达，不写占位提示行（内容也不匹配该会话）。
+ */
 const initialLineFor = (paneId: string): string | undefined => {
-  if (paneId === primaryPaneId.value) return undefined
+  if (paneId === primaryPaneId.value || dragInPanes.has(paneId)) return undefined
   const p = profile.value
   const label = p ? `${p.username}@${p.host}` : props.tab.title
   return `${label}:/$ `
@@ -150,12 +155,17 @@ function onDividerDown(e: MouseEvent, d: DividerLayout) {
 /* ---------------- 分屏状态（递归布局树） ---------------- */
 /** 本 tab 独立建立的会话（关闭 pane / 卸载时统一断开；绑定其他 tab 的会话不在此列） */
 const ownSessions = new Set<string>()
+/** 由 tab 拖入的 pane id（这些 pane 绑定的是既有会话，不写首行占位提示） */
+const dragInPanes = new Set<string>()
 const root = ref<LayoutNode>({ kind: 'pane', id: 'p0', sessionId: props.tab.sessionId ?? null })
 /** 当前选中 pane（分屏作用目标；点击 pane 时更新） */
 const activePaneId = ref('p0')
 /** 主 pane（承载 tab 主会话，重连成功后更新绑定） */
 const primaryPaneId = ref('p0')
 const paneCount = computed(() => countPanes(root.value))
+
+// 上报窗格数（tab 拖放区显示门控：满 4 窗格不再接受拖入）
+watchEffect(() => tabDrag.setPaneCount(props.tab.id, paneCount.value))
 
 watch(
   () => props.tab.sessionId,
@@ -209,6 +219,7 @@ function closePane(paneId: string) {
   const pane = findPane(root.value, paneId)
   if (!pane || paneCount.value <= 1) return
   disconnectIfOwn(pane.sessionId)
+  dragInPanes.delete(paneId)
   const next = removePane(root.value, paneId)
   if (next) root.value = next
   const first = collectPanes(root.value)[0]?.id
@@ -223,6 +234,37 @@ function bindPane(paneId: string, sid: string) {
   if (pane) pane.sessionId = sid
 }
 
+/* ---------------- Tab 拖拽分屏（其他 tab 的会话并入本视图） ---------------- */
+
+/** 消费 layout store 的 pendingSplit（TabBar 放置时写入；只处理目标为本 tab 的请求） */
+watch(
+  () => layout.pendingSplit,
+  (req) => {
+    if (!req || req.targetTabId !== props.tab.id) return
+    layout.clearPendingSplit()
+    attachSessionPane(req)
+  },
+)
+
+/**
+ * 把拖入 tab 的会话作为 pane 并入分屏树（tab 已被 detachTabForSplit 移除，
+ * 会话所有权转入 ownSessions：关闭 pane / 卸载本视图时负责断开）。
+ * 窗格数满时恢复为原 tab（会话随 tab 重建自动重绑）。
+ */
+function attachSessionPane(req: SplitRequest) {
+  if (paneCount.value >= 4) {
+    message.warning('已达最大分屏数（4）')
+    tabs.addTab('ssh', req.title, req.sessionId, req.profileId)
+    return
+  }
+  const targetId = findPane(root.value, activePaneId.value) ? activePaneId.value : primaryPaneId.value
+  const pane: PaneNode = { kind: 'pane', id: genNodeId('p-'), sessionId: req.sessionId }
+  root.value = splitAtPane(root.value, targetId, req.dir, pane, req.before)
+  ownSessions.add(req.sessionId)
+  dragInPanes.add(pane.id)
+  activePaneId.value = pane.id
+}
+
 /** 仅断开本 tab 独立建立的会话（其他 tab 的会话不受 pane 关闭影响） */
 function disconnectIfOwn(sessionId: string | null) {
   if (sessionId && ownSessions.has(sessionId)) {
@@ -235,6 +277,7 @@ function disconnectIfOwn(sessionId: string | null) {
 /** tab 卸载：清理 pane 独立建立的会话（tab 主会话由 closeTab 负责） */
 onUnmounted(() => {
   window.removeEventListener('keydown', onPaneKeydown)
+  tabDrag.clearPaneCount(props.tab.id)
   for (const sid of [...ownSessions]) disconnectIfOwn(sid)
 })
 

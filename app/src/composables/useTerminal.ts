@@ -25,8 +25,12 @@ export function useTerminal() {
   /** 初始化 xterm 实例 */
   function init(container: HTMLElement) {
     const t = new Terminal({
-      fontFamily: 'Consolas, "Courier New", monospace',
+      // 与 main.css 的 --font-mono 对齐（macOS 命中 SF Mono / Menlo）
+      fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
       fontSize: 14,
+      lineHeight: 1.25,
+      scrollback: 5000,
+      drawBoldTextInBrightColors: true,
       cursorBlink: true,
       theme: themeStore.resolved === 'dark' ? xtermThemeDark : xtermThemeLight,
     })

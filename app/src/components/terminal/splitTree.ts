@@ -62,20 +62,23 @@ export function findPane(node: LayoutNode, paneId: string): PaneNode | null {
 /**
  * 在 target pane 位置原位分割：pane → split(dir)[target, newPane]。
  * 其余节点不动（不破坏已有分屏布局）。
+ * before 时新 pane 排在 target 之前（拖放到左/上边缘用）。
  */
 export function splitAtPane(
   node: LayoutNode,
   targetId: string,
   dir: 'row' | 'column',
   newPane: PaneNode,
+  before = false,
 ): LayoutNode {
   if (node.kind === 'pane') {
     if (node.id !== targetId) return node
-    return { kind: 'split', id: genNodeId('s'), dir, children: [node, newPane], ratios: [1, 1] }
+    const children: LayoutNode[] = before ? [newPane, node] : [node, newPane]
+    return { kind: 'split', id: genNodeId('s'), dir, children, ratios: [1, 1] }
   }
   return {
     ...node,
-    children: node.children.map((child) => splitAtPane(child, targetId, dir, newPane)),
+    children: node.children.map((child) => splitAtPane(child, targetId, dir, newPane, before)),
   }
 }
 
