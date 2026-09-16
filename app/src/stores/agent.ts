@@ -36,6 +36,8 @@ function riskToLevel(risk: CommandRisk): CommandLevel {
 const AUTORUN_KEY = 'smilex-agent-autorun'
 /** 计划模式持久化键 */
 const PLANMODE_KEY = 'smilex-agent-planmode'
+/** 「仅失败回流」持久化键 */
+const FAILBACK_KEY = 'smilex-agent-failback'
 /** 单条命令回传 LLM 的输出截断上限（按字节保尾截断） */
 const MAX_EXEC_OUTPUT = 8 * 1024
 /** 一次用户提问后自动执行的链路上限（防止 agent 循环失控） */
@@ -160,6 +162,10 @@ export const useAgentStore = defineStore('agent', () => {
   const autoRun = ref(localStorage.getItem(AUTORUN_KEY) === '1')
   /** 计划模式（先出执行计划，用户确认后再逐步执行） */
   const planMode = ref(localStorage.getItem(PLANMODE_KEY) === '1')
+  /** 仅失败回流：自动执行链中退出码 0 的结果只回传成功标记，不附带 stdout */
+  const failbackOnly = ref(localStorage.getItem(FAILBACK_KEY) === '1')
+  /** 待填入聊天输入框的草稿（终端「发送给 AI」写入，ChatPanel 消费后清空） */
+  const inputDraft = ref<string | null>(null)
   /** run 块执行状态：`${messageId}#${index}` → RunState */
   const runStates = ref<Record<string, RunState>>({})
   /** plan 块结构化状态机：`${messageId}#${index}` → PlanState（无记录 = pending_confirm 待确认） */
@@ -203,6 +209,14 @@ export const useAgentStore = defineStore('agent', () => {
   watch(planMode, (v) => {
     try {
       localStorage.setItem(PLANMODE_KEY, v ? '1' : '0')
+    } catch {
+      /* 存储不可用时忽略 */
+    }
+  })
+
+  watch(failbackOnly, (v) => {
+    try {
+      localStorage.setItem(FAILBACK_KEY, v ? '1' : '0')
     } catch {
       /* 存储不可用时忽略 */
     }
@@ -420,6 +434,43 @@ export const useAgentStore = defineStore('agent', () => {
     const next = chats.value.find((c) => c.profileId === key)
     activeChatId.value = next?.id ?? null
     if (next && !messagesByChat.value[next.id]) await loadMessages(next.id)
+  }
+
+  /** 激活绑定某终端会话的聊天并返回其 id（该服务器还没有聊天时自动创建；终端右键「发送给 AI」用） */
+  async function ensureChatForSession(sessionId: string): Promise<string | null> {
+    const tab = tabs.tabs.find((t) => t.kind === 'ssh' && t.sessionId === sessionId)
+    if (!tab) return null
+    const key = tab.profileId || tab.title
+    let chat = chats.value.find((c) => c.profileId === key)
+    if (!chat) {
+      const id = genId('chat')
+      const now = Math.floor(Date.now() / 1000)
+      chat = { id, title: '', profileId: key, createdAt: now, updatedAt: now }
+      try {
+        await agentChatService.chatCreate(chat)
+        upsertChat(chat)
+      } catch {
+        /* 持久化不可用时仍可内存对话 */
+      }
+      messagesByChat.value[id] = []
+    }
+    if (activeChatId.value !== chat.id) {
+      activeChatId.value = chat.id
+      if (!messagesByChat.value[chat.id]) await loadMessages(chat.id)
+    }
+    return chat.id
+  }
+
+  /** 写入输入框草稿（ChatPanel 挂载/监听后消费） */
+  function prefillInput(text: string) {
+    inputDraft.value = text
+  }
+
+  /** 取出并清空输入框草稿 */
+  function consumeInputDraft(): string | null {
+    const d = inputDraft.value
+    inputDraft.value = null
+    return d
   }
 
   watch(
@@ -715,7 +766,9 @@ export const useAgentStore = defineStore('agent', () => {
       }
       out = truncateOutput(out)
       runStates.value = { ...runStates.value, [runKey]: { status: 'done', output: out, exitCode } }
-      await sendResult(chatId, command, out || '（无输出）')
+      // 仅失败回流：自动执行链中退出码 0 时只回传成功标记（手动执行与计划链路保持完整回流）
+      const quiet = failbackOnly.value && source === 'auto' && exitCode === 0
+      await sendResult(chatId, command, quiet ? '命令执行成功（退出码 0，输出已省略）' : out || '（无输出）')
       const ok = exitCode === undefined || exitCode === 0
       advancePlan(chatId, ok, command)
       return ok
@@ -938,6 +991,8 @@ export const useAgentStore = defineStore('agent', () => {
     sshSessionId,
     autoRun,
     planMode,
+    failbackOnly,
+    inputDraft,
     runStates,
     planStates,
     pendingConfirm,
@@ -955,6 +1010,9 @@ export const useAgentStore = defineStore('agent', () => {
     switchChat,
     deleteChat,
     clearMessages,
+    ensureChatForSession,
+    prefillInput,
+    consumeInputDraft,
     send,
     executeRun,
     abort,

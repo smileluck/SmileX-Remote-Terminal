@@ -79,8 +79,21 @@ watch(
 )
 
 const input = ref('')
+const inputRef = ref<InstanceType<typeof NInput> | null>(null)
 const listRef = ref<HTMLElement | null>(null)
 const historyVisible = ref(false)
+
+/** 消费外部写入的输入框草稿（终端右键「发送给 AI」；immediate 覆盖面板后挂载的场景） */
+watch(
+  () => agent.inputDraft,
+  async (d) => {
+    if (d === null) return
+    input.value = agent.consumeInputDraft() ?? ''
+    await nextTick()
+    inputRef.value?.focus()
+  },
+  { immediate: true },
+)
 
 /** 当前会话标题（Tab 条移除后头部唯一可见的会话标识） */
 const activeTitle = computed(() => {
@@ -242,6 +255,15 @@ const visibleMessages = computed(() => agent.messages.filter((m) => m.role !== '
           </template>
           开启后查询类与修改类命令自动执行（危险命令仍需手动确认）；关闭时查询类仍自动执行，修改类逐条确认
         </NTooltip>
+        <NTooltip placement="bottom">
+          <template #trigger>
+            <div class="auto-run">
+              <NSwitch v-model:value="agent.failbackOnly" size="small" />
+              <span class="auto-run-label">仅失败回流</span>
+            </div>
+          </template>
+          开启后自动执行的命令成功时只回传成功标记（省略输出），失败时仍回传完整输出；手动执行不受影响
+        </NTooltip>
       </div>
     </header>
 
@@ -266,6 +288,7 @@ const visibleMessages = computed(() => agent.messages.filter((m) => m.role !== '
 
     <div class="input-area">
       <NInput
+        ref="inputRef"
         v-model:value="input"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 6 }"

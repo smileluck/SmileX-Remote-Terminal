@@ -14,7 +14,7 @@
  */
 import { computed } from 'vue'
 import { NButton, NIcon, useDialog, useMessage } from 'naive-ui'
-import { Copy, PlayerPlay } from '@vicons/tabler'
+import { Copy, PlayerPlay, QuestionMark } from '@vicons/tabler'
 import { useAgentStore } from '@/stores/agent'
 
 const props = defineProps<{
@@ -46,6 +46,20 @@ async function copyCommand() {
   } catch {
     message.error('复制失败')
   }
+}
+
+/** 解释命令：作为用户消息走正常聊天流式回复（生成中不打扰，遵循 store 单生成惯例） */
+const EXPLAIN_CMD_MAX = 4 * 1024
+function explain() {
+  if (agent.busy) {
+    message.warning('AI 正在生成中，请稍后重试')
+    return
+  }
+  const cmd =
+    props.command.length > EXPLAIN_CMD_MAX
+      ? `${props.command.slice(0, EXPLAIN_CMD_MAX)}\n…（命令过长，已截断）`
+      : props.command
+  void agent.send(`请解释下面这条命令的作用、参数含义和潜在风险：\n\`\`\`bash\n${cmd}\n\`\`\``)
 }
 
 async function run() {
@@ -80,6 +94,9 @@ async function run() {
       <div class="run-actions">
         <NButton size="tiny" quaternary title="复制命令" @click="copyCommand">
           <template #icon><NIcon :component="Copy" :size="12" /></template>
+        </NButton>
+        <NButton size="tiny" quaternary title="解释命令" :disabled="disabled" @click="explain">
+          <template #icon><NIcon :component="QuestionMark" :size="12" /></template>
         </NButton>
         <NButton
           size="tiny"

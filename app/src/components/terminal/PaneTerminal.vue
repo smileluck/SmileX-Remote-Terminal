@@ -13,6 +13,8 @@ import { Terminal2, X, Plus, ArrowUp, ArrowDown } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
 import { useTabsStore } from '@/stores/tabs'
 import { useUiStore } from '@/stores/ui'
+import { useLayoutStore } from '@/stores/layout'
+import { useAgentStore } from '@/stores/agent'
 import { useSnippetsStore } from '@/stores/snippets'
 
 const props = defineProps<{
@@ -30,6 +32,8 @@ const emit = defineEmits<{
 
 const tabs = useTabsStore()
 const ui = useUiStore()
+const layout = useLayoutStore()
+const agent = useAgentStore()
 const message = useMessage()
 const snippets = useSnippetsStore()
 const { term, searchAddon, sessionId: ownSession, init, bind, fit, getInputLine } = useTerminal()
@@ -55,6 +59,12 @@ function onContextMenu(e: MouseEvent) {
 const menuOptions = computed(() => [
   { label: '复制', key: 'copy', disabled: !menuSelection.value },
   { label: '粘贴', key: 'paste' },
+  ...(menuSelection.value
+    ? [
+        { label: '发送给 AI', key: 'send-to-ai' },
+        { label: '解释此错误', key: 'explain-error' },
+      ]
+    : []),
   {
     label: '添加到常用记录',
     key: 'add-snippet',
@@ -71,11 +81,48 @@ function onMenuSelect(key: string) {
     case 'paste':
       void pasteClipboard()
       break
+    case 'send-to-ai':
+      void sendSelectionToAi()
+      break
+    case 'explain-error':
+      void explainSelection()
+      break
     case 'add-snippet':
       void addToSnippets()
       break
   }
   term.value?.focus()
+}
+
+/** 选中文本送入 AI 的长度上限（超出截断尾部并标注） */
+const AI_SELECTION_MAX = 4 * 1024
+
+function clipSelection(text: string): string {
+  const t = text.trim()
+  if (t.length <= AI_SELECTION_MAX) return t
+  return `${t.slice(0, AI_SELECTION_MAX)}\n…（内容过长，已截断）`
+}
+
+/** 发送给 AI：选中文本以代码块预填进输入框，并打开绑定该服务器的 AI 面板 */
+async function sendSelectionToAi() {
+  const text = clipSelection(menuSelection.value)
+  if (!text || !props.sessionId) return
+  if (!(await agent.ensureChatForSession(props.sessionId))) return
+  layout.openRightPanel('agent')
+  agent.prefillInput(`\`\`\`\n${text}\n\`\`\`\n`)
+}
+
+/** 解释此错误：选中文本作为报错直接向该服务器的聊天会话提问 */
+async function explainSelection() {
+  const text = clipSelection(menuSelection.value)
+  if (!text || !props.sessionId) return
+  if (agent.busy) {
+    message.warning('AI 正在生成中，请稍后重试')
+    return
+  }
+  if (!(await agent.ensureChatForSession(props.sessionId))) return
+  layout.openRightPanel('agent')
+  await agent.send(`请解释以下终端输出/报错的原因和解决办法：\n\`\`\`\n${text}\n\`\`\``)
 }
 
 async function copySelection() {
