@@ -43,6 +43,10 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 # 「在文件夹中显示」等系统打开能力（传输完成定位文件）
 tauri-plugin-opener = "2"
+# 应用自升级（GitHub Releases 静态清单 latest.json + minisign 签名校验）
+tauri-plugin-updater = "2"
+# 更新安装完成后重启应用（relaunch）
+tauri-plugin-process = "2"
 
 # 存储
 rusqlite = { version = "0.31", features = ["bundled"] }

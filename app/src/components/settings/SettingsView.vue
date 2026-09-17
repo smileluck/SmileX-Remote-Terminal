@@ -39,6 +39,7 @@ import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { getVersion } from '@tauri-apps/api/app'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useTransferStore } from '@/stores/transfer'
+import { useUpdaterStore } from '@/stores/updater'
 import KeyManager from '@/components/settings/KeyManager.vue'
 import AiSecurity from '@/components/settings/AiSecurity.vue'
 import {
@@ -131,6 +132,14 @@ const appVersion = ref('0.1.0')
 getVersion()
   .then((v) => (appVersion.value = v))
   .catch(() => {})
+
+/** 手动检查更新（关于我们分区；有更新时 updater store 会打开 UpdateDialog） */
+const updaterStore = useUpdaterStore()
+async function checkUpdate() {
+  const result = await updaterStore.manualCheck()
+  if (result === 'latest') message.success(`已是最新版本（v${appVersion.value}）`)
+  else if (result === 'error') message.error('检查更新失败，请稍后重试')
+}
 
 /** 主题选项（外观分区） */
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -557,7 +566,18 @@ onMounted(() => {
             <span class="about-logo">S</span>
             <div>
               <h3 class="about-name">SmileX-Remote-Terminal</h3>
-              <p class="about-version">版本 {{ appVersion }}</p>
+              <p class="about-version">
+                版本 {{ appVersion }}
+                <NButton
+                  size="tiny"
+                  secondary
+                  class="about-check-update"
+                  :loading="updaterStore.checking"
+                  @click="checkUpdate"
+                >
+                  检查更新
+                </NButton>
+              </p>
             </div>
           </div>
           <p class="about-desc">
@@ -901,6 +921,9 @@ onMounted(() => {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
+}
+.about-check-update {
+  margin-left: 8px;
 }
 .about-version {
   margin: 2px 0 0;

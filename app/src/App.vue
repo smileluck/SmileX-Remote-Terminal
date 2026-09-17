@@ -27,6 +27,7 @@ import { useLayoutStore } from '@/stores/layout'
 import { useUiStore } from '@/stores/ui'
 import { useAgentStore } from '@/stores/agent'
 import { useTransferStore } from '@/stores/transfer'
+import { useUpdaterStore } from '@/stores/updater'
 import TopBar from '@/components/layout/TopBar.vue'
 import SideBar from '@/components/layout/SideBar.vue'
 import MainContent from '@/components/layout/MainContent.vue'
@@ -36,6 +37,7 @@ import SessionEvents from '@/components/layout/SessionEvents.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import ConnectDialog from '@/components/common/ConnectDialog.vue'
 import DesktopConnectDialog from '@/components/common/DesktopConnectDialog.vue'
+import UpdateDialog from '@/components/common/UpdateDialog.vue'
 import TransferManager from '@/components/sftp/TransferManager.vue'
 
 const tabsStore = useTabsStore()
@@ -92,7 +94,12 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  // 启动后延迟静默检查更新（避开启动高峰期）；发现新版由 UpdateDialog 弹窗提示，
+  // 失败仅 console 记录，不打扰用户
+  setTimeout(() => useUpdaterStore().autoCheck(), 3000)
+})
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 /** 主题 store（dark / light / auto） */
@@ -207,6 +214,8 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
               </div>
               <!-- 全局传输管理（右上角 FAB + 抽屉） -->
               <TransferManager />
+              <!-- 版本更新弹窗（启动自动检查 / 设置页手动检查共用） -->
+              <UpdateDialog />
             </div>
           </NNotificationProvider>
         </NDialogProvider>

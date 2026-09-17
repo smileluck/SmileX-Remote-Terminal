@@ -47,6 +47,9 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // 自升级：endpoint 与签名公钥在 tauri.conf.json 的 plugins.updater 中配置
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // 初始化 SQLite（在 setup 中拿到 app_handle 后才能解析路径）
             let db_path = resolve_db_path(&app.handle())?;

@@ -47,6 +47,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 自升级签名私钥：检测到后自动生成 latest.json 清单与各平台 .sig 并随 Release 上传
+          # （密钥由 tauri signer generate 生成，私钥无密码，PASSWORD 留空即可）
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # 显式传 tag 名：自动探测失败时会跳过上传（job 仍绿但 release 为空）
           tagName: ${{ github.ref_name }}
