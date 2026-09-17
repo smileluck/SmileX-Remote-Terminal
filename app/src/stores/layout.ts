@@ -9,21 +9,6 @@ export type RightPanelTab = 'agent' | 'monitor' | 'alerts' | 'snippets' | 'docke
 /** 侧栏列表页签（SSH 会话 / 远程桌面） */
 export type SidebarTab = 'ssh' | 'desktop'
 
-/**
- * Tab 拖拽分屏请求（不持久化）：
- * TabBar 放置时写入，目标 TerminalView（按 targetTabId 匹配）watch 消费后清除。
- */
-export interface SplitRequest {
-  targetTabId: string
-  sessionId: string
-  dir: 'row' | 'column'
-  /** 新 pane 排在目标 pane 之前（拖放到左/上边缘） */
-  before: boolean
-  /** 分屏失败（如窗格数满）时恢复 tab 用 */
-  title: string
-  profileId?: string
-}
-
 interface LayoutState {
   sidebarCollapsed: boolean
   sidebarTab: SidebarTab
@@ -83,17 +68,6 @@ export const useLayoutStore = defineStore('layout', () => {
   const filesVisible = ref(false)
   /** 文件面板一次性外部导航目标路径（FilePanel 消费后自行清除；不持久化） */
   const filesNavPath = ref<string | null>(null)
-  /** Tab 拖拽分屏请求（TerminalView 按 targetTabId 消费后清除；不持久化） */
-  const pendingSplit = ref<SplitRequest | null>(null)
-
-  /** 发起 tab 拖拽分屏（TabBar 放置时调用） */
-  function requestSplit(req: SplitRequest) {
-    pendingSplit.value = req
-  }
-
-  function clearPendingSplit() {
-    pendingSplit.value = null
-  }
 
   /** 切换左栏折叠 */
   function toggleSidebar() {
@@ -189,9 +163,6 @@ export const useLayoutStore = defineStore('layout', () => {
     filesView,
     filesVisible,
     filesNavPath,
-    pendingSplit,
-    requestSplit,
-    clearPendingSplit,
     toggleSidebar,
     toggleSidebarTab,
     toggleMonitor,

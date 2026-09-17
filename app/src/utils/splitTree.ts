@@ -1,13 +1,14 @@
 /**
  * splitTree - 分屏布局树（数据结构与操作）
  *
- * 递归 split 结构：pane 为叶子（一个终端窗格），split 为分割组
- * （带方向 row/column 与子节点比例）。每个分割条的方向与比例随所属
- * 节点独立，分割/关闭只影响目标 pane 所在子树，不重排其他区域。
+ * 递归 split 结构：group 为叶子（一个 tab 组，含自己的 tab 栏与激活 tab），
+ * split 为分割组（带方向 row/column 与子节点比例）。每个分割条的方向与
+ * 比例随所属节点独立，分割/关闭只影响目标 group 所在子树，不重排其他区域。
  *
- * 渲染采用 computeLayout 产出的扁平绝对定位（见 TerminalView）：
- * 树结构变化不会导致窗格组件重建，xterm 实例与历史内容得以保留。
+ * 渲染采用 computeLayout 产出的扁平绝对定位（见 MainContent）：
+ * 树结构变化不会导致终端组件重建，xterm 实例与历史内容得以保留。
  */
+import type { TabItem } from '@/types/session'
 
 /** 节点 id 序列（同毫秒多次分割/关闭也不冲突） */
 let nodeSeq = 0
@@ -15,11 +16,12 @@ export function genNodeId(prefix: string): string {
   return `${prefix}${++nodeSeq}`
 }
 
-/** 叶子节点：一个终端窗格 */
-export interface PaneNode {
-  kind: 'pane'
+/** 叶子节点：一个 tab 组（Xshell 式分屏单元，拥有自己的 tab 栏） */
+export interface GroupNode {
+  kind: 'group'
   id: string
-  sessionId: string | null
+  tabs: TabItem[]
+  activeTabId: string | null
 }
 
 /** 容器节点：一个分割组 */
@@ -34,66 +36,65 @@ export interface SplitNode {
   ratios: number[]
 }
 
-export type LayoutNode = PaneNode | SplitNode
+export type LayoutNode = GroupNode | SplitNode
 
-/** 统计树中的 pane 数量（上限 4 由调用方控制） */
-export function countPanes(node: LayoutNode): number {
-  return node.kind === 'pane'
+/** 统计树中的 group 数量（上限由调用方控制） */
+export function countGroups(node: LayoutNode): number {
+  return node.kind === 'group'
     ? 1
-    : node.children.reduce((sum, child) => sum + countPanes(child), 0)
+    : node.children.reduce((sum, child) => sum + countGroups(child), 0)
 }
 
-/** 深度优先收集所有 pane 节点 */
-export function collectPanes(node: LayoutNode): PaneNode[] {
-  if (node.kind === 'pane') return [node]
-  return node.children.flatMap(collectPanes)
+/** 深度优先收集所有 group 节点 */
+export function collectGroups(node: LayoutNode): GroupNode[] {
+  if (node.kind === 'group') return [node]
+  return node.children.flatMap(collectGroups)
 }
 
-/** 按 id 查找 pane 节点 */
-export function findPane(node: LayoutNode, paneId: string): PaneNode | null {
-  if (node.kind === 'pane') return node.id === paneId ? node : null
+/** 按 id 查找 group 节点 */
+export function findGroup(node: LayoutNode, groupId: string): GroupNode | null {
+  if (node.kind === 'group') return node.id === groupId ? node : null
   for (const child of node.children) {
-    const hit = findPane(child, paneId)
+    const hit = findGroup(child, groupId)
     if (hit) return hit
   }
   return null
 }
 
 /**
- * 在 target pane 位置原位分割：pane → split(dir)[target, newPane]。
+ * 在 target group 位置原位分割：group → split(dir)[target, newGroup]。
  * 其余节点不动（不破坏已有分屏布局）。
- * before 时新 pane 排在 target 之前（拖放到左/上边缘用）。
+ * before 时新 group 排在 target 之前（拖放到左/上边缘用）。
  */
-export function splitAtPane(
+export function splitAtGroup(
   node: LayoutNode,
   targetId: string,
   dir: 'row' | 'column',
-  newPane: PaneNode,
+  newGroup: GroupNode,
   before = false,
 ): LayoutNode {
-  if (node.kind === 'pane') {
+  if (node.kind === 'group') {
     if (node.id !== targetId) return node
-    const children: LayoutNode[] = before ? [newPane, node] : [node, newPane]
+    const children: LayoutNode[] = before ? [newGroup, node] : [node, newGroup]
     return { kind: 'split', id: genNodeId('s'), dir, children, ratios: [1, 1] }
   }
   return {
     ...node,
-    children: node.children.map((child) => splitAtPane(child, targetId, dir, newPane, before)),
+    children: node.children.map((child) => splitAtGroup(child, targetId, dir, newGroup, before)),
   }
 }
 
 /**
- * 从树中移除 pane（函数式重建）：
+ * 从树中移除 group（函数式重建）：
  * - 只剩一个子节点的 split 自动折叠为该子节点
  * - 返回新树；目标不存在时原样返回；根节点被移除时返回 null
- *   （调用方保证 pane 总数 > 1 才允许关闭，根不会为 null）
  */
-export function removePane(node: LayoutNode, paneId: string): LayoutNode | null {
-  if (node.kind === 'pane') return node.id === paneId ? null : node
+export function removeGroup(node: LayoutNode, groupId: string): LayoutNode | null {
+  if (node.kind === 'group') return node.id === groupId ? null : node
   const children: LayoutNode[] = []
   const ratios: number[] = []
   node.children.forEach((child, i) => {
-    const kept = removePane(child, paneId)
+    const kept = removeGroup(child, groupId)
     if (kept) {
       children.push(kept)
       ratios.push(node.ratios[i] ?? 1)
@@ -114,10 +115,9 @@ export interface Rect {
   height: number
 }
 
-/** 窗格的渲染槽位 */
-export interface PaneLayout {
+/** group 的渲染槽位 */
+export interface GroupLayout {
   id: string
-  sessionId: string | null
   rect: Rect
 }
 
@@ -139,24 +139,23 @@ export interface DividerLayout {
 }
 
 export interface FlatLayout {
-  panes: PaneLayout[]
+  groups: GroupLayout[]
   dividers: DividerLayout[]
 }
 
 /**
- * 将布局树展平为矩形集合：pane → 绝对定位槽位，分割边界 → 分割条。
- * 输出 key 与窗格 id 稳定，树结构变化时 Vue 复用组件实例，
- * 终端不会因关闭/分割其他窗格而重建清空。
+ * 将布局树展平为矩形集合：group → 绝对定位槽位，分割边界 → 分割条。
+ * 输出 key 与 group id 稳定，树结构变化时 Vue 复用组件实例。
  */
 export function computeLayout(node: LayoutNode): FlatLayout {
-  const panes: PaneLayout[] = []
+  const groups: GroupLayout[] = []
   const dividers: DividerLayout[] = []
   walk(node, { left: 0, top: 0, width: 1, height: 1 })
-  return { panes, dividers }
+  return { groups, dividers }
 
   function walk(n: LayoutNode, rect: Rect) {
-    if (n.kind === 'pane') {
-      panes.push({ id: n.id, sessionId: n.sessionId, rect })
+    if (n.kind === 'group') {
+      groups.push({ id: n.id, rect })
       return
     }
     const total = n.ratios.reduce((s, r) => s + r, 0) || 1

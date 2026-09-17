@@ -7,7 +7,7 @@
  *
  * 布局（水平左中右三栏）：
  * - 左：ActivityRail（功能导航窄栏）+ SideBar（会话管理，可折叠）
- * - 中：TabBar + MainContent（终端 / 远程桌面 / 设置）
+ * - 中：MainContent（Xshell 式 tab 组分屏：每个 group 自带 tab 栏）
  * - 右：RightPanel（Agent 助手 / 监控看板 / 告警规则，单页签切换/调宽；
  *   收起时整体隐藏，入口在终端工具栏列与 ⌘M/⌘J）
  */
@@ -31,7 +31,6 @@ import TopBar from '@/components/layout/TopBar.vue'
 import SideBar from '@/components/layout/SideBar.vue'
 import MainContent from '@/components/layout/MainContent.vue'
 import ActivityRail from '@/components/layout/ActivityRail.vue'
-import TabBar from '@/components/layout/TabBar.vue'
 import RightPanel from '@/components/layout/RightPanel.vue'
 import SessionEvents from '@/components/layout/SessionEvents.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
@@ -47,8 +46,6 @@ useAgentStore()
 // 实例化 transfer store：注册 transfer_event 监听（App 级一次）
 const transferStore = useTransferStore()
 transferStore.start()
-
-const activeTab = computed(() => tabsStore.activeTab)
 
 /** ⌘K 命令面板 */
 const showPalette = ref(false)
@@ -88,7 +85,7 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     uiStore.openConnectDialog()
   } else if (key === 'w') {
-    // ⌘⇧W 留给 TerminalView 关闭当前分屏，此处只响应不带 Shift 的关闭标签
+    // ⌘⇧W 留给 TerminalView 关闭当前 group，此处只响应不带 Shift 的关闭标签
     if (e.shiftKey) return
     e.preventDefault()
     if (tabsStore.activeId) tabsStore.closeTab(tabsStore.activeId)
@@ -204,8 +201,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() =>
                 <ActivityRail />
                 <SideBar v-if="!layoutStore.sidebarCollapsed" />
                 <div class="main-area">
-                  <TabBar />
-                  <MainContent :tab="activeTab" />
+                  <MainContent />
                 </div>
                 <RightPanel />
               </div>

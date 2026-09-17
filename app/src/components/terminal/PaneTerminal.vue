@@ -1,37 +1,24 @@
 <script setup lang="ts">
 /**
- * PaneTerminal - 分屏中的单个终端窗格
+ * PaneTerminal - 单会话终端组件（纯 xterm 载体）
  *
- * - 已绑定 sessionId：渲染 xterm 并绑定输出
- * - 未绑定：显示「绑定现有会话 / 新建连接」选择器
- *   （新建连接打开全局连接弹窗，连接结果会开新 tab）
+ * - 已绑定 sessionId：渲染 xterm 并绑定输出（sessionId 变化时自动重绑，断线重连走此路径）
+ * - 右键菜单：复制 / 粘贴 / 发送给 AI / 解释此错误 / 添加到常用记录
+ * - ⌘/Ctrl+F 终端内搜索
  */
 import { ref, watch, nextTick, computed } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
-import { NButton, NIcon, NSelect, NDropdown, NModal, NInput, useMessage } from 'naive-ui'
-import { Terminal2, X, Plus, ArrowUp, ArrowDown } from '@vicons/tabler'
+import { NButton, NIcon, NDropdown, NModal, NInput, useMessage } from 'naive-ui'
+import { X, ArrowUp, ArrowDown } from '@vicons/tabler'
 import { useTerminal } from '@/composables/useTerminal'
-import { useTabsStore } from '@/stores/tabs'
-import { useUiStore } from '@/stores/ui'
 import { useLayoutStore } from '@/stores/layout'
 import { useAgentStore } from '@/stores/agent'
 import { useSnippetsStore } from '@/stores/snippets'
 
 const props = defineProps<{
   sessionId: string | null
-  closable: boolean
-  active?: boolean
-  /** 绑定会话时写入的首行提示（如 `minio@nas01:/$ `，分屏窗格用，避免空白） */
-  initialLine?: string
-}>()
-const emit = defineEmits<{
-  (e: 'focus'): void
-  (e: 'bind', sid: string): void
-  (e: 'close'): void
 }>()
 
-const tabs = useTabsStore()
-const ui = useUiStore()
 const layout = useLayoutStore()
 const agent = useAgentStore()
 const message = useMessage()
@@ -327,14 +314,6 @@ async function addToSnippets() {
   }
 }
 
-/** 首行提示只写一次（挂载即绑定 / 后经选择器绑定两条路径共用） */
-let initialWritten = false
-function writeInitialLine() {
-  if (initialWritten || !props.initialLine || !term.value) return
-  initialWritten = true
-  term.value.writeln(props.initialLine)
-}
-
 /** 挂载时初始化 xterm 并绑定（tab 已带会话） */
 watch(
   () => containerRef.value,
@@ -344,19 +323,17 @@ watch(
       await nextTick()
       fit()
       if (props.sessionId && props.sessionId !== ownSession.value) {
-        writeInitialLine()
         bind(props.sessionId)
       }
     }
   },
 )
 
-/** 外部 sessionId 变化（pane 重绑定） */
+/** 外部 sessionId 变化（断线重连后换绑新会话） */
 watch(
   () => props.sessionId,
   (sid) => {
-    if (sid && sid !== ownSession.value && term.value) {
-      writeInitialLine()
+    if (sid && sid !== ownSession.value) {
       bind(sid)
     }
   },
@@ -366,35 +343,17 @@ useResizeObserver(containerRef, () => {
   // tab 被隐藏（v-show 切走）时容器尺寸为 0，跳过无效 fit
   if (term.value && containerRef.value?.clientWidth) fit()
 })
-
-/** 所有 tab 的活跃 SSH 会话（供 pane 绑定） */
-const sessionOptions = computed(() =>
-  tabs.tabs
-    .filter((t) => t.kind === 'ssh' && t.sessionId && !t.disconnected)
-    .map((t) => ({ label: `${t.title}（${(t.sessionId as string).slice(0, 8)}）`, value: t.sessionId as string })),
-)
-
-const pickedSession = ref<string | null>(null)
 </script>
 
 <template>
-  <div class="pane" :class="{ active }" @mousedown="emit('focus')" @keydown="onPaneKeydown">
-    <div class="pane-head">
-      <span class="pane-title">
-        <NIcon :component="Terminal2" :size="12" />
-        {{ sessionId ? '会话 ' + sessionId.slice(0, 8) : '未绑定' }}
-      </span>
-      <NButton v-if="closable" quaternary circle size="tiny" @click="emit('close')">
-        <NIcon :component="X" :size="12" />
-      </NButton>
-    </div>
-
+  <div class="pane" @keydown="onPaneKeydown">
     <div
       v-if="sessionId"
       ref="containerRef"
       class="pane-term"
       @contextmenu.prevent="onContextMenu"
     ></div>
+    <div v-else class="pane-empty">未绑定会话</div>
 
     <!-- 终端内搜索框（Ctrl/⌘F 唤起，Esc 关闭） -->
     <div v-if="sessionId && searchShow" class="term-search" @mousedown.stop @keydown.stop>
@@ -414,27 +373,6 @@ const pickedSession = ref<string | null>(null)
       </NButton>
       <NButton quaternary circle size="tiny" title="关闭（Esc）" @click="closeSearch">
         <NIcon :component="X" :size="13" />
-      </NButton>
-    </div>
-
-    <div v-if="!sessionId" class="pane-picker">
-      <template v-if="sessionOptions.length">
-        <p class="picker-label">绑定现有会话</p>
-        <NSelect
-          v-model:value="pickedSession"
-          size="small"
-          :options="sessionOptions"
-          placeholder="选择活跃 SSH 会话"
-          @update:value="(v: string) => emit('bind', v)"
-        />
-      </template>
-      <template v-else>
-        <p class="picker-label">暂无活跃会话</p>
-      </template>
-
-      <NButton size="small" dashed class="picker-btn" @click="ui.openConnectDialog()">
-        <template #icon><NIcon :component="Plus" :size="14" /></template>
-        新建 SSH 连接
       </NButton>
     </div>
 
@@ -480,53 +418,23 @@ const pickedSession = ref<string | null>(null)
   overflow: hidden;
   position: relative;
 }
-.pane-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 2px 8px;
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-}
-/* 选中窗格高亮（分屏作用目标） */
-.pane.active .pane-head {
-  border-bottom-color: var(--primary);
-}
-.pane.active .pane-title {
-  color: var(--primary);
-}
-.pane-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
 .pane-term {
   flex: 1;
   min-height: 0;
   background: var(--bg-app);
   padding: 4px;
 }
-.pane-picker {
+.pane-empty {
   flex: 1;
-  overflow-y: auto;
-  padding: 14px 16px;
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.picker-label {
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
-  color: var(--text-secondary);
-  margin: 0;
-}
-.picker-btn {
-  align-self: flex-start;
+  color: var(--text-tertiary);
 }
 .term-search {
   position: absolute;
-  top: 34px;
+  top: 10px;
   right: 10px;
   z-index: 20;
   display: flex;

@@ -1,17 +1,18 @@
 <script setup lang="ts">
 /**
- * TerminalView - SSH 终端视图（支持分屏）
+ * TerminalView - 单会话 SSH 终端视图
  *
- * - tab 已带 sessionId（统一连接入口创建）：分屏窗格平铺绝对定位渲染（≤4 窗格）
- * - 分屏作用于当前选中窗格：在选中 pane 位置原位分割，不重排其他区域；
- *   树结构只换算为矩形，窗格组件不重建（关闭/分割不清空其他窗格的终端内容）
- * - 无 sessionId 的窗格：显示「绑定现有会话 / 新建连接」选择器（见 PaneTerminal）
+ * - tab 已带 sessionId（统一连接入口创建）：由 PaneTerminal 渲染 xterm 并绑定会话；
+ *   视图按 tab 常驻（MainContent 终端池），跨 group 拖动不重建、不丢终端内容
  * - 会话意外断开（disconnected）：显示断开遮罩 + 重新连接按钮（原地重连）
- * - 右侧工具栏（流式竖排，不悬浮）：分屏单入口（点击弹二级菜单选
- *   分割方向）+ 四面板入口（文件管理 / 监控 / Agent / 告警），
- *   四面板互斥切换（同一时间只开一个，再点同一个收起）
+ * - 右侧工具栏（流式竖排，不悬浮）：分屏单入口（克隆会话到新 group，
+ *   点击弹二级菜单选方向）+ 面板入口（文件管理 / 监控 / Agent / 告警 等），
+ *   面板互斥切换（同一时间只开一个，再点同一个收起）
+ * - 点击视图聚焦所属 group（右栏面板跟随该 group 的激活 tab）
+ * - ⌘D / ⌘⇧D 克隆会话到右/下方新 group；⌘⇧W 关闭本 group 全部 tab；
+ *   ⌘⌥←→↑↓ 切换聚焦 group
  */
-import { ref, computed, onMounted, onUnmounted, watch, watchEffect, h, type Component } from 'vue'
+import { ref, computed, onMounted, onUnmounted, h, type Component } from 'vue'
 import { NButton, NDropdown, NIcon, NTooltip, useMessage } from 'naive-ui'
 import {
   Refresh,
@@ -31,34 +32,18 @@ import * as sessionService from '@/services/session'
 import { useConnectFlow } from '@/composables/useConnectFlow'
 import { shellQuote } from '@/utils/shell'
 import { useProfilesStore } from '@/stores/profiles'
-import { useMonitorStore } from '@/stores/monitor'
-import { useLayoutStore, type SplitRequest } from '@/stores/layout'
+import { useLayoutStore } from '@/stores/layout'
 import { useTabsStore } from '@/stores/tabs'
-import { useTabDrag } from '@/composables/useTabDrag'
 import FilePanel from '@/components/sftp/FilePanel.vue'
 import PaneTerminal from './PaneTerminal.vue'
-import {
-  countPanes,
-  collectPanes,
-  findPane,
-  splitAtPane,
-  removePane,
-  computeLayout,
-  genNodeId,
-  type LayoutNode,
-  type PaneNode,
-  type DividerLayout,
-} from './splitTree'
 import type { TabItem } from '@/types/session'
 
 const props = defineProps<{ tab: TabItem }>()
 const profiles = useProfilesStore()
-const monitor = useMonitorStore()
 const layout = useLayoutStore()
 const tabs = useTabsStore()
 const message = useMessage()
 const { reconnectInTab } = useConnectFlow()
-const tabDrag = useTabDrag()
 
 /** 右栏面板入口（Agent / 监控 / 告警 / 常用记录 / Docker / 定时任务 / 环境管理 / 端口转发）：按钮高亮条件与点击切换 */
 const panelEntries = [
@@ -89,236 +74,81 @@ const profile = computed(() =>
   props.tab.profileId ? profiles.profiles.find((p) => p.id === props.tab.profileId) : null,
 )
 
+/** 点击视图：聚焦所属 group（右栏面板 / 快捷键以聚焦 group 的激活 tab 为准） */
+function onViewMouseDown() {
+  tabs.setActive(props.tab.id)
+}
+
 /**
- * 分屏窗格绑定会话时写入的首行提示（主窗格有远端提示符，返回 undefined）。
- * 拖入的既有会话（dragInPanes）输出即时到达，不写占位提示行（内容也不匹配该会话）。
+ * 克隆当前会话为独立新会话，放到本 group 右/下方的新 group（Xshell 式分屏）；
+ * initialPath 时新会话就绪后 cd 过去（SFTP「在此处打开终端」用）
  */
-const initialLineFor = (paneId: string): string | undefined => {
-  if (paneId === primaryPaneId.value || dragInPanes.has(paneId)) return undefined
-  const p = profile.value
-  const label = p ? `${p.username}@${p.host}` : props.tab.title
-  return `${label}:/$ `
-}
-
-/* ---------------- 扁平布局（绝对定位渲染） ---------------- */
-/**
- * 布局树 → 窗格槽位 + 分割条矩形。窗格以 pane id 为 key 平铺渲染，
- * 树结构变化（分割/关闭/折叠）只改矩形不重建组件，xterm 实例与
- * 历史内容在关闭其他窗格时不丢失。
- */
-const flat = computed(() => computeLayout(root.value))
-const splitAreaEl = ref<HTMLDivElement | null>(null)
-
-const pct = (v: number) => `${(v * 100).toFixed(4)}%`
-
-function paneStyle(rect: { left: number; top: number; width: number; height: number }) {
-  return {
-    left: pct(rect.left),
-    top: pct(rect.top),
-    width: pct(rect.width),
-    height: pct(rect.height),
-  }
-}
-
-function dividerStyle(d: DividerLayout) {
-  return d.dir === 'row'
-    ? { left: `calc(${pct(d.center)} - 3px)`, top: pct(d.crossStart), height: pct(d.crossLength), width: '6px' }
-    : { top: `calc(${pct(d.center)} - 3px)`, left: pct(d.crossStart), width: pct(d.crossLength), height: '6px' }
-}
-
-/** 分割条拖拽：只调整本 split 节点内相邻两个子节点的比例 */
-function onDividerDown(e: MouseEvent, d: DividerLayout) {
-  const container = splitAreaEl.value
-  if (!container) return
-  const horizontal = d.dir === 'row'
-  const containerMain = horizontal ? container.clientWidth : container.clientHeight
-  const nodeMain = containerMain * d.axisLength
-  if (!nodeMain) return
-  const totalRatio = d.node.ratios.reduce((s, r) => s + r, 0)
-  const startX = horizontal ? e.clientX : e.clientY
-  const a = d.node.ratios[d.index]
-  const b = d.node.ratios[d.index + 1]
-  const onMove = (ev: MouseEvent) => {
-    const delta = (((horizontal ? ev.clientX : ev.clientY) - startX) / nodeMain) * totalRatio
-    d.node.ratios[d.index] = Math.max(0.1, a + delta)
-    d.node.ratios[d.index + 1] = Math.max(0.1, b - delta)
-  }
-  const onUp = () => {
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', onUp)
-  }
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', onUp)
-  e.preventDefault()
-}
-
-/* ---------------- 分屏状态（递归布局树） ---------------- */
-/** 本 tab 独立建立的会话（关闭 pane / 卸载时统一断开；绑定其他 tab 的会话不在此列） */
-const ownSessions = new Set<string>()
-/** 由 tab 拖入的 pane id（这些 pane 绑定的是既有会话，不写首行占位提示） */
-const dragInPanes = new Set<string>()
-const root = ref<LayoutNode>({ kind: 'pane', id: 'p0', sessionId: props.tab.sessionId ?? null })
-/** 当前选中 pane（分屏作用目标；点击 pane 时更新） */
-const activePaneId = ref('p0')
-/** 主 pane（承载 tab 主会话，重连成功后更新绑定） */
-const primaryPaneId = ref('p0')
-const paneCount = computed(() => countPanes(root.value))
-
-// 上报窗格数（tab 拖放区显示门控：满 4 窗格不再接受拖入）
-watchEffect(() => tabDrag.setPaneCount(props.tab.id, paneCount.value))
-
-watch(
-  () => props.tab.sessionId,
-  (sid) => {
-    // 重连成功：主 pane 绑定新会话
-    if (!sid) return
-    const pane = findPane(root.value, primaryPaneId.value)
-    if (pane) pane.sessionId = sid
-  },
-)
-
-/** 分屏：在当前选中 pane 位置原位分割（row = 向右，column = 向下）；initialPath 时新窗格就绪后 cd 过去 */
 const splitting = ref(false)
-async function addPane(dir: 'row' | 'column', initialPath?: string) {
-  if (paneCount.value >= 4) {
-    message.warning('已达最大分屏数（4）')
-    return
-  }
+async function cloneToGroup(dir: 'row' | 'column', initialPath?: string) {
   if (splitting.value) return
-  const targetId = findPane(root.value, activePaneId.value) ? activePaneId.value : primaryPaneId.value
-  const target = findPane(root.value, targetId)
-  const pane: PaneNode = { kind: 'pane', id: genNodeId('p-'), sessionId: null }
-
-  // 默认克隆选中窗格的连接为独立新会话；克隆失败/无会话则保持未绑定（可手动绑定）
-  if (target?.sessionId) {
-    splitting.value = true
-    try {
-      const sid = await sessionService.clone(target.sessionId, 80, 24)
-      pane.sessionId = sid
-      ownSessions.add(sid)
-      // shell 就绪无信号，延时后发送 cd
-      if (initialPath) {
-        setTimeout(() => {
-          sessionService
-            .input(sid, Array.from(new TextEncoder().encode(`cd ${shellQuote(initialPath)}\r`)))
-            .catch(() => {})
-        }, 500)
-      }
-    } catch (e) {
-      message.error(`克隆会话失败：${e}`)
-    } finally {
-      splitting.value = false
-    }
-  }
-
-  root.value = splitAtPane(root.value, targetId, dir, pane)
-  activePaneId.value = pane.id
-}
-
-function closePane(paneId: string) {
-  const pane = findPane(root.value, paneId)
-  if (!pane || paneCount.value <= 1) return
-  disconnectIfOwn(pane.sessionId)
-  dragInPanes.delete(paneId)
-  const next = removePane(root.value, paneId)
-  if (next) root.value = next
-  const first = collectPanes(root.value)[0]?.id
-  if (first) {
-    if (activePaneId.value === paneId) activePaneId.value = first
-    if (primaryPaneId.value === paneId) primaryPaneId.value = first
-  }
-}
-
-function bindPane(paneId: string, sid: string) {
-  const pane = findPane(root.value, paneId)
-  if (pane) pane.sessionId = sid
-}
-
-/* ---------------- Tab 拖拽分屏（其他 tab 的会话并入本视图） ---------------- */
-
-/** 消费 layout store 的 pendingSplit（TabBar 放置时写入；只处理目标为本 tab 的请求） */
-watch(
-  () => layout.pendingSplit,
-  (req) => {
-    if (!req || req.targetTabId !== props.tab.id) return
-    layout.clearPendingSplit()
-    attachSessionPane(req)
-  },
-)
-
-/**
- * 把拖入 tab 的会话作为 pane 并入分屏树（tab 已被 detachTabForSplit 移除，
- * 会话所有权转入 ownSessions：关闭 pane / 卸载本视图时负责断开）。
- * 窗格数满时恢复为原 tab（会话随 tab 重建自动重绑）。
- */
-function attachSessionPane(req: SplitRequest) {
-  if (paneCount.value >= 4) {
+  const sid = props.tab.sessionId
+  if (!sid || sid === 'connected') return
+  const srcGroup = tabs.groupOf(props.tab.id)
+  if (!srcGroup) return
+  if (tabs.groups.length >= 4) {
     message.warning('已达最大分屏数（4）')
-    tabs.addTab('ssh', req.title, req.sessionId, req.profileId)
     return
   }
-  const targetId = findPane(root.value, activePaneId.value) ? activePaneId.value : primaryPaneId.value
-  const pane: PaneNode = { kind: 'pane', id: genNodeId('p-'), sessionId: req.sessionId }
-  root.value = splitAtPane(root.value, targetId, req.dir, pane, req.before)
-  ownSessions.add(req.sessionId)
-  dragInPanes.add(pane.id)
-  activePaneId.value = pane.id
-}
-
-/** 仅断开本 tab 独立建立的会话（其他 tab 的会话不受 pane 关闭影响） */
-function disconnectIfOwn(sessionId: string | null) {
-  if (sessionId && ownSessions.has(sessionId)) {
-    monitor.stopSampling(sessionId)
-    sessionService.disconnect(sessionId).catch(() => {})
-    ownSessions.delete(sessionId)
+  splitting.value = true
+  try {
+    const newSid = await sessionService.clone(sid, 80, 24)
+    const newTab = tabs.addTab('ssh', props.tab.title, newSid, props.tab.profileId)
+    tabs.splitWithTab(newTab.id, srcGroup.id, dir, false)
+    // shell 就绪无信号，延时后发送 cd
+    if (initialPath) {
+      setTimeout(() => {
+        sessionService
+          .input(newSid, Array.from(new TextEncoder().encode(`cd ${shellQuote(initialPath)}\r`)))
+          .catch(() => {})
+      }, 500)
+    }
+  } catch (e) {
+    message.error(`克隆会话失败：${e}`)
+  } finally {
+    splitting.value = false
   }
 }
 
-/** tab 卸载：清理 pane 独立建立的会话（tab 主会话由 closeTab 负责） */
-onUnmounted(() => {
-  window.removeEventListener('keydown', onPaneKeydown)
-  tabDrag.clearPaneCount(props.tab.id)
-  for (const sid of [...ownSessions]) disconnectIfOwn(sid)
-})
-
-/* ---------------- 分屏快捷键（仅 metaKey 系，避让 shell 的 Ctrl 控制字符） ---------------- */
-
-/** 按 DFS 顺序循环切换 pane */
-function cyclePane(delta: number) {
-  const panes = collectPanes(root.value)
-  if (panes.length < 2) return
-  const idx = panes.findIndex((p) => p.id === activePaneId.value)
-  const next = ((idx < 0 ? 0 : idx) + delta + panes.length) % panes.length
-  activePaneId.value = panes[next].id
+/** 关闭本 group 全部 tab（group 随之折叠） */
+function closeGroup() {
+  const g = tabs.groupOf(props.tab.id)
+  if (!g) return
+  for (const t of [...g.tabs]) tabs.closeTab(t.id)
 }
 
 /**
- * 分屏快捷键（window 监听 + 本 tab 活跃门控：多 TerminalView 实例 v-show 并存时防串扰）：
- * ⌘D 向右分屏 / ⌘⇧D 向下分屏 / ⌘⇧W 关闭当前分屏 / ⌘⌥←→↑↓ 切换分屏
+ * 快捷键（window 监听 + 全局激活门控：多 TerminalView 实例并存时防串扰）：
+ * ⌘D 克隆到右侧新 group / ⌘⇧D 克隆到下方新 group / ⌘⇧W 关闭本 group / ⌘⌥←→↑↓ 切换聚焦 group
  */
-function onPaneKeydown(e: KeyboardEvent) {
+function onKeydown(e: KeyboardEvent) {
   if (tabs.activeId !== props.tab.id) return
   if (!e.metaKey) return
   const key = e.key.toLowerCase()
   if (key === 'd') {
     e.preventDefault()
-    void addPane(e.shiftKey ? 'column' : 'row')
+    void cloneToGroup(e.shiftKey ? 'column' : 'row')
   } else if (key === 'w' && e.shiftKey) {
     // App.vue 的全局 ⌘W 已跳过 Shift 组合（见 onKeydown）
     e.preventDefault()
-    closePane(activePaneId.value)
+    closeGroup()
   } else if (e.altKey && (key === 'arrowleft' || key === 'arrowup')) {
     e.preventDefault()
-    cyclePane(-1)
+    tabs.cycleGroup(-1)
   } else if (e.altKey && (key === 'arrowright' || key === 'arrowdown')) {
     e.preventDefault()
-    cyclePane(1)
+    tabs.cycleGroup(1)
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onPaneKeydown))
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
-/** 重新连接（基于档案，复用当前 tab） */
+/** 重新连接（基于档案，复用当前 tab；新 sessionId 由 PaneTerminal watch 重绑） */
 async function handleReconnect() {
   if (!profile.value) {
     message.warning('该会话无关联配置，请从左侧列表重新连接')
@@ -337,49 +167,26 @@ async function handleReconnect() {
 </script>
 
 <template>
-  <div class="terminal-view">
+  <div class="terminal-view" @mousedown="onViewMouseDown">
     <div class="terminal-main">
-      <div ref="splitAreaEl" class="split-area">
-        <div
-          v-for="p in flat.panes"
-          :key="p.id"
-          class="pane-slot"
-          :style="paneStyle(p.rect)"
-        >
-          <PaneTerminal
-            :session-id="p.sessionId"
-            :active="p.id === activePaneId"
-            :closable="paneCount > 1"
-            :initial-line="initialLineFor(p.id)"
-            @focus="activePaneId = p.id"
-            @close="closePane(p.id)"
-            @bind="(sid: string) => bindPane(p.id, sid)"
-          />
-        </div>
-        <div
-          v-for="d in flat.dividers"
-          :key="d.key"
-          class="split-divider"
-          :class="d.dir"
-          :style="dividerStyle(d)"
-          @mousedown="onDividerDown($event, d)"
-        />
+      <div class="term-area">
+        <PaneTerminal :session-id="tab.sessionId ?? null" />
       </div>
       <!-- 工具栏：常规流式竖排（终端区与文件面板之间），不悬浮遮挡任何内容 -->
       <div class="view-tools">
           <!-- 分屏：单入口，二级菜单选择分割方向 -->
           <NDropdown
-            v-if="paneCount < 4 && tab.sessionId"
+            v-if="tabs.groups.length < 4 && tab.sessionId"
             trigger="click"
             placement="bottom-end"
             :options="splitOptions"
-            @select="(key: string | number) => addPane(key as 'row' | 'column')"
+            @select="(key: string | number) => cloneToGroup(key as 'row' | 'column')"
           >
             <NButton quaternary circle size="small" :loading="splitting">
               <NIcon :component="ArrowsSplit2" />
             </NButton>
           </NDropdown>
-          <!-- 四面板入口：文件管理 / 监控 / Agent / 告警，互斥切换 -->
+          <!-- SFTP 文件面板 -->
           <NTooltip v-if="tab.sessionId" placement="left">
             <template #trigger>
               <NButton
@@ -394,6 +201,7 @@ async function handleReconnect() {
             </template>
             文件管理（SFTP）
           </NTooltip>
+          <!-- 面板入口：文件管理 / 监控 / Agent / 告警，互斥切换 -->
           <NTooltip v-for="entry in panelEntries" :key="entry.key" placement="left">
             <template #trigger>
               <NButton
@@ -414,7 +222,7 @@ async function handleReconnect() {
         v-if="layout.filesVisible && tab.sessionId && !tab.disconnected"
         :session-id="tab.sessionId"
         :nav-path="layout.filesNavPath"
-        @open-split-at="(p: string) => addPane('row', p)"
+        @open-split-at="(p: string) => cloneToGroup('row', p)"
       />
     </div>
     <!-- 断开遮罩 -->
@@ -450,36 +258,16 @@ async function handleReconnect() {
   flex: 1;
   min-height: 0;
 }
-.split-area {
-  position: relative;
+.term-area {
   flex: 1;
   min-width: 0;
   min-height: 0;
-}
-.pane-slot {
-  position: absolute;
   display: flex;
-  min-width: 0;
-  min-height: 0;
 }
-.pane-slot :deep(.pane) {
+.term-area :deep(.pane) {
   flex: 1;
   min-width: 0;
   min-height: 0;
-}
-.split-divider {
-  position: absolute;
-  z-index: 5;
-  background: var(--border-color);
-}
-.split-divider.row {
-  cursor: col-resize;
-}
-.split-divider.column {
-  cursor: row-resize;
-}
-.split-divider:hover {
-  background: var(--primary);
 }
 .view-tools {
   flex-shrink: 0;
