@@ -6,7 +6,9 @@
 //! - 通过 Tauri event `monitor_metrics` 推送给前端
 //! - `CancellationToken` 取消（会话断开 / monitor_stop）
 //!
-//! exec 往返耗时同时作为会话延迟（latency_ms）上报。
+//! 会话延迟（latency_ms）由独立的轻量探测命令计时：采集脚本含
+//! df / top -l 1 / nvidia-smi 等重命令，远端执行耗时（可达秒级）
+//! 不能算作网络延迟。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,6 +26,9 @@ use crate::storage::sqlite::{AlertRule, SqliteStorage};
 
 /// exec 超时（慢速网络 / 高负载主机兜底）
 const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 延迟探测命令（shell 内建，远端开销可忽略），其 exec 往返耗时近似会话 RTT
+const PROBE_CMD: &str = "true";
 
 /// 从采样 payload 提取指标值
 fn metric_value(payload: &MonitorMetricsPayload, metric: &str) -> Option<f64> {
@@ -140,13 +145,26 @@ impl MonitorSampler {
                     None => break, // 会话已移除
                 };
 
-                let started = std::time::Instant::now();
+                // 轻量探测单独计时作为会话延迟（采集脚本的远端执行耗时不计入）
+                let probe_started = std::time::Instant::now();
+                let latency_ms = match tokio::time::timeout(EXEC_TIMEOUT, session.exec(PROBE_CMD)).await
+                {
+                    Ok(Ok(_)) => Some(probe_started.elapsed().as_millis() as u64),
+                    Ok(Err(e)) => {
+                        tracing::warn!(session_id = %session_id, error = %e, "延迟探测失败");
+                        None
+                    }
+                    Err(_) => {
+                        tracing::warn!(session_id = %session_id, "延迟探测超时");
+                        None
+                    }
+                };
+
                 let raw = tokio::time::timeout(
                     EXEC_TIMEOUT,
                     session.exec(metrics::COLLECT_SCRIPT),
                 )
                 .await;
-                let latency_ms = started.elapsed().as_millis() as u64;
 
                 let raw = match raw {
                     Ok(Ok(out)) => metrics::parse_output(&out),
@@ -183,7 +201,7 @@ impl MonitorSampler {
                 let payload = MonitorMetricsPayload {
                     session_id: session_id.clone(),
                     timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-                    latency_ms: Some(latency_ms),
+                    latency_ms,
                     cpu_percent,
                     mem_total_bytes: raw.mem.total,
                     mem_used_bytes: raw.mem.used(),
