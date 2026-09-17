@@ -38,7 +38,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI2RjU2OEZFMzEzMjYxNwpSV1FYSmhQamoxWnZBc3RJeFhJSS93K1RWc3czRUI5alh5SXQ0WDgrOEFEczExSXJ6eEZiYk1VRwo=",
       "endpoints": [
-        "https://github.com/smilex/SmileX-Remote-Terminal/releases/latest/download/latest.json"
+        "https://github.com/smileluck/SmileX-Remote-Terminal/releases/latest/download/latest.json"
       ]
     }
   }
